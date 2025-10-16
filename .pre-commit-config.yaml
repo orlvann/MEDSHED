@@ -1,0 +1,22 @@
+# Pre-commit runs small checks/fixes automatically BEFORE each `git commit`.
+# This keeps the repo consistent (same formatting/style for everyone).
+
+repos:
+  # ---- Black: opinionated code formatter (no style debates) ----
+  - repo: https://github.com/psf/black
+    rev: 24.8.0               # pin to a known good version
+    hooks:
+      - id: black             # formats Python files in-place
+        language_version: python3.11  # use project Python (matches your venv)
+
+  # ---- Ruff: fast linter + quick fixes (errors, imports, style) ----
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.6.8
+    hooks:
+      - id: ruff              # checks issues (E/F/…); fails commit if critical problems remain
+      - id: ruff-format       # ruff's formatter (can complement/replace Black if wanted)
+
+  # (Optional) Add more hooks later, e.g.:
+  # - Prettier for frontend files
+  # - YAML/JSON checkers
+  # - Detect secrets
