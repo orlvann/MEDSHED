@@ -1,46 +1,32 @@
-# Thin HTTP layer: validate, delegate, serialize.
-from fastapi import APIRouter, Body, status
+from datetime import datetime
 
-from backend.models.schemas import (
-    ErrorPayload,
-    LoginRequest,
-    Role,
-    TokenResponse,
-    UserRead,
-)
+from pydantic import BaseModel, EmailStr
 
-router = APIRouter(tags=["auth"])
+# Import shared enums & error shape from common
+from .common import Role  # reuse canonical Role
 
 
-@router.post(
-    "/api/v1/auth/login",
-    response_model=TokenResponse,
-    status_code=status.HTTP_200_OK,
-    summary="Issue JWT",
-    responses={401: {"model": ErrorPayload}},
-)
-def login(payload: LoginRequest = Body(...)):
-    # TODO: auth_service.login(payload)
-    # On bad credentials, raise HTTPException(status_code=401, detail=...)
-    return {
-        "access_token": "jwt-string",
-        "token_type": "bearer",
-        "role": Role.DOCTOR,
-        "expires_in": 3600,
-    }
+class LoginRequest(BaseModel):
+    """Login form payload."""
+
+    email: EmailStr
+    password: str
 
 
-@router.get(
-    "/api/v1/auth/me",
-    response_model=UserRead,
-    summary="Current user",
-)
-def me():
-    # TODO: read from auth context
-    return {
-        "id": 1,
-        "email": "user@example.com",
-        "role": Role.DOCTOR,
-        "is_active": True,
-        "created_at": None,
-    }
+class TokenResponse(BaseModel):
+    """JWT response returned on successful login."""
+
+    access_token: str
+    token_type: str = "bearer"
+    role: Role
+    expires_in: int  # seconds
+
+
+class UserRead(BaseModel):
+    """Public representation of the current user."""
+
+    id: int
+    email: EmailStr
+    role: Role
+    is_active: bool
+    created_at: datetime | None = None
