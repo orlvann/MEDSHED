@@ -1,0 +1,24 @@
+{
+    // Launch FastAPI via Uvicorn using the new Python Debugger ("debugpy").
+    // Press F5 in Cursor/VS Code to start the API with auto-reload and breakpoints.
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "FastAPI (uvicorn, reload) — debugpy",
+            "type": "debugpy", // <- new debugger type
+            "request": "launch",
+            "module": "uvicorn", // run as: python -m uvicorn ...
+            "args": [
+                "backend.asgi:app",
+                "--reload"
+            ],
+            "cwd": "${workspaceFolder}", // run from repo root
+            "python": "${workspaceFolder}/.venv/bin/python", // use your WSL venv
+            "env": {
+                "PYTHONPATH": "." // ensure `import backend...` works
+            },
+            "justMyCode": true,
+            "console": "integratedTerminal" // show server logs in the IDE terminal
+        }
+    ]
+}

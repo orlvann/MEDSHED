@@ -1,0 +1,9 @@
+# Testing
+pytest>=8.0,<9.0     # Test runner
+httpx>=0.27,<0.28    # Useful for async API tests (optional)
+
+# Lint/format
+ruff>=0.6,<1.0       # Linter (style + errors)
+black>=24.3,<25.0    # Code formatter
+pre-commit>=3.7,<4.0 # Run format/lint before commit (optional but helpful)
+
