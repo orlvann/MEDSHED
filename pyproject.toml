@@ -1,0 +1,26 @@
+# pyproject.toml
+# Shared configuration for formatting and linting tools (Black + Ruff).
+# Keeps code style consistent across the whole team and aligns with pre-commit.
+# VS Code, pre-commit, and CI will all read from this single source of truth.
+
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+# Enable rule sets:
+# E = pycodestyle (style)
+# F = pyflakes (logic errors like unused variables/imports)
+# I = isort (import sorting via ruff)
+select = ["E", "F", "I"]
+ignore = []
+
+[tool.black]
+line-length = 100
+target-version = ["py311"]
+
+[tool.ruff.lint.per-file-ignores]
+"backend/routers/preferences.py" = ["E501"]
+"backend/routers/auth.py" = ["E501"]
+
