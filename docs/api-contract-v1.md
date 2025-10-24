@@ -25,10 +25,12 @@
     * Preferences: `checkpoint`
     * Schedules: `draft_checkpoint` or `published`
   * `*_pointers`: pointer(s) to the current version(s).
+  * Re-generating a schedule **overwrites** `schedule_working` for the period and creates a **new `draft_checkpoint`**; the draft pointer moves to the new version (history kept FIFO 5).
 * **Undo/Redo**
 
   * Preferences: **mine-only** history per `{year, month, doctor_id}`; FIFO **5** checkpoints.
   * Schedules: **global** history per `{year, month}`; FIFO **5** draft checkpoints + **5** published.
+  * **Autosave does not affect version history** — only `POST …/checkpoint` and `revert-last|revert-next` update `can_undo/can_redo`.
 * **Diagnostics**
 
   * Stored **per version** (draft checkpoint or published).
@@ -52,7 +54,9 @@
 
 * `org_timezone` — included where rendering depends on TZ.
 * `period_status` ∈ `"past" | "current" | "future"`.
-* Mutations return a processing timestamp (`processed_at` or `updated_at`) in UTC.
+* Mutations return timestamps in UTC:
+  * `working` reads/PUT → **`updated_at`**
+  * creating a version / changing pointers (checkpoint/publish/revert) → **`processed_at`**
 
 **Versioned object shape**
 
@@ -113,7 +117,9 @@
 
 ### 1.6 Lists of Days (Normalization)
 
-* Server normalizes all day arrays: **unique, sorted, integers in 1..31**; invalid → `422`.
+* Server normalizes all day arrays: **unique, sorted, integers in 1..31**; invalid → `422` with
+  `context: { "field": "<field_name>" }` (e.g., `"preferred_duty_days"`).
+
 
 ### 1.7 Pagination
 
@@ -169,7 +175,7 @@ Doctor identity is inferred from the token on all `/me` and on “my-assignments
 * **Admin**
 
   * `format ∈ {xlsx,pdf}` → `mode ∈ {draft,published}` allowed.
-  * `format=ics` (optional policy) → may export ICS for a specific `doctor_id`. Missing/invalid id → `422/404`.
+  * `format=ics` (optional policy) → may export ICS for a specific `doctor_id`. **Missing `doctor_id` → `422`**, invalid → `404`.
 
 **Response (200)**
 Binary stream (no JSON body).
@@ -615,6 +621,20 @@ Content-Type: application/json
 
 **Errors**: `401`, `403 period_closed`, `422`, `409 draft_already_exists` (if `schedule_working` already exists for `{year,month}`).
 
+## 3.4 Schedules (Admin)
+
+ ### Generate (guard: avoid duplicates)
+ POST /api/v1/schedules/generate
+
+**Behavior**
+* If no `working` exists for `{year,month}`, create it from solver output.
+* If `working` **already exists** for `{year,month}`, **overwrite** it with fresh solver output.
+* In both cases, create a **new draft checkpoint** (incrementing `version_id`), move the **draft pointer** to it, and recompute diagnostics.
+* Previous draft checkpoints remain in history (FIFO **5**).
+
+**Errors**: `401`, `403 period_closed`, `422`.
+
+
 **Schedules Tab — Period View**
 
 ```http
@@ -669,8 +689,10 @@ GET /api/v1/schedules/{year}/{month}
   }
 }
 ```
+**Errors**: `401`.
+If the period has no data, the endpoint returns **`200`** with an empty skeleton:
+`working.exists=false`, `draft.version_id=null`, `published.version_id=null`.
 
-**Errors**: `401`, `404` (or optionally return empty skeleton with `200`).
 
 **Working — read & autosave (optional optimistic locking)**
 
@@ -711,6 +733,11 @@ PUT  /api/v1/schedules/{year}/{month}/working
 ```
 
 **Errors**: `401`, `403 period_closed`, `404` (GET), `409 edit_conflict` (optional), `422`.
+`409 edit_conflict` SHOULD include the current server value:
+```json
+{ "detail": "edit_conflict", "code": "edit_conflict", "context": { "updated_at": "2026-02-01T11:01:00Z" } }
+```
+
 
 **Save Draft Checkpoint (+diagnostics)**
 
@@ -870,6 +897,8 @@ Content-Type: application/json
 * If violations and `force=false` → `409 publish_blocked_by_hard_rules` with `violations[]`.
 * With `force=true` + matching `accepted_exceptions[]` → create **published**; persist exceptions into `payload.meta.exceptions[]` with audit.
 * Optional: if working equals last published (no diff) → `409 nothing_to_publish`.
+  Comparison MUST be done after **normalizing** `assignments` (stable sort + key dedupe) to avoid false differences.
+
 
 **Response (201)**
 
