@@ -1,0 +1,8 @@
+fastapi~=0.119
+uvicorn~=0.37
+pydantic~=2.12
+python-dotenv~=1.1
+email-validator~=2.3
+SQLAlchemy~=2.0
+ortools==9.14.6206
+

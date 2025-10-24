@@ -1,3 +1,6 @@
+"""Pydantic DTOs + enums (request/response shapes).
+Validate input early; serialize output consistently; power OpenAPI docs."""
+
 # backend/models/schemas/__init__.py
 # Public re-exports of Pydantic DTOs for short imports across the codebase.
 # Linters: names listed in __all__ are considered intentional exports.
