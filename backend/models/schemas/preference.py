@@ -4,21 +4,23 @@ from typing import Annotated, List, Optional
 from annotated_types import Ge, Le
 from pydantic import BaseModel, Field, field_validator, model_validator
 
-from .common import PreferenceStatus
+from .common import (
+    DayInt,  # 1..31
+    PeriodStatus,  # "past" | "current" | "future"
+    PreferenceStatus,  # "missing" | "submitted"
+    RiskLevel,  # "ok" | "alert" | "critical"
+    normalize_days,
+)
+from .doctor import DoctorMini
 
 # ---- Helpers ---------------------------------------------------------------
 
 MonthInt = Annotated[int, Ge(1), Le(12)]  # 1..12
 
 
+# Re-export local alias for readability in validators (uses common.normalize_days)
 def _normalize_days(days: List[int] | None) -> List[int]:
-    """Ensure days are unique, sorted and within 1..31."""
-    if days is None:
-        return []
-    s = {int(d) for d in days}
-    if any(d < 1 or d > 31 for d in s):
-        raise ValueError("days must be in range 1..31")
-    return sorted(s)
+    return normalize_days(days)
 
 
 def _validate_min_le_max(min_v: int, max_v: Optional[int], name_min: str, name_max: str) -> None:
@@ -30,28 +32,24 @@ def _validate_min_le_max(min_v: int, max_v: Optional[int], name_min: str, name_m
 # ---- DTOs -----------------------------------------------------------------
 
 
-class PreferenceCreate(BaseModel):
-    """Doctor (or admin on behalf) submits or creates a monthly form."""
+class _PreferenceEditableMixin(BaseModel):
+    """Editable fields used by Working PUT/Read and Checkpoint payloads."""
 
-    doctor_id: int
-    year: int
-    month: MonthInt
-
-    unavailable_duty_days: List[int] = []
-    unavailable_oncall_days: List[int] = []
-    preferred_duty_days: List[int] = []
-    preferred_oncall_days: List[int] = []
+    unavailable_duty_days: List[DayInt] = []
+    unavailable_oncall_days: List[DayInt] = []
+    preferred_duty_days: List[DayInt] = []
+    preferred_oncall_days: List[DayInt] = []
 
     min_duties_weekdays: int = 0
-    max_duties_weekdays: int | None = None
+    max_duties_weekdays: Optional[int] = None
     min_duties_weekends: int = 0
-    max_duties_weekends: int | None = None
+    max_duties_weekends: Optional[int] = None
     min_oncall_weekdays: int = 0
-    max_oncall_weekdays: int | None = None
+    max_oncall_weekdays: Optional[int] = None
     min_oncall_weekends: int = 0
-    max_oncall_weekends: int | None = None
+    max_oncall_weekends: Optional[int] = None
 
-    weekend_back_to_back_allowed: bool = False
+    weekend_back_to_back_allowed: bool = True
     preferred_partners: List[int] = []
     comments: Optional[str] = None
 
@@ -67,7 +65,6 @@ class PreferenceCreate(BaseModel):
     def _check_days(cls, v):
         return _normalize_days(v)
 
-    # Simple scalar guards
     @field_validator(
         "max_duties_weekdays",
         "max_duties_weekends",
@@ -108,7 +105,6 @@ class PreferenceCreate(BaseModel):
             "min_oncall_weekends",
             "max_oncall_weekends",
         )
-
         # no overlap between unavailable_* and preferred_* for the same shift type
         if set(self.unavailable_duty_days) & set(self.preferred_duty_days):
             raise ValueError("duty days cannot be both preferred and unavailable")
@@ -117,110 +113,139 @@ class PreferenceCreate(BaseModel):
         return self
 
 
-class PreferenceUpdate(BaseModel):
+class PreferenceWorkingPut(_PreferenceEditableMixin):
     """
-    Partial update for an existing monthly form.
-    NOTE: All fields are optional. Doctor can edit own record until deadline.
-    Admin can edit anytime (override). Router enforces lifecycle rules.
+    Autosave payload for:
+    PUT /api/v1/preferences/{year}/{month}/{doctor_id}/working
+    PUT /api/v1/preferences/{year}/{month}/me/working
     """
 
-    doctor_id: Optional[int] = None  # admin-only change
-    year: Optional[int] = None
+    # only editable fields – no ids here
+    pass
+
+
+class PreferenceWorkingRead(_PreferenceEditableMixin):
+    """
+    Read model for GET .../working (admin or doctor ‘me’) including hints.
+    Mirrors contract examples.
+    """
+
+    doctor_id: int
+    year: int
     month: MonthInt
 
-    unavailable_duty_days: Optional[List[int]] = None
-    unavailable_oncall_days: Optional[List[int]] = None
-    preferred_duty_days: Optional[List[int]] = None
-    preferred_oncall_days: Optional[List[int]] = None
-
-    min_duties_weekdays: Optional[int] = None
-    max_duties_weekdays: Optional[int] = None
-    min_duties_weekends: Optional[int] = None
-    max_duties_weekends: Optional[int] = None
-    min_oncall_weekdays: Optional[int] = None
-    max_oncall_weekdays: Optional[int] = None
-    min_oncall_weekends: Optional[int] = None
-    max_oncall_weekends: Optional[int] = None
-
-    weekend_back_to_back_allowed: Optional[bool] = None
-    preferred_partners: Optional[List[int]] = None
-    comments: Optional[str] = None
-
-    # Optional status – typically used by admin; doctor uses /submit or /revert
-    status: Optional[PreferenceStatus] = None
-
-    @field_validator(
-        "unavailable_duty_days",
-        "unavailable_oncall_days",
-        "preferred_duty_days",
-        "preferred_oncall_days",
-        mode="before",
-    )
-    @classmethod
-    def _check_days_opt(cls, v):
-        # None means "unchanged"; otherwise normalize
-        return None if v is None else _normalize_days(v)
-
-    @model_validator(mode="after")
-    def _cross_field_opt(self):
-        # Only check min/max when both present
-        pairs = [
-            ("min_duties_weekdays", "max_duties_weekdays"),
-            ("min_duties_weekends", "max_duties_weekends"),
-            ("min_oncall_weekdays", "max_oncall_weekdays"),
-            ("min_oncall_weekends", "max_oncall_weekends"),
-        ]
-        for mn, mx in pairs:
-            mn_val = getattr(self, mn)
-            mx_val = getattr(self, mx)
-            if mn_val is not None and mx_val is not None and mn_val > mx_val:
-                raise ValueError(f"{mn} cannot be greater than {mx}")
-
-        # Overlap checks only if both lists provided
-        if self.unavailable_duty_days is not None and self.preferred_duty_days is not None:
-            if set(self.unavailable_duty_days) & set(self.preferred_duty_days):
-                raise ValueError("duty days cannot be both preferred and unavailable")
-        if self.unavailable_oncall_days is not None and self.preferred_oncall_days is not None:
-            if set(self.unavailable_oncall_days) & set(self.preferred_oncall_days):
-                raise ValueError("on-call days cannot be both preferred and unavailable")
-        return self
-
-
-class PreferenceRead(PreferenceCreate):
-    """
-    Read model mirrors the create fields + lifecycle & audit metadata.
-    """
-
-    id: int
-
-    # Lifecycle & audit (filled by server)
-    status: PreferenceStatus = Field(default=PreferenceStatus.DRAFT)
+    status: PreferenceStatus = Field(default=PreferenceStatus.missing)
+    version_id: Optional[str] = None
     submitted_at: Optional[datetime] = None
-    updated_at: Optional[datetime] = None
-    updated_by_user_id: Optional[int] = Field(
-        default=None, description="Last actor who modified this record"
-    )
+    submitted_by_role: Optional[str] = None
+    submitted_by_user_id: Optional[int] = None
+    last_admin_note: Optional[str] = None
+
+    can_undo: bool = False
+    can_redo: bool = False
+
+    org_timezone: str = "Europe/Warsaw"
+    period_status: PeriodStatus = Field(default=PeriodStatus.current)
 
 
-class PreferenceSummary(BaseModel):
+class PreferenceAutosaveAck(BaseModel):
+    """Response for PUT …/working (200)."""
+
+    doctor_id: int
+    year: int
+    month: MonthInt
+    updated_at: datetime
+    status: PreferenceStatus = Field(default=PreferenceStatus.missing)
+    version_id: Optional[str] = None
+    can_undo: bool = False
+    can_redo: bool = False
+
+
+class PreferenceCheckpointCreated(_PreferenceEditableMixin):
     """
-    Admin overview of monthly preference intake and coverage.
+    Response for POST …/checkpoint (201).
     """
 
-    submitted: List[int] = []  # doctor ids
-    missing: List[int] = []  # doctor ids
-    coverageByDay: List[dict] = []  # e.g., {"day": 1, "availableDuty": 5, "availableOnCall": 3}
+    doctor_id: int
+    year: int
+    month: MonthInt
+
+    status: PreferenceStatus = Field(default=PreferenceStatus.submitted)
+    version_id: str
+    submitted_at: datetime
+    submitted_by_user_id: int
+    submitted_by_role: str  # "admin" | "doctor"
+
+    can_undo: bool = True
+    can_redo: bool = False
+    processed_at: datetime
 
 
-class PreferenceAuditEntryRead(BaseModel):
+class PreferenceRevertRead(_PreferenceEditableMixin):
     """
-    Audit trail entry for preference changes (admin override or doctor edit/submit/revert).
+    Response for POST …/revert-last and …/revert-next (200).
     """
 
-    id: int
-    preference_id: int
-    actor_user_id: int
-    actor_role: str  # "ADMIN" | "DOCTOR"
-    action: str  # "create" | "update" | "submit" | "revert" | "admin_override"
-    at: datetime
-    diff: dict  # minimal JSON of changed fields (before→after or just after)
+    doctor_id: int
+    year: int
+    month: MonthInt
+
+    reverted_at: datetime
+    version_id: str
+    current_created_by_role: str
+    current_created_by_user_id: int
+    current_created_at: datetime
+    can_undo: bool
+    can_redo: bool
+
+
+class PreferencesSummaryRead(BaseModel):
+    """
+    GET /api/v1/preferences/summary?year=&month=
+    """
+
+    year: int
+    month: MonthInt
+    submitted: List[int] = []
+    missing: List[int] = []
+    last_update_at: datetime
+
+
+class PreferencesDeadlineRead(BaseModel):
+    year: int
+    month: MonthInt
+    deadline: datetime
+    status: str  # "open" | "locked"
+    org_timezone: str
+
+
+class PreferencesDeadlinePut(PreferencesDeadlineRead):
+    """PUT-as-upsert returns the same shape; 201 if created / 200 if updated."""
+
+    pass
+
+
+# -----------------------------------------------------------------------------
+# Availability (pre-flight coverage) — colocated here to avoid a new file
+# Endpoints:
+#   GET /api/v1/availability/overview?year=&month=
+#   GET /api/v1/availability/{year}/{month}/{day}
+# -----------------------------------------------------------------------------
+
+
+class AvailabilityDaySummary(BaseModel):
+    day: DayInt
+    available_specialists: int
+    available_residents: int
+    risk: RiskLevel  # "ok" | "alert" | "critical"
+
+
+class AvailabilityOverviewRead(BaseModel):
+    days: list[AvailabilityDaySummary] = []
+
+
+class AvailabilityDayRead(BaseModel):
+    day: DayInt
+    specialists: list[DoctorMini] = []
+    residents: list[DoctorMini] = []
+    risk: RiskLevel

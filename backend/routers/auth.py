@@ -1,9 +1,10 @@
-# Thin HTTP layer: validate, delegate, serialize.
-# Import ONLY from schemas package
+# backend/routers/auth.py
+# Thin HTTP layer: validate input, delegate to service, serialize outputs.
+
 from fastapi import APIRouter, Body, status
 
 from backend.models.schemas import (
-    ErrorPayload,  # canonical error shape from common
+    ErrorPayload,  # canonical error shape from common (code/message/details)
     LoginRequest,
     Role,
     TokenResponse,
@@ -17,7 +18,7 @@ router = APIRouter(tags=["auth"])
     "/api/v1/auth/login",
     response_model=TokenResponse,
     status_code=status.HTTP_200_OK,
-    summary="Issue JWT",
+    summary="Issue JWT access token",
     responses={
         401: {
             "model": ErrorPayload,
@@ -28,7 +29,6 @@ router = APIRouter(tags=["auth"])
                         "code": "invalid_credentials",
                         "message": "Invalid email or password",
                         "details": None,
-                        # details may include e.g. {"attempts": 3} in real impl
                     }
                 }
             },
@@ -36,23 +36,15 @@ router = APIRouter(tags=["auth"])
     },
 )
 def login(payload: LoginRequest = Body(...)):
-    # TODO: delegate to auth_service.login(payload)
-    # NOTE: When raising 401, return body matching ErrorPayload.
-    # Example:
-    # from fastapi import HTTPException
-    # raise HTTPException(
-    #     status_code=401,
-    #     detail={
-    #         "code": "invalid_credentials",
-    #         "message": "Invalid email or password",
-    #         "details": None,
-    #     },
-    # )
-
+    """
+    Stub: delegate to auth_service.login(payload) and return a TokenResponse.
+    On failure, raise HTTP 401 with ErrorPayload.
+    """
+    # Example success (stub)
     return {
-        "access_token": "jwt-string",
-        "token_type": "bearer",
-        "role": Role.DOCTOR,
+        "access_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+        "token_type": "bearer",  # matches TokenResponse definition
+        "role": Role.doctor,
         "expires_in": 3600,
     }
 
@@ -60,14 +52,17 @@ def login(payload: LoginRequest = Body(...)):
 @router.get(
     "/api/v1/auth/me",
     response_model=UserRead,
-    summary="Current user",
+    summary="Get current user",
 )
 def me():
-    # TODO: read current user from auth context (e.g. request.state.user)
+    """
+    Stub: read current user from auth context (e.g., request.state.user)
+    and serialize to UserRead.
+    """
     return {
         "id": 1,
         "email": "user@example.com",
-        "role": Role.DOCTOR,
+        "role": Role.doctor,
         "is_active": True,
         "created_at": None,
     }

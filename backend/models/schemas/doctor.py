@@ -1,8 +1,15 @@
+from datetime import datetime
 from typing import List, Optional
 
 from pydantic import BaseModel, EmailStr, Field
 
 from .common import DoctorRole, PageMeta
+
+
+class DoctorMini(BaseModel):
+    id: int
+    first_name: str
+    last_name: str
 
 
 class DoctorCreate(BaseModel):
@@ -11,20 +18,20 @@ class DoctorCreate(BaseModel):
     first_name: str = Field(..., min_length=1)
     last_name: str = Field(..., min_length=1)
     role: DoctorRole
+    is_active: bool = True
     is_head: bool = False
     email: Optional[EmailStr] = None
-    color: Optional[str] = Field(None, description="HEX or named color used by the UI calendar")
 
 
-class DoctorUpdate(BaseModel):
-    """Partial update; all fields optional."""
+class DoctorPut(BaseModel):
+    """Update PUT-first — full object required."""
 
-    first_name: Optional[str] = Field(None, min_length=1)
-    last_name: Optional[str] = Field(None, min_length=1)
-    role: Optional[DoctorRole] = None
-    is_head: Optional[bool] = None
+    first_name: str = Field(..., min_length=1)
+    last_name: str = Field(..., min_length=1)
+    role: DoctorRole
+    is_active: bool
+    is_head: bool
     email: Optional[EmailStr] = None
-    color: Optional[str] = None
 
 
 class DoctorRead(BaseModel):
@@ -34,9 +41,11 @@ class DoctorRead(BaseModel):
     first_name: str
     last_name: str
     role: DoctorRole
+    is_active: bool
     is_head: bool
     email: Optional[EmailStr] = None
-    color: Optional[str] = None
+    created_at: datetime
+    updated_at: datetime
 
 
 class DoctorList(PageMeta):

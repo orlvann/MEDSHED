@@ -1130,7 +1130,7 @@ POST /api/v1/schedules/{year}/{month}/revert-next
   "month": 2,
 
   "draft": {
-    "current_checkpoint_id": "schv_2026_02_0002",
+    "version_id": "schv_2026_02_0002",
     "checkpoints_count": 2,
     "can_undo": true,
     "can_redo": false,
@@ -1149,7 +1149,7 @@ POST /api/v1/schedules/{year}/{month}/revert-next
   },
 
   "diagnostics": {
-    "for_version_id": "schv_2026_02_0002",
+    "version_id": "schv_2026_02_0002",
     "computed_at": "2026-02-01T11:06:00Z",
     "summary": {
       "penalty_total": 38,
