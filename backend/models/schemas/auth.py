@@ -1,9 +1,6 @@
-from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel, EmailStr
-
-# Import shared enums & error shape from common
-from .common import Role  # reuse canonical Role
 
 
 class LoginRequest(BaseModel):
@@ -14,19 +11,21 @@ class LoginRequest(BaseModel):
 
 
 class TokenResponse(BaseModel):
-    """JWT response returned on successful login."""
+    """
+    JWT response returned on successful login.
+
+    Contract (MVP):
+      { "access_token": "<jwt>", "token_type": "Bearer" }
+    """
 
     access_token: str
-    token_type: str = "bearer"
-    role: Role
-    expires_in: int  # seconds
+    token_type: Literal["Bearer"] = "Bearer"
 
-
-class UserRead(BaseModel):
-    """Public representation of the current user."""
-
-    id: int
-    email: EmailStr
-    role: Role
-    is_active: bool
-    created_at: datetime | None = None
+    model_config = {
+        "json_schema_extra": {
+            "example": {
+                "access_token": "eyJhbGciOiJIUzI1NiIs...",
+                "token_type": "Bearer",
+            }
+        }
+    }

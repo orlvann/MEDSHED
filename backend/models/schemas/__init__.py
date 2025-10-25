@@ -1,79 +1,114 @@
+"""Pydantic DTOs + enums (request/response shapes).
+Validate input early; serialize output consistently; power OpenAPI docs."""
+
 # backend/models/schemas/__init__.py
 # Public re-exports of Pydantic DTOs for short imports across the codebase.
 # Linters: names listed in __all__ are considered intentional exports.
 
-from .common import DoctorRole, ErrorPayload, PreferenceStatus, Role, ScheduleStatus, ShiftType
-from .diagnostics import (
-    CoverageReport,
-    DiagnosticsRead,
-    DiagnosticsSummary,
-    DiagnosticsVisuals,
-    FairnessBreakdown,
-    MissedPair,
-    PartneringBreakdown,
-    PerDoctorStats,
-    PreferencesBreakdown,
-    RestRuleFlag,
-    WorkloadDistributionEntry,
+from .auth import LoginRequest, TokenResponse
+from .common import (
+    DoctorRole,
+    ErrorPayload,
+    PeriodStatus,
+    PreferenceStatus,
+    RiskLevel,
+    Role,
+    ScheduleStatus,
+    ShiftType,
 )
-from .doctor import DoctorCreate, DoctorList, DoctorRead, DoctorUpdate
-from .export import ExportOptions, ExportResponse
+from .diagnostics import DiagnosticsRead, DiagnosticsSummary
+from .doctor import DoctorCreate, DoctorList, DoctorMini, DoctorPut, DoctorRead
+from .export import ScheduleExportQuery
 from .preference import (
-    PreferenceAuditEntryRead,
-    PreferenceCreate,
-    PreferenceRead,
-    PreferenceSummary,
-    PreferenceUpdate,
+    AvailabilityDayRead,
+    AvailabilityOverviewRead,
+    PreferenceAutosaveAck,
+    PreferenceCheckpointCreated,
+    PreferenceRevertRead,
+    PreferencesDeadlinePut,
+    PreferencesDeadlineRead,
+    PreferencesSummaryRead,
+    PreferenceWorkingPut,
+    PreferenceWorkingRead,
 )
 from .schedule import (
-    AssignmentRead,
-    GenerateScheduleRequest,
-    ManualEditRequest,
-    PublishRequest,
-    ScheduleHistoryItem,
-    ScheduleHistoryList,
-    ScheduleRead,
+    Assignment,
+    IgnoreSlot,
+    MyAssignment,
+    MyAssignmentsRead,
+    ScheduleCheckpointCreated,
+    ScheduleCheckpointRequest,
+    ScheduleDraftView,
+    ScheduleGenerateCreated,
+    ScheduleGenerateRequest,
+    SchedulePayload,
+    SchedulePublishCreated,
+    SchedulePublishedRead,
+    SchedulePublishedRevertRead,
+    SchedulePublishedView,
+    SchedulePublishRequest,
+    ScheduleRevertRead,
+    SchedulesPeriodViewRead,
+    ScheduleWorkingPut,
+    ScheduleWorkingRead,
 )
-from .user import LoginRequest, TokenResponse, UserRead
+from .user import UserRead
 
 # Explicit public surface for this package
 __all__ = [
+    # Enums / shared
     "Role",
     "DoctorRole",
     "ShiftType",
     "ScheduleStatus",
+    "PreferenceStatus",
+    "PeriodStatus",
+    "RiskLevel",
+    "ErrorPayload",
+    # Auth / User
     "LoginRequest",
     "TokenResponse",
     "UserRead",
+    # Doctor
     "DoctorCreate",
-    "DoctorUpdate",
+    "DoctorPut",
     "DoctorRead",
     "DoctorList",
-    "PreferenceCreate",
-    "PreferenceUpdate",
-    "PreferenceRead",
-    "PreferenceSummary",
-    "AssignmentRead",
-    "GenerateScheduleRequest",
-    "ManualEditRequest",
-    "PublishRequest",
-    "ScheduleRead",
-    "RestRuleFlag",
-    "CoverageReport",
-    "PerDoctorStats",
-    "DiagnosticsSummary",
-    "DiagnosticsVisuals",
+    "DoctorMini",
+    # Preferences & Availability
+    "PreferenceWorkingPut",
+    "PreferenceWorkingRead",
+    "PreferenceAutosaveAck",
+    "PreferenceCheckpointCreated",
+    "PreferenceRevertRead",
+    "PreferencesSummaryRead",
+    "PreferencesDeadlineRead",
+    "PreferencesDeadlinePut",
+    "AvailabilityOverviewRead",
+    "AvailabilityDayRead",
+    # Schedules
+    "Assignment",
+    "SchedulePayload",
+    "IgnoreSlot",
+    "ScheduleGenerateRequest",
+    "ScheduleGenerateCreated",
+    "ScheduleWorkingRead",
+    "ScheduleWorkingPut",
+    "ScheduleDraftView",
+    "SchedulePublishedView",
+    "SchedulesPeriodViewRead",
+    "ScheduleCheckpointRequest",
+    "ScheduleCheckpointCreated",
+    "ScheduleRevertRead",
+    "SchedulePublishRequest",
+    "SchedulePublishCreated",
+    "SchedulePublishedRevertRead",
+    "SchedulePublishedRead",
+    "MyAssignment",
+    "MyAssignmentsRead",
+    # Diagnostics
     "DiagnosticsRead",
-    "ExportOptions",
-    "ExportResponse",
-    "PreferenceAuditEntryRead",
-    "PreferenceStatus",
-    "ScheduleHistoryItem",
-    "ScheduleHistoryList",
-    "ErrorPayload",
-    "FairnessBreakdown",
-    "MissedPair",
-    "PartneringBreakdown",
-    "PreferencesBreakdown",
-    "WorkloadDistributionEntry",
+    "DiagnosticsSummary",
+    # Export (query DTO; response is a file stream)
+    "ScheduleExportQuery",
 ]

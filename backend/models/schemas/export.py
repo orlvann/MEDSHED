@@ -1,21 +1,34 @@
-from datetime import datetime
-from typing import Literal
+from typing import Annotated, Literal, Optional
 
+from annotated_types import Ge, Le
 from pydantic import BaseModel, Field
 
-
-class ExportOptions(BaseModel):
-    format: Literal["xlsx", "pdf"] = "xlsx"
-    include_diagnostics: bool = True
-    include_details: bool = True
+# Month 1..12 as in the contract
+MonthInt = Annotated[int, Ge(1), Le(12)]
 
 
-class ExportResponse(BaseModel):
-    schedule_id: int
-    content_type: Literal[
-        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        "application/pdf",
-    ] = Field(..., description="MIME type of the generated file")
-    generated_at: datetime
-    download_url: str | None = None
-    size_bytes: int | None = None
+class ScheduleExportQuery(BaseModel):
+    """
+    Query params for:
+      GET /api/v1/schedules/export
+      ?year=YYYY&month=MM
+      &mode=draft|published
+      &format=xlsx|pdf|ics[&doctor_id=]
+
+    Note: The endpoint returns a binary stream with proper Content-Type and Content-Disposition.
+    No JSON body in the response.
+    """
+
+    year: int
+    month: MonthInt
+    mode: Literal["draft", "published"]
+    format: Literal["xlsx", "pdf", "ics"]
+    doctor_id: Optional[int] = Field(
+        default=None,
+        description=(
+            "For ICS exports only. "
+            "Admin may export ICS for a specific doctor (required); "
+            "Doctors exporting ICS must be forced to their own id "
+            "(server will ignore/forbid others)."
+        ),
+    )

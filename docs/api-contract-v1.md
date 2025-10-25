@@ -1,6 +1,6 @@
 # MEDSCHED API Contract — **v1 (DRAFT)**
 
-> **Status:** Draft, under active development.
+> **Status:** NOT VALID - follow admin_path_api.md
 > Public routes are versioned under **`/api/v1`**. Breaking changes will ship under **`/api/v2`**
 > This document reflects the **cleaned path layout** and is aligned with the current OpenAPI schemas and response codes.
 

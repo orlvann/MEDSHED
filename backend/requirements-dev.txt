@@ -1,0 +1,5 @@
+black~=24.10
+ruff~=0.14
+pytest~=8.4
+httpx~=0.27
+pre-commit~=3.8

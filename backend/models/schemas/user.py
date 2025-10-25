@@ -1,27 +1,30 @@
 from datetime import datetime
-from typing import Literal
 
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, EmailStr
 
-from .common import Role
-
-
-class LoginRequest(BaseModel):
-    email: EmailStr
-    password: str
-
-
-class TokenResponse(BaseModel):
-    access_token: str
-    # Pydantic v2-safe: Literal zamiast Field(examples=...)
-    token_type: Literal["bearer"] = "bearer"
-    role: Role
-    expires_in: int = Field(..., ge=1, description="Seconds until token expiry")
+from .common import Role  # "admin" | "doctor"
 
 
 class UserRead(BaseModel):
+    """
+    Public representation of the current user (e.g., GET /api/v1/me).
+    Role is derived from the token on the backend.
+    """
+
     id: int
     email: EmailStr
     role: Role
     is_active: bool = True
     created_at: datetime | None = None
+
+    model_config = {
+        "json_schema_extra": {
+            "example": {
+                "id": 101,
+                "email": "admin@hospital.org",
+                "role": "admin",
+                "is_active": True,
+                "created_at": "2026-01-05T10:22:31Z",
+            }
+        }
+    }
