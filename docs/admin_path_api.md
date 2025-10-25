@@ -87,7 +87,7 @@
   * **Preferences:** **mine-only** (created by the current caller).
   * **Schedules:** **global** (single admin).
 * **UX feel:** **big left/right arrows** (⟵ ⟶) that jump between **saved states** (not every keystroke).
-* **APIs:** `POST /…/checkpoint`, `POST /…/revert-last`, `POST /…/revert-next` — each returns the **full current state** plus `current_checkpoint_id`, `can_undo`, `can_redo` so the UI can refresh **without an extra GET**.
+* **APIs:** `POST /…/checkpoint`, `POST /…/revert-last`, `POST /…/revert-next` — each returns the **full current state** plus `version_id`, `can_undo`, `can_redo` so the UI can refresh **without an extra GET**.
   *(Schedules also have published-stream variants: `…/revert-last-published`, `…/revert-next-published`.)*
 * **Scope policy:** **Preferences** keep **per-caller** (mine-only) Undo/Redo history; **Schedules** keep a **single global** history (one admin).
 * **Retention (FIFO):**
@@ -299,7 +299,7 @@ DELETE /api/v1/doctors/{doctor_id}
 >
 > * **`preferences_working`** — one **mutable** row per `{year, month, doctor_id}` (always exists; defaults to “allow all” - a doctor is available every day, with no special wishes and no restrictions).
 > * **`preferences_versions`** — **immutable checkpoints** per `{year, month, doctor_id}`(saved snapshots for undo/history).
-> * **`preferences_pointers`** — **one pointer** per `{year, month, doctor_id}` → `current_checkpoint_id` (latest saved). Also stores: `submitted_at`, `submitted_by_user_id`, `submitted_by_role`, `last_admin_note`.
+> * **`preferences_pointers`** — **one pointer** per `{year, month, doctor_id}` → `version_id` (latest saved). Also stores: `submitted_at`, `submitted_by_user_id`, `submitted_by_role`, `last_admin_note`.
 
 > **Simple rule**
 >
@@ -366,7 +366,7 @@ GET /api/v1/preferences/{year}/{month}/{doctor_id}
   "comments": "",
 
   "status": "missing",
-  "current_checkpoint_id": null,
+  "version_id": null,
   "submitted_at": null,
   "submitted_by_role": null,
   "last_admin_note": null,
@@ -415,7 +415,7 @@ Content-Type: application/json
   "month": 2,
   "updated_at": "2026-01-06T09:10:00Z",
   "status": "missing",
-  "current_checkpoint_id": null,
+  "version_id": null,
   "can_undo": false,
   "can_redo": false
 }
@@ -478,7 +478,7 @@ You **don’t send the form fields here**—those are already saved via the `PUT
   "comments": "avoid Mondays",
 
   "status": "submitted",
-  "current_checkpoint_id": "pref_rev_2026-02-01T10:15:00Z",
+  "version_id": "pref_rev_2026-02-01T10:15:00Z",
   "submitted_at": "2026-02-01T10:15:00Z",
   "submitted_by_user_id": 101,
   "submitted_by_role": "admin",
@@ -530,7 +530,7 @@ Content-Type: application/json
   "comments": "avoid Mondays",
 
   "reverted_at": "2026-02-01T11:00:00Z",
-  "current_checkpoint_id": "pref_rev_2026-01-28T09:58:00Z",
+  "version_id": "pref_rev_2026-01-28T09:58:00Z",
   "current_created_by_role": "admin",
   "current_created_by_user_id": 101,
   "current_created_at": "2026-01-28T09:58:00Z",
@@ -583,7 +583,7 @@ Content-Type: application/json
   "comments": "avoid Mondays",
 
   "reverted_at": "2026-02-01T11:02:00Z",
-  "current_checkpoint_id": "pref_rev_2026-02-01T10:15:00Z",
+  "version_id": "pref_rev_2026-02-01T10:15:00Z",
   "current_created_by_role": "admin",
   "current_created_by_user_id": 101,
   "current_created_at": "2026-02-01T10:15:00Z",
@@ -753,7 +753,7 @@ Content-Type: application/json
 **What it does (for current/future months only):**
 
 1. Runs the solver, writes **`schedule_working`** for `{year,month}`.
-2. **Automatically** creates the **first `draft_checkpoint`** from the just-created working and sets `current_draft_version_id` to it (FIFO 5, clear redo).
+2. **Automatically** creates the **first `draft_checkpoint`** from the just-created working and sets `the draft pointer (`draft.version_id`)` to it (FIFO 5, clear redo).
 
 **Response (201)**
 
@@ -769,7 +769,7 @@ Content-Type: application/json
     "updated_at": "2026-02-01T10:12:00Z"
   },
   "draft": {
-    "current_checkpoint_id": "schv_2026_02_0001",
+    "version_id": "schv_2026_02_0001",
     "checkpoints_count": 1,
     "can_undo": false,
     "can_redo": false,
@@ -780,7 +780,7 @@ Content-Type: application/json
     }
   },
  "diagnostics": {
-   "for_version_id": "schv_2026_02_0001",
+   "version_id": "schv_2026_02_0001",
    "computed_at": "2026-02-01T10:12:01Z",
    "summary": { /* initial metrics for the generated draft */ }
   }
@@ -897,7 +897,7 @@ Returns a **period view** for the Schedules tab:
   },
 
   "draft": {                                      // current draft checkpoint snapshot via pointer (nullable)
-    "current_checkpoint_id": "schv_2026_02_0003",
+    "version_id": "schv_2026_02_0003",
     "checkpoints_count": 1,                       // max 5
     "can_undo": false,
     "can_redo": false,
@@ -909,7 +909,7 @@ Returns a **period view** for the Schedules tab:
   },
 
   "published": {                                  // current published snapshot via pointer (nullable)
-    "current_published_id": null,
+    "version_id": null,
     "publications_count": 0,                      // max 5
     "can_undo": false,
     "can_redo": false,
@@ -917,7 +917,7 @@ Returns a **period view** for the Schedules tab:
   },
 
   "diagnostics": {                                // diagnostics of the current draft checkpoint (if any)
-    "for_version_id": "schv_2026_02_0003",
+    "version_id": "schv_2026_02_0003",
     "computed_at": "2026-02-01T10:15:02Z",
     "summary": {
       "penalty_total": 42,
@@ -1021,7 +1021,7 @@ Copies **working → schedule_versions(kind='draft_checkpoint')**, sets the **dr
   "month": 2,
 
   "draft": {
-    "current_checkpoint_id": "schv_2026_02_0002",
+    "version_id": "schv_2026_02_0002",
     "checkpoints_count": 2,
     "can_undo": true,
     "can_redo": false,
@@ -1033,7 +1033,7 @@ Copies **working → schedule_versions(kind='draft_checkpoint')**, sets the **dr
   },
 
   "diagnostics": {
-    "for_version_id": "schv_2026_02_0002",
+    "version_id": "schv_2026_02_0002",
     "computed_at": "2026-02-01T11:06:00Z",
     "summary": {
       "penalty_total": 38,
@@ -1073,7 +1073,7 @@ POST /api/v1/schedules/{year}/{month}/revert-last
   "month": 2,
 
   "draft": {
-    "current_checkpoint_id": "schv_2026_02_0001",
+    "version_id": "schv_2026_02_0001",
     "checkpoints_count": 2,
     "can_undo": false,
     "can_redo": true,
@@ -1092,7 +1092,7 @@ POST /api/v1/schedules/{year}/{month}/revert-last
   },
 
   "diagnostics": {
-    "for_version_id": "schv_2026_02_0001",
+    "version_id": "schv_2026_02_0001",
     "computed_at": "2026-02-01T10:15:02Z",
     "summary": {
       "penalty_total": 42,
@@ -1203,7 +1203,7 @@ Content-Type: application/json
   "year": 2026,
   "month": 2,
   "published": {
-    "current_published_id": "schv_2026_02_0101",
+    "version_id": "schv_2026_02_0101",
     "audit": {
       "published_at": "2026-02-01T11:20:00Z",
       "published_by_user_id": 101,
@@ -1285,7 +1285,7 @@ POST /api/v1/schedules/{year}/{month}/revert-last-published
   "year": 2026,
   "month": 2,
   "published": {
-    "current_published_id": "schv_2026_02_0100",
+    "version_id": "schv_2026_02_0100",
     "publications_count": 2,
     "can_undo": false,
     "can_redo": true,
@@ -1320,7 +1320,7 @@ POST /api/v1/schedules/{year}/{month}/revert-next-published
   "year": 2026,
   "month": 2,
   "published": {
-    "current_published_id": "schv_2026_02_0101",
+    "version_id": "schv_2026_02_0101",
     "publications_count": 2,
     "can_undo": true,
     "can_redo": false,
@@ -1349,8 +1349,8 @@ POST /api/v1/schedules/{year}/{month}/revert-next-published
 GET /api/v1/schedules/{year}/{month}/diagnostics?target=draft|published
 ```
 
-* `target=draft` → uses the draft pointer (`current_checkpoint_id`)
-* `target=published` → uses the published pointer (`current_published_id`)
+* `target=draft` → uses the draft pointer (`draft.version_id`)
+* `target=published` → uses the published pointer (`published.version_id`)
 
 
 
