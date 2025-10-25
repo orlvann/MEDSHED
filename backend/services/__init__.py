@@ -1,3 +1,13 @@
-"""Business/services layer.
-Orchestrates workflows, applies domain rules, talks to ORM and core modules.
-Routers call services; services never depend on FastAPI."""
+"""
+Services package.
+
+What is a Service?
+- A service is like a “manager”: it organizes work and talks to other parts of the system.
+- Routers talk to services; services talk to everything else (core, db, utils).
+- Services contain business logic and orchestrate multi-step processes.
+
+Goal:
+- Keep routers thin (I/O + HTTP only).
+- Keep core focused (algorithms/analytics).
+- Keep services as the application “brain”.
+"""
