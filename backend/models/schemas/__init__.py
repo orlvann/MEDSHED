@@ -1,14 +1,19 @@
-"""Pydantic DTOs + enums (request/response shapes).
-Validate input early; serialize output consistently; power OpenAPI docs."""
+"""
+Pydantic DTOs (request/response shapes).
+Validate input early, serialize output consistently, and power OpenAPI docs.
+
+Note:
+- Domain enums live in `backend.models.common_enums` (single source of truth).
+- This package re-exports commonly used DTOs for convenient imports elsewhere.
+"""
 
 # backend/models/schemas/__init__.py
 # Public re-exports of Pydantic DTOs for short imports across the codebase.
-# Linters: names listed in __all__ are considered intentional exports.
+# Linters: names listed in __all__ are intentional exports.
 
-from .auth import LoginRequest, TokenResponse
-from .common import (
+# Enums (domain-level, shared by ORM/DTOs/services)
+from backend.models.common_enums import (
     DoctorRole,
-    ErrorPayload,
     PeriodStatus,
     PreferenceStatus,
     RiskLevel,
@@ -16,9 +21,23 @@ from .common import (
     ScheduleStatus,
     ShiftType,
 )
+
+# Auth / User
+from .auth import LoginRequest, TokenResponse
+
+# Diagnostics
 from .diagnostics import DiagnosticsRead, DiagnosticsSummary
+
+# Doctors
 from .doctor import DoctorCreate, DoctorList, DoctorMini, DoctorPut, DoctorRead
+
+# DTO helpers / error payloads
+from .dto_common import ErrorPayload
+
+# Export (query DTO; response is a file stream)
 from .export import ScheduleExportQuery
+
+# Preferences & Availability
 from .preference import (
     AvailabilityDayRead,
     AvailabilityOverviewRead,
@@ -31,6 +50,8 @@ from .preference import (
     PreferenceWorkingPut,
     PreferenceWorkingRead,
 )
+
+# Schedules
 from .schedule import (
     Assignment,
     IgnoreSlot,

@@ -2,7 +2,7 @@ from datetime import datetime
 
 from pydantic import BaseModel, EmailStr
 
-from .common import Role  # "admin" | "doctor"
+from backend.models.common_enums import Role  # "admin" | "doctor"
 
 
 class UserRead(BaseModel):

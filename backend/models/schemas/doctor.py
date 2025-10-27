@@ -3,7 +3,9 @@ from typing import List, Optional
 
 from pydantic import BaseModel, EmailStr, Field
 
-from .common import DoctorRole, PageMeta
+from backend.models.common_enums import DoctorRole
+
+from .dto_common import PageMeta
 
 
 class DoctorMini(BaseModel):
