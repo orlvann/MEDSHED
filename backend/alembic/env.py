@@ -8,7 +8,10 @@ from sqlalchemy import engine_from_config, pool
 from backend.db.session import Base  # <- our Base
 
 # Import models for autogenerate to detect them
-from backend.models.ORM import doctor  # noqa: F401
+from backend.models.ORM import (
+    doctor,  # noqa: F401
+    user,  # noqa: F401
+)
 
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.
