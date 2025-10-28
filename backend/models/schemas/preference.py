@@ -4,14 +4,17 @@ from typing import Annotated, List, Optional
 from annotated_types import Ge, Le
 from pydantic import BaseModel, Field, field_validator, model_validator
 
-from .common import (
-    DayInt,  # 1..31
+from backend.models.common_enums import (
     PeriodStatus,  # "past" | "current" | "future"
     PreferenceStatus,  # "missing" | "submitted"
     RiskLevel,  # "ok" | "alert" | "critical"
+)
+
+from .doctor import DoctorMini
+from .dto_common import (
+    DayInt,  # 1..31
     normalize_days,
 )
-from .doctor import DoctorMini
 
 # ---- Helpers ---------------------------------------------------------------
 

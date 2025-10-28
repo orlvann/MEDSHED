@@ -1,4 +1,3 @@
-
 # MEDSCHED Web App
 
 > **Status:** Private repository — **All rights reserved**.
@@ -12,50 +11,50 @@ It focuses on individual preferences, legal compliance, and work-life balance to
 
 ## Key Features
 
-- Constraint-based scheduling with **Google OR-Tools (CP-SAT)**
-- Supports individual shift preferences and rest-period rules.
-- Interactive calendars for easy schedule management.
-- Real-time updates and manual adjustment options.
-- Diagnostics (fairness, coverage, penalties)
-- Export to Excel, PDF, and calendar sync.
+* Constraint-based scheduling with **Google OR-Tools (CP-SAT)**
+* Supports individual shift preferences and rest-period rules
+* Interactive calendars for easy schedule management
+* Real-time updates and manual adjustment options
+* Diagnostics (fairness, coverage, penalties)
+* Export to Excel, PDF, and calendar sync
 
 ## Architecture / Tech Stack
 
-- **Backend:** Python **3.11**, FastAPI, OR-Tools
-- **Frontend:** React, TypeScript *(planned/parallel work)*
-- **Database:** PostgreSQL *(planned primary)*, Redis *(caching, planned)*
-- **Runtime/Infra:** Uvicorn (dev/prod), Azure (deployment target)
+* **Backend:** Python **3.11**, FastAPI, OR-Tools
+* **Frontend:** React, TypeScript *(planned/parallel work)*
+* **Database:** **SQLite (dev)** + **Alembic** migrations; **PostgreSQL (target in prod)**
+* **Runtime/Infra:** Uvicorn (dev/prod), Azure (deployment target)
 
 > **Python version:** we standardize on **3.11** for stable wheels (e.g., OR-Tools on Linux/WSL/macOS) and fewer dependency surprises.
-> If you try **3.12**, create a fresh venv and run the full test suite first.
+> If you try **3.12**, create a fresh venv and run the full test suite first. *(CI will pin 3.11 when added.)*
 
 ## Project Team
 
-- Anna Orlova
-- Aleksandra Muga-Bartkowiak
-- Despoina Karli
+* Anna Orlova
+* Aleksandra Muga-Bartkowiak
+* Despoina Karli
 
 ## Project Status (working draft)
 
 See **[docs/DEV_STATUS.md](docs/DEV_STATUS.md)** for a living overview of what’s done vs. next.
 
-> Heads-up: API shapes are **v1 DRAFT** — stable enough for early integration, but may change as we wire real services and DB.
 
 ---
 
 ## Prerequisites (dev)
 
-- **OS:** **Linux** or **macOS** (or **Windows 11 via WSL2/Ubuntu** running Linux toolchain)
-- **Python:** **3.11**
-- **Git**
+* **OS:** **Linux** or **macOS** (or **Windows 11 via WSL2/Ubuntu** running Linux toolchain)
+* **Python:** **3.11**
+* **Git**
 
 ### Quick install helpers
 
 **Linux (Ubuntu 22.04+):**
+
 ```bash
 sudo apt update
 sudo apt install -y python3.11 python3.11-venv python3-pip git
-````
+```
 
 **Windows 11 (WSL2 with Ubuntu):**
 
@@ -74,7 +73,7 @@ brew install python@3.11 git
 
 ## Quickstart
 
-### Linux / WSL (Ubuntu)
+### Linux / WSL (Ubuntu) & macOS
 
 ```bash
 # 1) Clone and enter the repo
@@ -83,45 +82,56 @@ cd <repo-folder>
 
 # 2) Fresh virtual env and runtime deps
 python3.11 -m venv .venv
-source .venv/bin/activate
+source .venv/bin/activate      # zsh/bash both ok on macOS; bash on Linux/WSL
 pip install --upgrade pip
 pip install -r requirements.txt
 
 # 3) Run the API (dev)
 PYTHONPATH=. uvicorn backend.asgi:app --reload
 
-# 4) Open
-# http://127.0.0.1:8000/            -> {"status":"ok","api":"v1 available at /api/v1"}
-# http://127.0.0.1:8000/docs        -> Swagger UI
-```
-
-### macOS
-
-```bash
-# 1) Clone and enter the repo
-git clone <YOUR_SSH_OR_HTTPS_URL>.git
-cd <repo-folder>
-
-# 2) Fresh virtual env and runtime deps
-python3.11 -m venv .venv
-source .venv/bin/activate   # zsh/bash both ok
-pip install --upgrade pip
-pip install -r requirements.txt
-
-# 3) Run the API (dev)
-PYTHONPATH=. uvicorn backend.asgi:app --reload
-
-# 4) Open
-# http://127.0.0.1:8000/
+# 4) Open Swagger at:
 # http://127.0.0.1:8000/docs
 ```
+
 ---
 
-## Frontend quickstart (for API exploration)
+## Database (dev) quickstart
 
-1. Start the backend (see **Quickstart**).
-2. Open **Swagger UI:** `http://127.0.0.1:8000/docs`
-   OpenAPI JSON (raw spec): `http://127.0.0.1:8000/openapi.json`
+Local dev uses **SQLite** + **Alembic**:
+
+```bash
+make db-upgrade   # create/upgrade schema
+make db-seed      # optional: sample users/doctors
+make app          # run API and test at /docs
+```
+
+For more DB helpers, see **Makefile shortcuts** below.
+
+> For production, `DATABASE_URL` will point to **PostgreSQL** (e.g., in Azure App Settings). **Alembic migrations are shared.**
+
+---
+
+## Makefile shortcuts (dev)
+
+```bash
+make help          # list available commands
+make app           # run FastAPI (dev)
+make db-upgrade    # apply latest Alembic migrations
+make db-seed       # insert sample data
+make db-check      # inspect SQLite tables & schema
+make db-show       # print current doctors/users (joined)
+make db-dump       # schema-only SQL dump to stdout
+make db-dump-full  # schema + data to dump_full.sql
+```
+
+---
+
+## API exploration (without frontend)
+
+1. Start the backend (`make app` or the Quickstart command).
+2. Open **Swagger UI**: `http://127.0.0.1:8000/docs`
+   Or **ReDoc**: `http://127.0.0.1:8000/redoc`
+   Raw OpenAPI JSON: `http://127.0.0.1:8000/openapi.json`
 3. Test endpoints directly in Swagger (**Try it out → Execute**).
 
 **Base URL (dev):** `http://127.0.0.1:8000`
@@ -140,24 +150,33 @@ const res = await fetch("http://127.0.0.1:8000/api/v1/diagnostics/health");
 const data = await res.json();
 ```
 
-> Auth endpoints are stubbed for now; protected routes will later require `Authorization: Bearer <JWT>`. For now, focus on open mocks and shapes in `/docs`.
+> Auth is still mocked in routers, but the **DB layer is ready**. The Auth team can start replacing mocks with a DB-backed `auth_service`.
 
 ---
 
 ## CORS (dev)
 
-If the frontend runs on a different origin (e.g., Vite on `http://127.0.0.1:5173`), enable CORS in dev:
+If the frontend runs on a different origin (e.g., Vite on `http://127.0.0.1:5173`), enable CORS in **`backend/asgi.py`** (the file that **imports and builds** the `app`):
 
 ```python
-# backend/app.py
+# backend/asgi.py
+import os
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from .app import create_app  # your factory
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["http://127.0.0.1:5173"],
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+app: FastAPI = create_app()
+
+allowed = os.getenv("ALLOWED_ORIGINS", "")
+origins = [o.strip() for o in allowed.split(",") if o.strip()]
+
+if origins:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=origins,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
 ```
 
 > In production we aim for same-origin (SPA served from backend `/`), so CORS won’t be needed.
@@ -201,8 +220,8 @@ When the contract evolves, add `/api/v2` alongside `/api/v1` and migrate gradual
 
 ```
 backend/
-  app.py           # assemble FastAPI; register routers under /api/v1
-  asgi.py          # ASGI entrypoint (used by uvicorn/gunicorn)
+  app.py           # assemble FastAPI; register routers under /api/v1; expose create_app()
+  asgi.py          # imports create_app(), builds FastAPI app, attaches dev CORS
   routers/         # API surface (APIRouter modules, thin)
   services/        # application layer (orchestrates core/DB)
   core/            # solver & domain logic (framework-agnostic, OR-Tools)
@@ -279,19 +298,20 @@ pre-commit run --all-files   # one-time run across repo
 
 ---
 
-## Using Swagger (quick guide)
+## Using Swagger / ReDoc (quick guide)
 
-* Start the backend (Uvicorn).
-* Open **[http://127.0.0.1:8000/docs](http://127.0.0.1:8000/docs)** → pick an endpoint → **Try it out** → **Execute**.
-* Responses reflect the DTOs shown in the schema (strict, typed models).
+* Start the backend (`make app`).
+* Open **Swagger UI**: **[http://127.0.0.1:8000/docs](http://127.0.0.1:8000/docs)**
+* Or **ReDoc**: **[http://127.0.0.1:8000/redoc](http://127.0.0.1:8000/redoc)**
 * Raw OpenAPI spec: **[http://127.0.0.1:8000/openapi.json](http://127.0.0.1:8000/openapi.json)**
   (Optional) snapshot to file:
   `curl http://127.0.0.1:8000/openapi.json -o docs/openapi-v1.json`
+
 ---
 
 ## Git Workflow (short)
 
-* Branch per feature: `feature/<name>`
+* Branch per feature: `feat/<name>`
 * Small, frequent commits with clear messages
 * PR → review → merge
 
@@ -311,5 +331,3 @@ pre-commit run --all-files   # one-time run across repo
 This is an **educational project** under a **private** repository.
 The University retains a **right of first publication** for the diploma thesis.
 No license is granted for public use or redistribution without the MEDSCHED Team’s written permission.
-
-```

@@ -10,11 +10,14 @@ from typing import TYPE_CHECKING, Annotated, Dict, List, Literal, Optional
 from annotated_types import Ge, Le
 from pydantic import BaseModel, Field, field_validator
 
-from .common import (
-    DayInt,  # 1..31
+from backend.models.common_enums import (
     PeriodStatus,  # "past" | "current" | "future"
     ScheduleStatus,  # "draft" | "published"
     ShiftType,  # "on_duty" | "on_call"
+)
+
+from .dto_common import (
+    DayInt,  # 1..31
     normalize_days,
 )
 

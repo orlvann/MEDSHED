@@ -1,54 +1,7 @@
-from enum import Enum
 from typing import Iterable, List, Optional
 
 from pydantic import BaseModel, Field
 from typing_extensions import Annotated
-
-# -- Shared enums for strong typing and clear contracts (values: lowercase as per API contract) -
-
-
-class Role(str, Enum):
-    admin = "admin"
-    doctor = "doctor"
-
-
-class DoctorRole(str, Enum):
-    specialist = "specialist"
-    resident = "resident"
-
-
-class ShiftType(str, Enum):
-    on_duty = "on_duty"
-    on_call = "on_call"
-
-
-class ScheduleStatus(str, Enum):
-    draft = "draft"
-    published = "published"
-
-
-class PreferenceStatus(str, Enum):
-    missing = "missing"
-    submitted = "submitted"
-
-
-class PeriodStatus(str, Enum):
-    past = "past"
-    current = "current"
-    future = "future"
-
-
-class RiskLevel(str, Enum):
-    ok = "ok"
-    alert = "alert"
-    critical = "critical"
-
-
-# Optional (helps diagnostics payloads)
-class VersionKind(str, Enum):
-    draft_checkpoint = "draft_checkpoint"
-    published = "published"
-
 
 # ---- Pagination envelope used by list endpoints ----
 
