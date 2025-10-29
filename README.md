@@ -99,6 +99,10 @@ PYTHONPATH=. uvicorn backend.asgi:app --reload
 
 Local dev uses **SQLite** + **Alembic**:
 
+> No local config needed. By default we use SQLite at `backend/db/sqlite.db`.
+> Set `DATABASE_URL` to override (e.g., Postgres).
+
+
 ```bash
 make db-upgrade   # create/upgrade schema
 make db-seed      # optional: sample users/doctors
@@ -185,22 +189,23 @@ if origins:
 
 ## Configuration
 
-Copy the example env and adjust values for local/dev:
 
-```bash
-cp .env.example .env
-```
+### 2) Uprość sekcję „Configuration”
+Zastąp całą obecną sekcję „Configuration” tym krótkim wariantem:
 
-**`.env.example`**
+```md
+## Configuration
+
+No local config is required for dev: Alembic and the app fall back to SQLite at `backend/db/sqlite.db`.
+If you want to use another DB (e.g., Postgres), set:
 
 ```dotenv
-# Local dev defaults
-DATABASE_URL=sqlite:///backend/db/sqlite.db
-JWT_SECRET=replace_me_for_dev
-ALLOWED_ORIGINS=http://127.0.0.1:5173
-```
+DATABASE_URL=postgresql+psycopg://USER:PASS@HOST:5432/DBNAME
 
-The backend loads environment variables from `.env` via `python-dotenv`.
+**Optional variables (not required for local dev):**
+- `ALLOWED_ORIGINS` — enable CORS in dev (comma-separated), e.g. `http://127.0.0.1:5173`.
+- `JWT_SECRET` — dev-only secret for auth (will be used when auth is wired).
+
 
 ---
 

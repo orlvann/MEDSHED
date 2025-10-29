@@ -32,10 +32,9 @@ config = context.config
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-# Set DB URL from env (overrides alembic.ini)
-database_url = os.getenv("DATABASE_URL")
-if database_url:
-    config.set_main_option("sqlalchemy.url", database_url)
+# Set DB URL (ENV or safe local SQLite fallback)
+database_url = os.getenv("DATABASE_URL", "sqlite:///backend/db/sqlite.db")
+config.set_main_option("sqlalchemy.url", database_url)
 
 
 # Provide metadata for 'autogenerate' support
