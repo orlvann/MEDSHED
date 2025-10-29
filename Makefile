@@ -12,6 +12,7 @@
 #   make db-dump-full         # SQL to RECREATE STRUCTURE + DATA (DDL + INSERTs) → writes dump_full.sql
 #   make db-seed              # insert sample data into local DB
 #   make db-reset             # drop local SQLite file and re-apply head
+#   make db-meta              # show tables registered in SQLAlchemy Base.metadata (quick import test)
 #
 # Summary:
 #   db-check      = quick inspection of what’s in the DB now (human-readable; no files)
@@ -22,16 +23,15 @@
 # - Commands assume repo root as CWD.
 # - PYTHONPATH is set to repo root so absolute imports like `backend.*` work.
 
-
-
 .DEFAULT_GOAL := help
 
-.PHONY: help app db-upgrade db-revision db-check db-check-one db-check-like db-seed db-reset db-show db-dump db-dump-full
+.PHONY: help app db-upgrade db-revision db-check db-check-one db-check-like db-seed db-reset db-show db-dump db-dump-full db-meta
 
 help: ## Show this help.
 	@printf "\nAvailable commands:\n\n"
 	@awk 'BEGIN {FS = ":.*## "}; /^[a-zA-Z0-9_.-]+:.*## / {printf "  \033[36m%-20s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST)
 	@printf "\nExamples:\n  make db-revision m=\"add email to doctors\"\n  make db-check-one t=doctors\n  make db-check-like p=doc%%\n  make db-show\n  make db-dump-full\n\n"
+
 app: ## Run FastAPI with Uvicorn (dev).
 	PYTHONPATH=. python -m uvicorn backend.asgi:app --reload
 
@@ -66,3 +66,5 @@ db-dump: ## Print schema-only SQL dump (DDL) to stdout.
 db-dump-full: ## Write full SQL dump (DDL + data) to dump_full.sql.
 	PYTHONPATH=. python scripts/db_dump_sql.py --full --out dump_full.sql
 
+db-meta: ## Show tables registered in SQLAlchemy Base.metadata (quick import test).
+	PYTHONPATH=. python -c "from backend.db.session import Base; from backend.models.orm import doctor, user, preference; print(sorted(Base.metadata.tables.keys()))"

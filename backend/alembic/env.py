@@ -1,15 +1,25 @@
+# ruff: noqa: E402
+
 import os
+import sys
 from logging.config import fileConfig
 
 from alembic import context
 from sqlalchemy import engine_from_config, pool
 
+# -- ensure project root on sys.path --
+BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+if BASE_DIR not in sys.path:
+    sys.path.insert(0, BASE_DIR)
+
+
 # Import your Base and models so Alembic can autogenerate diffs
 from backend.db.session import Base  # <- our Base
 
 # Import models for autogenerate to detect them
-from backend.models.ORM import (
+from backend.models.orm import (
     doctor,  # noqa: F401
+    preference,  # noqa: F401
     user,  # noqa: F401
 )
 

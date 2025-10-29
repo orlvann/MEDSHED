@@ -1,4 +1,4 @@
-# backend/models/ORM/user.py
+# backend/models/orm/user.py
 from __future__ import annotations
 
 from datetime import datetime

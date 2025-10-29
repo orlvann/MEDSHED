@@ -21,8 +21,16 @@ from sqlalchemy.orm import Session
 
 from backend.db.session import SessionLocal
 from backend.models.common_enums import DoctorRole, Role
-from backend.models.ORM.doctor import Doctor
-from backend.models.ORM.user import User
+from backend.models.orm.doctor import Doctor
+
+# Preferences models are imported for completeness (not used for seeding now)
+from backend.models.orm.preference import (  # noqa: F401
+    PreferenceDeadline,  # <- singular
+    PreferencePointer,
+    PreferenceVersion,
+    PreferenceWorking,
+)
+from backend.models.orm.user import User
 
 
 # --- tiny DEV hash helper (DO NOT use in production) ---
@@ -38,11 +46,13 @@ def get_or_create_doctor(
     role: DoctorRole,
     email: Optional[str] = None,
 ) -> Doctor:
+    """Find by email (if provided), otherwise by (first_name, last_name, role)."""
     if email:
         doc = db.execute(select(Doctor).where(Doctor.email == email)).scalar_one_or_none()
         if doc:
             return doc
-    # fallback by (first_name, last_name, role) for NULL-email doctors
+
+    # Fallback by (first_name, last_name, role) for NULL-email doctors
     doc = db.execute(
         select(Doctor).where(
             Doctor.first_name == first_name,
@@ -55,7 +65,7 @@ def get_or_create_doctor(
 
     doc = Doctor(first_name=first_name, last_name=last_name, role=role, email=email)
     db.add(doc)
-    db.flush()  # get id
+    db.flush()  # populate doc.id
     return doc
 
 
@@ -67,9 +77,9 @@ def get_or_create_user(
     password_plain: str,
     doctor_id: Optional[int] = None,
 ) -> User:
+    """Find by email; if not found, create. Keep 1:1 doctor link if provided."""
     user = db.execute(select(User).where(User.email == email)).scalar_one_or_none()
     if user:
-        # keep existing; ensure 1:1 link if provided
         if doctor_id and user.doctor_id != doctor_id:
             user.doctor_id = doctor_id
         return user
@@ -124,17 +134,25 @@ def main() -> None:
         db.commit()
 
         print("\n== Seed complete ==")
-        print(f"Doctor: #{anna.id} {anna.first_name} {anna.last_name} ({anna.role.value}) email={anna.email}")
-        print(f"Doctor: #{piotr.id} {piotr.first_name} {piotr.last_name} ({piotr.role.value}) email={piotr.email}")
+        print(f"Doctor: #{anna.id} {anna.first_name} {anna.last_name} " f"({anna.role.value}) email={anna.email}")
+        print(f"Doctor: #{piotr.id} {piotr.first_name} {piotr.last_name} " f"({piotr.role.value}) email={piotr.email}")
         print(
-            f"User(admin):  {admin_user.email} / admin123!  role={admin_user.role.value} active={admin_user.is_active}"
+            "User(admin):  {email} / admin123!  role={role} active={active}".format(
+                email=admin_user.email,
+                role=admin_user.role.value,
+                active=admin_user.is_active,
+            )
         )
         print(
-            f"User(doctor): {doctor_user.email} / doctor123! role={doctor_user.role.value} "
-            f"active={doctor_user.is_active} doctor_id={doctor_user.doctor_id}"
+            "User(doctor): {email} / doctor123! role={role} active={active} doctor_id={docid}".format(
+                email=doctor_user.email,
+                role=doctor_user.role.value,
+                active=doctor_user.is_active,
+                docid=doctor_user.doctor_id,
+            )
         )
-        print("\nLogin hint (DEV ONLY): passwords are printed above; hashing is sha256 demo.")
-        print("You can now wire your AuthService to verify hashes and issue JWTs.")
+        print("\nLogin hint (DEV ONLY): passwords above; hashing is sha256 demo.")
+        print("Wire AuthService to verify hashes and issue JWTs.")
     except Exception:
         db.rollback()
         raise
