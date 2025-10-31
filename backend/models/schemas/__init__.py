@@ -1,3 +1,4 @@
+# backend/models/schemas/__init__.py
 """
 Pydantic DTOs (request/response shapes).
 Validate input early, serialize output consistently, and power OpenAPI docs.

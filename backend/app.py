@@ -1,3 +1,4 @@
+# backend/app.py
 from fastapi import FastAPI
 
 from .routers import auth, availability, diagnostics, doctors, preferences, schedules
@@ -17,6 +18,10 @@ TAGS_METADATA = [
     },
     {"name": "schedules:doctor", "description": "Schedules — DOCTOR path (read published, my assignments, export)"},
     {"name": "diagnostics", "description": "Schedule analytics and quality"},
+    {
+        "name": "schedules:export",
+        "description": "Unified export for admins & doctors (pointer-based, xlsx/pdf)",
+    },
 ]
 
 

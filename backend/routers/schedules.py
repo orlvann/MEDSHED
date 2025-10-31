@@ -688,7 +688,7 @@ def schedules_diagnostics(
 @router.get(
     "/export",
     summary="Unified export (draft|published) to xlsx|pdf",
-    tags=["schedules:doctor"],  # show only once in Swagger (do not duplicate in admin group)
+    tags=["schedules:export"],  # show only once in Swagger (do not duplicate in admin group)
     operation_id="schedules_export",
 )
 def schedules_export(

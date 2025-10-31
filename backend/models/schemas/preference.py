@@ -1,7 +1,7 @@
+# backend/models/schemas/preference.py
 from datetime import datetime
-from typing import Annotated, List, Optional
+from typing import List, Optional
 
-from annotated_types import Ge, Le
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 from backend.models.common_enums import (
@@ -11,15 +11,14 @@ from backend.models.common_enums import (
 
 from .dto_common import (
     DayInt,  # 1..31
+    MonthInt,  # 1..12
+    YearInt,  # 1900..2100
     normalize_days,
 )
 
 # ---- Helpers ---------------------------------------------------------------
 
-MonthInt = Annotated[int, Ge(1), Le(12)]  # 1..12
 
-
-# Re-export local alias for readability in validators (uses common.normalize_days)
 def _normalize_days(days: List[int] | None) -> List[int]:
     return normalize_days(days)
 
@@ -106,7 +105,7 @@ class _PreferenceEditableMixin(BaseModel):
             "min_oncall_weekends",
             "max_oncall_weekends",
         )
-        # no overlap between unavailable_* and preferred_* for the same shift type
+        # No overlap between unavailable_* and preferred_* for the same shift type
         if set(self.unavailable_duty_days) & set(self.preferred_duty_days):
             raise ValueError("duty days cannot be both preferred and unavailable")
         if set(self.unavailable_oncall_days) & set(self.preferred_oncall_days):
@@ -115,24 +114,16 @@ class _PreferenceEditableMixin(BaseModel):
 
 
 class PreferenceWorkingPut(_PreferenceEditableMixin):
-    """
-    Autosave payload for:
-    PUT /api/v1/preferences/{year}/{month}/{doctor_id}/working
-    PUT /api/v1/preferences/{year}/{month}/me/working
-    """
+    """Autosave payload for PUT …/working (admin or /me)."""
 
-    # only editable fields – no ids here
     pass
 
 
 class PreferenceWorkingRead(_PreferenceEditableMixin):
-    """
-    Read model for GET .../working (admin or doctor ‘me’) including hints.
-    Mirrors contract examples.
-    """
+    """Read model for GET …/working (admin or doctor ‘me’) including hints."""
 
     doctor_id: int
-    year: int
+    year: YearInt
     month: MonthInt
 
     status: PreferenceStatus = Field(default=PreferenceStatus.missing)
@@ -153,22 +144,22 @@ class PreferenceAutosaveAck(BaseModel):
     """Response for PUT …/working (200)."""
 
     doctor_id: int
-    year: int
+    year: YearInt
     month: MonthInt
     updated_at: datetime
     status: PreferenceStatus = Field(default=PreferenceStatus.missing)
     version_id: Optional[str] = None
     can_undo: bool = False
     can_redo: bool = False
+    # Optional optimistic locking for UI; not required by ORM:
+    lock_version: Optional[int] = None
 
 
 class PreferenceCheckpointCreated(_PreferenceEditableMixin):
-    """
-    Response for POST …/checkpoint (201).
-    """
+    """Response for POST …/checkpoint (201)."""
 
     doctor_id: int
-    year: int
+    year: YearInt
     month: MonthInt
 
     status: PreferenceStatus = Field(default=PreferenceStatus.submitted)
@@ -183,12 +174,10 @@ class PreferenceCheckpointCreated(_PreferenceEditableMixin):
 
 
 class PreferenceRevertRead(_PreferenceEditableMixin):
-    """
-    Response for POST …/revert-last and …/revert-next (200).
-    """
+    """Response for POST …/revert-last and …/revert-next (200)."""
 
     doctor_id: int
-    year: int
+    year: YearInt
     month: MonthInt
 
     reverted_at: datetime
@@ -201,11 +190,9 @@ class PreferenceRevertRead(_PreferenceEditableMixin):
 
 
 class PreferencesSummaryRead(BaseModel):
-    """
-    GET /api/v1/preferences/summary?year=&month=
-    """
+    """GET /api/v1/preferences/summary?year=&month="""
 
-    year: int
+    year: YearInt
     month: MonthInt
     submitted: List[int] = []
     missing: List[int] = []
@@ -213,7 +200,7 @@ class PreferencesSummaryRead(BaseModel):
 
 
 class PreferencesDeadlineRead(BaseModel):
-    year: int
+    year: YearInt
     month: MonthInt
     deadline: datetime
     status: str  # "open" | "locked"
