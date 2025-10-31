@@ -97,6 +97,7 @@ def save_working_autosave(
 ) -> PreferenceAutosaveAck:
     # TODO: upsert into working table; do not touch versions/pointers
     now = now_utc()
+
     return PreferenceAutosaveAck(
         doctor_id=doctor_id,
         year=year,
@@ -113,6 +114,7 @@ def save_working_autosave(
 def create_checkpoint(*, year: int, month: int, doctor_id: int, actor: UserCtx) -> PreferenceCheckpointCreated:
     # TODO: copy working → versions (new immutable), move pointer; mark submitter
     now = now_utc()
+
     return PreferenceCheckpointCreated(
         doctor_id=doctor_id,
         year=year,
@@ -145,7 +147,9 @@ def create_checkpoint(*, year: int, month: int, doctor_id: int, actor: UserCtx) 
 
 def revert_last(*, year: int, month: int, doctor_id: int, actor: UserCtx) -> PreferenceRevertRead:
     # TODO: move pointer to previous version; overwrite working; return current snapshot
+
     now = now_utc()
+
     return PreferenceRevertRead(
         doctor_id=doctor_id,
         year=year,
@@ -178,6 +182,7 @@ def revert_last(*, year: int, month: int, doctor_id: int, actor: UserCtx) -> Pre
 def revert_next(*, year: int, month: int, doctor_id: int, actor: UserCtx) -> PreferenceRevertRead:
     # TODO: move pointer to next version; overwrite working; return current snapshot
     now = now_utc()
+
     return PreferenceRevertRead(
         doctor_id=doctor_id,
         year=year,

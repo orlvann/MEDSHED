@@ -1,6 +1,5 @@
 # backend/routers/preferences.py
 # Preferences (Admin & Doctor) — unified router with RBAC, error shape, and clean Swagger.
-
 from __future__ import annotations
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Path, Query, status
