@@ -22,8 +22,6 @@ Replace bodies with real DB/ORM calls.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
-
 from backend.models.common_enums import PeriodStatus, PreferenceStatus
 from backend.models.schemas import (
     PreferenceAutosaveAck,
@@ -36,17 +34,13 @@ from backend.models.schemas import (
     PreferenceWorkingRead,
 )
 from backend.routers.deps import UserCtx
-
-
-def _now_utc() -> datetime:
-    return datetime.now(timezone.utc)
-
+from backend.utils.timez import ORG_TZ, get_period_status, now_utc
 
 # ------------------------- Read / Summary ----------------------------------
 
 
 def get_working(*, year: int, month: int, doctor_id: int, actor: UserCtx) -> PreferenceWorkingRead:
-    # TODO: fetch working row + pointer hints from DB; compute period_status from org tz
+    # TODO: fetch working row + pointer hints from DB; compute period_status using org tz
     return PreferenceWorkingRead(
         doctor_id=doctor_id,
         year=year,
@@ -74,8 +68,8 @@ def get_working(*, year: int, month: int, doctor_id: int, actor: UserCtx) -> Pre
         last_admin_note=None,
         can_undo=False,
         can_redo=False,
-        org_timezone="Europe/Warsaw",
-        period_status=PeriodStatus.current,
+        org_timezone=ORG_TZ,
+        period_status=PeriodStatus(get_period_status(year, month)),
     )
 
 
@@ -86,7 +80,7 @@ def read_summary(*, year: int, month: int, actor: UserCtx) -> PreferencesSummary
         month=month,
         submitted=[42, 7, 9],
         missing=[11, 13, 21],
-        last_update_at=_now_utc(),
+        last_update_at=now_utc(),
     )
 
 
@@ -102,7 +96,7 @@ def save_working_autosave(
     actor: UserCtx,
 ) -> PreferenceAutosaveAck:
     # TODO: upsert into working table; do not touch versions/pointers
-    now = _now_utc()
+    now = now_utc()
     return PreferenceAutosaveAck(
         doctor_id=doctor_id,
         year=year,
@@ -118,7 +112,7 @@ def save_working_autosave(
 
 def create_checkpoint(*, year: int, month: int, doctor_id: int, actor: UserCtx) -> PreferenceCheckpointCreated:
     # TODO: copy working → versions (new immutable), move pointer; mark submitter
-    now = _now_utc()
+    now = now_utc()
     return PreferenceCheckpointCreated(
         doctor_id=doctor_id,
         year=year,
@@ -151,7 +145,7 @@ def create_checkpoint(*, year: int, month: int, doctor_id: int, actor: UserCtx) 
 
 def revert_last(*, year: int, month: int, doctor_id: int, actor: UserCtx) -> PreferenceRevertRead:
     # TODO: move pointer to previous version; overwrite working; return current snapshot
-    now = _now_utc()
+    now = now_utc()
     return PreferenceRevertRead(
         doctor_id=doctor_id,
         year=year,
@@ -183,7 +177,7 @@ def revert_last(*, year: int, month: int, doctor_id: int, actor: UserCtx) -> Pre
 
 def revert_next(*, year: int, month: int, doctor_id: int, actor: UserCtx) -> PreferenceRevertRead:
     # TODO: move pointer to next version; overwrite working; return current snapshot
-    now = _now_utc()
+    now = now_utc()
     return PreferenceRevertRead(
         doctor_id=doctor_id,
         year=year,
@@ -221,9 +215,9 @@ def get_deadline(*, year: int, month: int, actor: UserCtx) -> PreferencesDeadlin
     return PreferencesDeadlineRead(
         year=year,
         month=month,
-        deadline=_now_utc(),
+        deadline=now_utc(),
         status="open",
-        org_timezone="Europe/Warsaw",
+        org_timezone=ORG_TZ,
     )
 
 
@@ -232,7 +226,7 @@ def upsert_deadline(*, year: int, month: int, body: dict, actor: UserCtx) -> Pre
     return PreferencesDeadlinePut(
         year=year,
         month=month,
-        deadline=_now_utc(),
+        deadline=now_utc(),
         status="open",
-        org_timezone="Europe/Warsaw",
+        org_timezone=ORG_TZ,
     )

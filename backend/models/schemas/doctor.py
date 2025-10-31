@@ -1,4 +1,6 @@
 # backend/models/schemas/doctor.py
+from __future__ import annotations
+
 from datetime import datetime
 from typing import List, Optional
 
@@ -54,5 +56,4 @@ class DoctorRead(BaseModel):
 class DoctorList(PageMeta):
     """Pagination envelope for doctors listing."""
 
-    # Use default_factory to avoid mutable default list bugs
     items: List[DoctorRead] = Field(default_factory=list)

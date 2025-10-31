@@ -3,8 +3,6 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
-
 from fastapi import APIRouter, Body, Depends, HTTPException, Path, Query, status
 
 from backend.models.schemas import (
@@ -29,21 +27,17 @@ from backend.services.preference_service import (
     save_working_autosave,
     upsert_deadline,
 )
+from backend.utils.timez import is_period_closed
 
 router: APIRouter = APIRouter()
 
 
-def _now_utc() -> datetime:
-    return datetime.now(timezone.utc)
-
-
 def _guard_period_closed(year: int, month: int) -> None:
     """
-    Simple period gate: blocks write operations for past periods.
-    Real impl should use org tz and deadline table — here we keep it stubby.
+    Central guard: blocks write operations for past periods (org TZ).
+    Contract choice: we return 409 'period_closed' (consistent with schedules/preferences).
     """
-    now = _now_utc()
-    if (year, month) < (now.year, now.month):
+    if is_period_closed(year, month):
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=make_error(
@@ -125,7 +119,7 @@ def admin_create_checkpoint(
     body: dict = Body(default_factory=dict),
 ):
     _guard_period_closed(year, month)
-    # body is kept for future extensibility (e.g., submit flags)
+    # body reserved for future flags
     return create_checkpoint(year=year, month=month, doctor_id=doctor_id, actor=user)
 
 
@@ -250,9 +244,7 @@ def me_create_checkpoint(
 ):
     _guard_period_closed(year, month)
     doctor_id = user.user_id
-    resp = create_checkpoint(year=year, month=month, doctor_id=doctor_id, actor=user)
-    # service already sets submitted_by_role/user appropriately; left here for clarity
-    return resp
+    return create_checkpoint(year=year, month=month, doctor_id=doctor_id, actor=user)
 
 
 @router.post(
