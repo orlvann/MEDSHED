@@ -25,6 +25,14 @@ from backend.models.common_enums import (
 # Auth / User
 from .auth import LoginRequest, TokenResponse
 
+# Availability
+from .availability import (
+    AvailabilityDayRead,
+    AvailabilityDaySummary,
+    AvailabilityOverviewRead,
+    AvailabilityRiskLevel,
+)
+
 # Diagnostics
 from .diagnostics import DiagnosticsRead, DiagnosticsSummary
 
@@ -37,10 +45,8 @@ from .dto_common import ErrorPayload
 # Export (query DTO; response is a file stream)
 from .export import ScheduleExportQuery
 
-# Preferences & Availability
+# Preferences
 from .preference import (
-    AvailabilityDayRead,
-    AvailabilityOverviewRead,
     PreferenceAutosaveAck,
     PreferenceCheckpointCreated,
     PreferenceRevertRead,
@@ -70,6 +76,7 @@ from .schedule import (
     SchedulePublishRequest,
     ScheduleRevertRead,
     SchedulesPeriodViewRead,
+    ScheduleWorkingAck,
     ScheduleWorkingPut,
     ScheduleWorkingRead,
 )
@@ -115,6 +122,7 @@ __all__ = [
     "ScheduleGenerateCreated",
     "ScheduleWorkingRead",
     "ScheduleWorkingPut",
+    "ScheduleWorkingAck",
     "ScheduleDraftView",
     "SchedulePublishedView",
     "SchedulesPeriodViewRead",
@@ -132,4 +140,7 @@ __all__ = [
     "DiagnosticsSummary",
     # Export (query DTO; response is a file stream)
     "ScheduleExportQuery",
+    # Availability
+    "AvailabilityDaySummary",
+    "AvailabilityRiskLevel",
 ]

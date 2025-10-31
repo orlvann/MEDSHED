@@ -7,10 +7,8 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 from backend.models.common_enums import (
     PeriodStatus,  # "past" | "current" | "future"
     PreferenceStatus,  # "missing" | "submitted"
-    RiskLevel,  # "ok" | "alert" | "critical"
 )
 
-from .doctor import DoctorMini
 from .dto_common import (
     DayInt,  # 1..31
     normalize_days,
@@ -226,29 +224,3 @@ class PreferencesDeadlinePut(PreferencesDeadlineRead):
     """PUT-as-upsert returns the same shape; 201 if created / 200 if updated."""
 
     pass
-
-
-# -----------------------------------------------------------------------------
-# Availability (pre-flight coverage) — colocated here to avoid a new file
-# Endpoints:
-#   GET /api/v1/availability/overview?year=&month=
-#   GET /api/v1/availability/{year}/{month}/{day}
-# -----------------------------------------------------------------------------
-
-
-class AvailabilityDaySummary(BaseModel):
-    day: DayInt
-    available_specialists: int
-    available_residents: int
-    risk: RiskLevel  # "ok" | "alert" | "critical"
-
-
-class AvailabilityOverviewRead(BaseModel):
-    days: list[AvailabilityDaySummary] = []
-
-
-class AvailabilityDayRead(BaseModel):
-    day: DayInt
-    specialists: list[DoctorMini] = []
-    residents: list[DoctorMini] = []
-    risk: RiskLevel

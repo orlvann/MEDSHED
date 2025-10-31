@@ -6,9 +6,6 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, Body, Path, Query, status
 
 from backend.models.schemas import (
-    AvailabilityDayRead,
-    # Availability (co-located with preferences)
-    AvailabilityOverviewRead,
     PreferenceAutosaveAck,
     PreferenceCheckpointCreated,
     PreferenceRevertRead,
@@ -359,44 +356,3 @@ def me_revert_next(
     month: int = Path(..., ge=1, le=12),
 ):
     return admin_revert_next(year=year, month=month, doctor_id=11)
-
-
-# ------------------------------------------------------------------------------
-# 3.3 Availability (pre-flight) — colocated here
-# ------------------------------------------------------------------------------
-@router.get(
-    "/api/v1/availability/overview",
-    response_model=AvailabilityOverviewRead,
-    summary="Monthly availability overview",
-)
-def availability_overview(
-    year: int = Query(..., ge=1900, le=2100),
-    month: int = Query(..., ge=1, le=12),
-):
-    # Stub: replace with service aggregation
-    return {
-        "days": [
-            {"day": 1, "available_specialists": 5, "available_residents": 6, "risk": "ok"},
-            {"day": 10, "available_specialists": 1, "available_residents": 1, "risk": "alert"},
-            {"day": 12, "available_specialists": 0, "available_residents": 2, "risk": "critical"},
-        ]
-    }
-
-
-@router.get(
-    "/api/v1/availability/{year}/{month}/{day}",
-    response_model=AvailabilityDayRead,
-    summary="Day drill-down of availability",
-)
-def availability_day(
-    year: int = Path(..., ge=1900, le=2100),
-    month: int = Path(..., ge=1, le=12),
-    day: int = Path(..., ge=1, le=31),
-):
-    # Stub: replace with service drill-down
-    return {
-        "day": day,
-        "specialists": [],
-        "residents": [{"id": 3, "first_name": "Ola", "last_name": "Nowicka"}],
-        "risk": "critical",
-    }
