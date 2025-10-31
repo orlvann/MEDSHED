@@ -1,8 +1,8 @@
-
+````md
 # **Admin Path – Monthly Schedule Workflow & API endpoints**
 
 ## General Overview
- 
+  
 
 ### Full Admin View at a Glance
 
@@ -64,19 +64,126 @@
 * `GET  /api/v1/schedules/{year}/{month}/diagnostics?target=draft|published`
 * `GET  /api/v1/schedules/export?year=&month=&mode=draft|published&format=xlsx|pdf`
 
+#### Schedules — key contract notes (MVP)
+
+**Period View — 200 + skeleton (no data yet)**  
+Always returns 200. When nothing exists for the period:
+```json
+{
+  "year": 2026,
+  "month": 2,
+  "org_timezone": "Europe/Warsaw",
+  "period_status": "future",
+  "view": { "default_mode": "draft", "toggle_available": false },
+
+  "working": {
+    "year": 2026, "month": 2,
+    "exists": false,
+    "participant_doctor_ids": [],
+    "assignments": [],
+    "meta": { "labels": [] },
+    "updated_at": null,
+    "lock_version": null
+  },
+
+  "draft": {
+    "version_id": null,
+    "checkpoints_count": 0,
+    "can_undo": false,
+    "can_redo": false,
+    "payload": null
+  },
+
+  "published": {
+    "version_id": null,
+    "publications_count": 0,
+    "can_undo": false,
+    "can_redo": false,
+    "payload": null
+  },
+
+  "diagnostics": null
+}
+````
+
+**PUT …/working — optimistic concurrency (OCC)**
+
+* Request may include `if_match_lock_version` (optional in MVP).
+* If provided and mismatches the current `lock_version` → **409 edit_conflict**.
+* Response returns fresh `updated_at` and `lock_version`:
+
+```json
+{
+  "year": 2026,
+  "month": 2,
+  "updated_at": "2026-02-01T11:05:30Z",
+  "lock_version": 3
+}
+```
+
+**Export — source is a POINTER (never ‘working’)**
+
+* `mode=draft` → export **current draft checkpoint** via **draft pointer**.
+* `mode=published` → export **current published** via **published pointer**.
+* If the requested pointer doesn’t exist → **404 not_found**.
+
+**Unified error bodies (examples)**
+
+```json
+{ "detail": "not_found", "code": "not_found", "context": { "target": "published" } }
+```
+
+```json
+{ "detail": "edit_conflict", "code": "edit_conflict", "context": {} }
+```
+
+```json
+{ "detail": "forbidden", "code": "forbidden", "context": {} }
+```
+
+**One normalization pipeline (BE responsibility)**
+All writes (`PUT …/working`, `POST …/checkpoint`, `POST …/publish`) go through a **single normalization path in services**.
+FE should not “fix” or reorder payloads — backend normalizes and persists deterministic payloads (e.g., day lists sorted/unique).
+
+---
 
 ### Error codes — summary
->
-> * **401 unauthorized** — missing/invalid token.
-> * **403 period_closed** — modifying past months — any mutation or pointer move outside the editing window (including published rollback).
-> * **404 not_found** — entity does not exist (e.g., `doctor_id`, `year/month` with no data, `version_id`).
-> * **409 cannot_undo / cannot_redo** — no suitable version in history.
-> * **409 publish_blocked_by_hard_rules** — hard-rule violations prevent publishing when `force=false`.
-> * **422 unprocessable_entity** — input validation errors.
-> * **500 internal** — server error.
->
-> **Note:** multiple domain conflicts can share HTTP **409**. Disambiguate by the JSON `detail`/`code` field in the response body.
 
+* **401 unauthorized** — missing/invalid token.
+* **403 forbidden / period_closed** — role not allowed *or* editing outside the window.
+* **404 not_found** — entity/pointer/version not present (e.g., no published for a period).
+* **409 edit_conflict / cannot_undo / cannot_redo / publish_blocked_by_hard_rules** — domain conflicts.
+* **422 unprocessable_entity** — validation errors.
+* **500 internal** — server error.
+
+**Unified error body shape** (consistent across routers):
+
+```json
+{ "detail": "<code>", "code": "<code>", "context": { /* optional */ } }
+```
+
+**Examples**
+
+```json
+{ "detail": "not_found", "code": "not_found", "context": { "target": "published" } }
+```
+
+```json
+{ "detail": "edit_conflict", "code": "edit_conflict", "context": {} }
+```
+
+```json
+{
+  "detail": "publish_blocked_by_hard_rules",
+  "code": "publish_blocked_by_hard_rules",
+  "context": {
+    "violations": [
+      { "code": "NO_SPECIALIST_DAY_12", "message": "No specialist on 12th" },
+      { "code": "MAX_CONSEC_ONCALL_EXCEEDED_DAY_20", "message": "Exceeded consecutive on-call limit on 20th" }
+    ]
+  }
+}
+```
 
 ### Undo/Redo for Preferences and Schedules — who does what (BE vs FE)
 
@@ -106,15 +213,14 @@
 >
 > * `PUT …/working` (**autosave**) only writes the current **working buffer**. It **does not** create a checkpoint, **does not** prune checkpoints, and **does not** move the pointer.
 > * Therefore, autosave **does not change** `can_undo` / `can_redo`.
-> * **Only** `POST …/checkpoint` (**Save**) affects history: it creates a new checkpoint, **clears Redo**, **keeps Undo** (subject to FIFO=5), and updates the pointer to the new version.
-
-
+>   * **Only** `POST …/checkpoint` (**Save**) affects history: it creates a new checkpoint, **clears Redo**, **keeps Undo** (subject to FIFO=5), and updates the pointer to the new version.
 
 ## 0) Preconditions
 
 * You can log in as **ADMIN**.
 * Doctors exist in the **directory**; some **monthly preferences** may exist (or you’ll add them).
 * Time zone: backend returns timestamps in **UTC**; the UI localizes them to the organization’s time zone (also used to decide whether a month is past/current/future).
+
 > **Time semantics (clarification).** The backend stores timestamps in **UTC**, while:
 >
 > * month classification (**past / current / future**) and preference form **open/locked** state are evaluated in the **organization’s time zone**,
@@ -157,6 +263,7 @@ Content-Type: application/json
   * **Head of Department** flag,
   * A checkbox **“Include in this month”**.
 * By default, checkboxes are **selected** for all doctors with `is_active=true`.
+
 > **Behavior note (global `is_active`).**
 > The **“Include in this month”** checkbox directly maps to the **global** `is_active` field in the doctor directory. This ensures that subsequent months start from the **same pool** by default. The monthly pool passed to the generator is the current set of doctors with `is_active=true`, and its **snapshot** is stored in each generated schedule under `participant_doctor_ids`.
 
@@ -165,7 +272,6 @@ Content-Type: application/json
 1. Tick/untick **Include in this month** to control who enters the solver pool.
 2. **Filter & search** by role, name, `is_active`.
 3. **CRUD** the directory (add/update/delete doctors).
-
 
 ---
 
@@ -245,7 +351,6 @@ Content-Type: application/json
 > { "detail": [{ "loc": ["body","role"], "msg": "unknown role", "type": "value_error" }] }
 > ```
 
-
 ### Delete
 
 ```http
@@ -271,9 +376,7 @@ DELETE /api/v1/doctors/{doctor_id}
 
 > `participant_doctor_ids` are also stored with each generated schedule so you can see exactly who was used for that run.
 
-
 ---
-
 
 ## 3) Review preference submissions for the target month
 
@@ -298,13 +401,13 @@ DELETE /api/v1/doctors/{doctor_id}
 > **Data model (DB tables)**
 >
 > * **`preferences_working`** — one **mutable** row per `{year, month, doctor_id}` (always exists; defaults to “allow all” - a doctor is available every day, with no special wishes and no restrictions).
-> * **`preferences_versions`** — **immutable checkpoints** per `{year, month, doctor_id}`(saved snapshots for undo/history).
+> * **`preferences_versions`** — **immutable checkpoints** per `{year, month, doctor_id}` (saved snapshots for undo/history).
 > * **`preferences_pointers`** — **one pointer** per `{year, month, doctor_id}` → `version_id` (latest saved). Also stores: `submitted_at`, `submitted_by_user_id`, `submitted_by_role`, `last_admin_note`.
 
 > **Simple rule**
 >
 > * **Submitted** = someone (admin/doctor) clicked **Save** → a **checkpoint** was created and the pointer moved (we set `submitted_*`).
-> * **Missing** = no checkpoint yet → the **default working** (“allow all”) will be used by the generator if nothing is saved.
+>   * **Missing** = no checkpoint yet → the **default working** (“allow all”) will be used by the generator if nothing is saved.
 
 ---
 
@@ -423,6 +526,7 @@ Content-Type: application/json
 
 **Why it exists:** FE calls this during autosave (timer or on-blur) or before leaving the page to avoid data loss. **BE doesn’t schedule autosaves**—it just accepts this PUT.
 **BE does:** validates and updates `preferences_working`. Writes to **past months** → **403 `period_closed`**.
+
 > **Validation errors (422).**
 > The backend returns **422** for cases such as:
 >
@@ -435,7 +539,6 @@ Content-Type: application/json
 > ```json
 > { "detail": [{ "loc": ["body","min_duties_weekdays"], "msg": "min must be ≤ max", "type": "value_error" }] }
 > ```
-
 
 ---
 
@@ -478,7 +581,7 @@ You **don’t send the form fields here**—those are already saved via the `PUT
   "comments": "avoid Mondays",
 
   "status": "submitted",
-  "version_id": "pref_rev_2026-02-01T10:15:00Z",
+  "version_id": "prefv_2026-02-01T10:15:00Z",
   "submitted_at": "2026-02-01T10:15:00Z",
   "submitted_by_user_id": 101,
   "submitted_by_role": "admin",
@@ -492,7 +595,6 @@ You **don’t send the form fields here**—those are already saved via the `PUT
 
 ---
 
-
 ### Undo one step (go back to your previous checkpoint)
 
 ```http
@@ -503,7 +605,6 @@ Content-Type: application/json
 **Request body:** *(none)*
 
 **What it does:** moves the pointer to the **previous checkpoint** authored by the **caller**, overwrites `preferences_working`, **and returns the full current form (working snapshot + pointer hints)** so the FE can refresh without an extra `GET`.
-
 
 **Response (200)**
 
@@ -530,7 +631,7 @@ Content-Type: application/json
   "comments": "avoid Mondays",
 
   "reverted_at": "2026-02-01T11:00:00Z",
-  "version_id": "pref_rev_2026-01-28T09:58:00Z",
+  "version_id": "prefv_2026-01-28T09:58:00Z",
   "current_created_by_role": "admin",
   "current_created_by_user_id": 101,
   "current_created_at": "2026-01-28T09:58:00Z",
@@ -559,7 +660,6 @@ Content-Type: application/json
 
 **Response (200)**
 
-
 ```json
 {
   "doctor_id": 11,
@@ -583,7 +683,7 @@ Content-Type: application/json
   "comments": "avoid Mondays",
 
   "reverted_at": "2026-02-01T11:02:00Z",
-  "version_id": "pref_rev_2026-02-01T10:15:00Z",
+  "version_id": "prefv_2026-02-01T10:15:00Z",
   "current_created_by_role": "admin",
   "current_created_by_user_id": 101,
   "current_created_at": "2026-02-01T10:15:00Z",
@@ -646,7 +746,6 @@ Content-Type: application/json
 
 ---
 
-
 ## 4) Generate new schedule
 
 ### UI (Generate New Schedule Tab) — What you see
@@ -668,21 +767,17 @@ Content-Type: application/json
 ### What you can do
 
 * Use **Edit Doctors** to adjust the pool in the Doctors tab.
-
 * Hover/click a day to see available names by role.
-
 * If a day is risky or impossible:
 
   * **Fix preferences** (navigate to Preferences), or
   * **Acknowledge gaps** and let the solver **skip** certain days/slots via `ignore_*`.
-
 * **Solver under the hood**
 
   * Load doctors + preferences
   * Build **hard constraints**
   * Optimize **soft goals**
   * Optionally apply heuristics
-
 * When generation finishes, the UI navigates to the **Schedules** screen.
 
 ### API
@@ -691,6 +786,7 @@ Content-Type: application/json
   `GET /api/v1/doctors?is_active=true&role=&search=&page=&size=`
 
 * **Monthly availability overview**
+
 > **Risk enum (availability).**
 > `risk ∈ { "ok", "alert", "critical"}`
 >
@@ -698,62 +794,60 @@ Content-Type: application/json
 > * **alert** — low availability - generally low counts but still may be feasible,
 > * **critical** — only one doctor available **or** **zero** specialists available **or** no one available; impossible to cover the day
 
+```http
+GET /api/v1/availability/overview?year=&month=
+```
 
-  ```http
-  GET /api/v1/availability/overview?year=&month=
-  ```
-
-  ```json
-  {
-    "days": [
-      { "day": 1,  "available_specialists": 5, "available_residents": 6, "risk": "ok" },
-      { "day": 10, "available_specialists": 1, "available_residents": 1, "risk": "alert" },
-      { "day": 12, "available_specialists": 0, "available_residents": 2, "risk": "critical" },
-      { "day": 20, "available_specialists": 1, "available_residents": 0, "risk": "critical" }
-    ]
-  }
-  ```
+```json
+{
+  "days": [
+    { "day": 1,  "available_specialists": 5, "available_residents": 6, "risk": "ok" },
+    { "day": 10, "available_specialists": 1, "available_residents": 1, "risk": "alert" },
+    { "day": 12, "available_specialists": 0, "available_residents": 2, "risk": "critical" },
+    { "day": 20, "available_specialists": 1, "available_residents": 0, "risk": "critical" }
+  ]
+}
+```
 
 * **Daily availability drill-down**
 
-  ```http
-  GET /api/v1/availability/{year}/{month}/{day}
-  ```
+```http
+GET /api/v1/availability/{year}/{month}/{day}
+```
 
-  ```json
-  {
-    "day": 12,
-    "specialists": [],
-    "residents":   [{ "id": 3, "first_name": "Ola", "last_name": "Nowicka" }],
-    "risk": "critical"
-    }
-  ```
-
-
+```json
+{
+  "day": 12,
+  "specialists": [],
+  "residents":   [{ "id": 3, "first_name": "Ola", "last_name": "Nowicka" }],
+  "risk": "critical"
+}
+```
 
 * **Generate schedule**
 
-  ```http
-  POST /api/v1/schedules/generate
-  Content-Type: application/json
-  ```
+```http
+POST /api/v1/schedules/generate
+Content-Type: application/json
+```
 
-  ```json
-  {
-    "year": 2026,
-    "month": 2,
-    "participant_doctor_ids": [1, 2, 5, 7],
-    "ignore_days": [15],
-    "ignore_slots": [
-      { "day": 12, "shift_type": "on_duty" },
-      { "day": 20, "shift_type": "on_call" }
-    ]
-  }
-  ```
+```json
+{
+  "year": 2026,
+  "month": 2,
+  "participant_doctor_ids": [1, 2, 5, 7],
+  "ignore_days": [15],
+  "ignore_slots": [
+    { "day": 12, "shift_type": "on_duty" },
+    { "day": 20, "shift_type": "on_call" }
+  ]
+}
+```
+
 **What it does (for current/future months only):**
 
 1. Runs the solver, writes **`schedule_working`** for `{year,month}`.
-2. **Automatically** creates the **first `draft_checkpoint`** from the just-created working and sets `the draft pointer (`draft.version_id`)` to it (FIFO 5, clear redo).
+2. **Automatically** creates the **first `draft_checkpoint`** from the just-created working and sets the draft pointer (`draft.version_id`) to it (FIFO 5, clear redo).
 
 **Response (201)**
 
@@ -792,7 +886,6 @@ Content-Type: application/json
 * `403 period_closed` (past)
 * `422 unprocessable_entity` (invalid inputs)
 
-
 ### After generate → Schedules Tab
 
 > Generate returns a `ScheduleRead` with `status="draft"`. The UI **navigates to the Schedules tab** to show the newly created draft.
@@ -805,7 +898,9 @@ Content-Type: application/json
 
 * **Year/month picker** to browse schedules. *“Current month” = the month that is ongoing in the organization’s time zone.*
 * The **current schedule** for the selected period with a **status badge** (Draft / Published).
+
   * For **current** and **future** months:
+
     * show **Draft** by default and allow switching between **Draft / Published**, if both exist (toggle disappears if not)
     * editable **Draft** + buttons **Save** (make a new checkpoint) and **Publish** (make visible to doctors)
     * if admin switches to **Published**: show **Edit** button only (creates a new draft from live and it becomes editable)
@@ -829,10 +924,10 @@ Content-Type: application/json
    * **Edit published (hotfix flow)** → **Edit** creates a draft from live; fix, **Save** (checkpoint), then **Publish** again. Old live remains visible until you publish the fix.
 4. **Download** XLSX (PDF optional) — for both Draft and Published.
 5. **Browse history** — for the selected month, allow viewing:
-    - **Draft history** (last ≤5 draft checkpoints), and
-    - **Published history** (last ≤5 publications).
-      In past months both streams are **read-only**. The **latest draft** may or may not match the **latest published** (draft is a working state and could include unpublished changes).
 
+   * **Draft history** (last ≤5 draft checkpoints), and
+   * **Published history** (last ≤5 publications).
+     In past months both streams are **read-only**. The **latest draft** may or may not match the **latest published** (draft is a working state and could include unpublished changes).
 
 ---
 
@@ -841,20 +936,18 @@ Content-Type: application/json
 > The endpoints below follow the **working + checkpoints + pointers** data model (DB tables):
 >
 > * **`schedule_working`** — mutable working draft, one row per `{year,month}` (exists only when a draft is being edited or after generate)
-> * **`schedule_versions`** — immutable snapshots per `{year, month}`(`draft_checkpoint` / `published`)
+> * **`schedule_versions`** — immutable snapshots per `{year, month}` (`draft_checkpoint` / `published`)
 > * **`schedule_pointers`** — pointers to *current* draft and *current* published => two **pointers** per `{year, month}`
 > * **`schedule_diagnostics`** — cache **per version** (only for checkpoints and published)
 
-
 The Schedule API reflects the rules:
 
-* **No edits/undo/redo/publish after the period closes** (00:00 on the first day of the next month in the org timezone). Allowed in past months: **read + export** only
+* **No edits/undo/redo/publish after the period closes** (00:00 on the first day of the next month in the org timezone). Allowed in past months: **read + export** only.
 * **Generate** writes **working** and **automatically creates the first draft checkpoint** (and points the draft pointer there).
 * **Publish** is taken **from working**.
 * **Diagnostics are stored per version** (both **draft checkpoints** and **published**).
   They are computed on **Save/Publish** and cached per `version_id`.
   If the cache is missing, the backend computes them **lazily on first fetch**, persists, and returns.
-
 * **Pointers live per `{year, month}`** (no `sid`).
 * **Separate pointer & FIFO(5)** for **draft checkpoints** and for **published**.
 * **Single admin** (global UNDO/REDO).
@@ -881,14 +974,11 @@ Returns a **period view** for the Schedules tab:
   "year": 2026,
   "month": 2,
   "org_timezone": "Europe/Warsaw",
-  "period_status": "current",                     // "past" | "current" | "future"
+  "period_status": "current",
 
-  "view": {
-    "default_mode": "draft",                      // UI hint
-    "toggle_available": true                      // if both draft and published exist (current/future only)
-  },
+  "view": { "default_mode": "draft", "toggle_available": true },
 
-  "working": {                                    // present only for current/future when working exists
+  "working": {
     "exists": true,
     "participant_doctor_ids": [1,2,5,7],
     "assignments": [ /* ... */ ],
@@ -896,9 +986,9 @@ Returns a **period view** for the Schedules tab:
     "updated_at": "2026-02-01T10:20:00Z"
   },
 
-  "draft": {                                      // current draft checkpoint snapshot via pointer (nullable)
+  "draft": {
     "version_id": "schv_2026_02_0003",
-    "checkpoints_count": 1,                       // max 5
+    "checkpoints_count": 1,
     "can_undo": false,
     "can_redo": false,
     "payload": {
@@ -908,15 +998,15 @@ Returns a **period view** for the Schedules tab:
     }
   },
 
-  "published": {                                  // current published snapshot via pointer (nullable)
+  "published": {
     "version_id": null,
-    "publications_count": 0,                      // max 5
+    "publications_count": 0,
     "can_undo": false,
     "can_redo": false,
     "payload": null
   },
 
-  "diagnostics": {                                // diagnostics of the current draft checkpoint (if any)
+  "diagnostics": {
     "version_id": "schv_2026_02_0003",
     "computed_at": "2026-02-01T10:15:02Z",
     "summary": {
@@ -938,6 +1028,7 @@ Returns a **period view** for the Schedules tab:
 ---
 
 #### 2) Read/Autosave the working draft
+
 ##### Read working (explicit)
 
 ```http
@@ -1182,19 +1273,20 @@ Content-Type: application/json
 {
   "force": false,
   "note": "finalize February",
-  "accepted_exceptions": []    // when force=true, backend will persist into payload.meta.exceptions[]
+  "accepted_exceptions": []
 }
 ```
 
 **What it does (current/future only):**
 
 * Validates **hard rules** on the **current working**.
+
   * If violations and `force=false` → **409** with `detail="publish_blocked_by_hard_rules"` and a `violations[]` list (see below).
   * If the admin confirms in the UI, call **again with `force=true`** and **`accepted_exceptions[]`**:
-     - Backend verifies that accepted exceptions match the detected violations,
-     - Persists them into `payload.meta.exceptions[]` with user and timestamp,
-     - Creates a **published** version from working, updates the **published pointer**, prunes to **last 5**.
 
+    * Backend verifies that accepted exceptions match the detected violations,
+    * Persists them into `payload.meta.exceptions[]` with user and timestamp,
+    * Creates a **published** version from working, updates the **published pointer**, prunes to **last 5**.
 
 **Response (201)**
 
@@ -1221,51 +1313,51 @@ Content-Type: application/json
 }
 ```
 
-
 **Errors**
 
 * `403 period_closed`
 * `422 unprocessable_entity`
 * `409 publish_blocked_by_hard_rules`:
 
-**Error (first attempt, `force=false`):** - example error body
+**Error (first attempt, `force=false`):**
 
-```
- {
-   "detail": "publish_blocked_by_hard_rules",
-   "violations": [
-     { "code": "NO_SPECIALIST_DAY_12", "message": "No specialist on 12th" },
-     { "code": "MAX_CONSEC_ONCALL_EXCEEDED_DAY_20", "message": "Exceeded consecutive on-call limit on 20th" }
-   ]
- }
-```
-
-**Confirmed publish (second attempt, `force=true`):** - example request body
-
-```
- {
-   "force": true,
-   "note": "Exceptional staffing shortage due to flu wave.",
-   "accepted_exceptions": [
-     { "code": "NO_SPECIALIST_DAY_12", "justification": "Clinic closed AM; ER covered by on-call specialist." },
-     { "code": "MAX_CONSEC_ONCALL_EXCEEDED_DAY_20", "justification": "Doctor volunteered; union rep informed." }
-   ]
- }
+```json
+{
+  "detail": "publish_blocked_by_hard_rules",
+  "violations": [
+    { "code": "NO_SPECIALIST_DAY_12", "message": "No specialist on 12th" },
+    { "code": "MAX_CONSEC_ONCALL_EXCEEDED_DAY_20", "message": "Exceeded consecutive on-call limit on 20th" }
+  ]
+}
 ```
 
-**Published response fragment (`meta.exceptions[]` persisted):** - example response excerpt
+**Confirmed publish (second attempt, `force=true`):**
 
+```json
+{
+  "force": true,
+  "note": "Exceptional staffing shortage due to flu wave.",
+  "accepted_exceptions": [
+    { "code": "NO_SPECIALIST_DAY_12", "justification": "Clinic closed AM; ER covered by on-call specialist." },
+    { "code": "MAX_CONSEC_ONCALL_EXCEEDED_DAY_20", "justification": "Doctor volunteered; union rep informed." }
+  ]
+}
 ```
- "payload": {
-   "meta": {
-     "labels": ["as_generated","touched"],
-     "exceptions": [
-       { "code": "NO_SPECIALIST_DAY_12", "justification": "Clinic closed AM; ER covered by on-call specialist.", "accepted_by_user_id": 101, "accepted_at": "2026-02-01T11:20:00Z" },
-       { "code": "MAX_CONSEC_ONCALL_EXCEEDED_DAY_20", "justification": "Doctor volunteered; union rep informed.", "accepted_by_user_id": 101, "accepted_at": "2026-02-01T11:20:00Z" }
-     ]
-   }
- }
+
+**Published response fragment (`meta.exceptions[]` persisted):**
+
+```json
+"payload": {
+  "meta": {
+    "labels": ["as_generated","touched"],
+    "exceptions": [
+      { "code": "NO_SPECIALIST_DAY_12", "justification": "Clinic closed AM; ER covered by on-call specialist.", "accepted_by_user_id": 101, "accepted_at": "2026-02-01T11:20:00Z" },
+      { "code": "MAX_CONSEC_ONCALL_EXCEEDED_DAY_20", "justification": "Doctor volunteered; union rep informed.", "accepted_by_user_id": 101, "accepted_at": "2026-02-01T11:20:00Z" }
+    ]
+  }
+}
 ```
+
 ---
 
 #### 6) Published rollback / redo (only within the editing window)
@@ -1352,8 +1444,6 @@ GET /api/v1/schedules/{year}/{month}/diagnostics?target=draft|published
 * `target=draft` → uses the draft pointer (`draft.version_id`)
 * `target=published` → uses the published pointer (`published.version_id`)
 
-
-
 **Response (200)**
 
 ```json
@@ -1367,7 +1457,7 @@ GET /api/v1/schedules/{year}/{month}/diagnostics?target=draft|published
     "fairness_index": 0.94,
     "preference_fulfillment_pct": 88.0
   },
-  "details": { /* only if you want to expose */ }
+  "details": { }
 }
 ```
 
@@ -1387,17 +1477,18 @@ GET /api/v1/schedules/{year}/{month}/diagnostics?target=draft|published
 GET /api/v1/schedules/export?year=&month=&mode=draft|published&format=xlsx|pdf
 ```
 
-**What it does:**
+**What it does (pointer-based):**
 
-* `mode=draft` → exports from **working**.
-* `mode=published` → exports from **current published**.
+* `mode=draft` → exports from the **current draft checkpoint** (via **draft pointer**).
+* `mode=published` → exports from the **current published** (via **published pointer**).
 
 **Response (200)**
 Binary stream (file download). No diagnostics included.
 
 **Errors**
 
-* `404 not_found` (no working/published for the chosen mode)
+* `404 not_found` (no pointer/published for the chosen mode)
 * `401 unauthorized`
 
----
+```
+

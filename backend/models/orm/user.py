@@ -1,4 +1,24 @@
 # backend/models/orm/user.py
+"""
+Users ORM — current vs target (concise)
+
+NOW:
+- email (unique, NOT NULL), role: Enum("admin"|"doctor")
+- password_hash, is_active (login gate)
+- optional doctor_id (1:1 → doctors.id, unique; admins have NULL)
+- created_at, updated_at (UTC)
+- Constraints: uq_users_email, uq_users_doctor_id; Index: ix_users_role
+- Policy: doctors.is_active DOES NOT affect login; only users.is_active does.
+
+TARGET (future migrations/services):
+- must_change_password (BOOL, default True on creation for ALL new users)
+- deactivated_at (timestamptz) — when login disabled (is_active=False)
+- deleted_at (timestamptz) — logical removal marker (alt to hard delete)
+- Auto-provision in doctor_service: on POST /doctors with unique email → create linked user
+  (role=doctor, is_active=True, must_change_password=True). Email updates propagate; 409 on duplicates.
+- Soft/hard delete behavior handled in services (no cascade deletes here).
+"""
+
 from __future__ import annotations
 
 from datetime import datetime

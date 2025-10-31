@@ -19,3 +19,7 @@ Depends on:
 Notes:
 - This service returns bytes + content-type/filename metadata; routers wrap it into HTTP responses.
 """
+
+# NOTE: Export MUST use a frozen version resolved via POINTER ('draft' or 'published'),
+# NOT the mutable 'working'. The router already resolves version_id; this service should
+# assume it receives a concrete version reference.

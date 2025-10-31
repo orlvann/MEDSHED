@@ -1,34 +1,68 @@
-from typing import Annotated, Literal, Optional
+# backend/models/schemas/export.py
+# -----------------------------------------------------------------------------
+# Export DTOs — query shape for schedule exports and (optionally) a stub read
+# used while the endpoint still returns JSON instead of a binary stream.
+# -----------------------------------------------------------------------------
 
-from annotated_types import Ge, Le
+from __future__ import annotations
+
+from typing import Literal, Optional
+
 from pydantic import BaseModel, Field
 
-# Month 1..12 as in the contract
-MonthInt = Annotated[int, Ge(1), Le(12)]
+# Re-use canonical scalar types (keep contract consistent everywhere)
+from backend.models.schemas.dto_common import MonthInt, YearInt
 
 
 class ScheduleExportQuery(BaseModel):
     """
-    Query params for:
+    Query parameters for:
       GET /api/v1/schedules/export
-      ?year=YYYY&month=MM
-      &mode=draft|published
-      &format=xlsx|pdf|ics[&doctor_id=]
+        ?year=YYYY
+        &month=MM
+        &mode=draft|published
+        &format=xlsx|pdf
+        [&doctor_id=]
 
-    Note: The endpoint returns a binary stream with proper Content-Type and Content-Disposition.
-    No JSON body in the response.
+    NOTE (MVP): the endpoint currently returns a JSON stub (see ScheduleExportStubRead).
+    POST-MVP: the endpoint SHOULD stream a binary file with proper Content-Type and
+    Content-Disposition headers; no JSON body then.
     """
 
-    year: int
+    year: YearInt
     month: MonthInt
-    mode: Literal["draft", "published"]
-    format: Literal["xlsx", "pdf", "ics"]
+    mode: Literal["draft", "published"] = Field(
+        ...,
+        description="Export from the current pointer: 'draft' (latest checkpoint) or 'published'.",
+    )
+    # ICS is intentionally NOT exposed yet to match the current router implementation.
+    format: Literal["xlsx", "pdf"] = Field(
+        ...,
+        description="Output file format. ICS is planned post-MVP.",
+    )
     doctor_id: Optional[int] = Field(
         default=None,
         description=(
-            "For ICS exports only. "
-            "Admin may export ICS for a specific doctor (required); "
-            "Doctors exporting ICS must be forced to their own id "
-            "(server will ignore/forbid others)."
+            "Reserved for ICS exports. " "For ICS, doctors export only their own calendar; admins may specify a doctor."
         ),
     )
+
+
+class ScheduleExportStubRead(BaseModel):
+    """
+    Temporary JSON response used in MVP while the real endpoint does not yet
+    stream a file. This mirrors what the router currently returns.
+    """
+
+    detail: str = Field(..., json_schema_extra={"example": "stub: export stream here"})
+    year: YearInt
+    month: MonthInt
+    mode: Literal["draft", "published"]
+    format: Literal["xlsx", "pdf"]
+    doctor_id: Optional[int] = None
+
+
+__all__ = [
+    "ScheduleExportQuery",
+    "ScheduleExportStubRead",
+]
