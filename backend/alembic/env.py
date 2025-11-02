@@ -1,15 +1,27 @@
+# ruff: noqa: E402
+# backend/alembic/env.py
+
 import os
+import sys
 from logging.config import fileConfig
 
 from alembic import context
 from sqlalchemy import engine_from_config, pool
 
+# -- ensure project root on sys.path --
+BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+if BASE_DIR not in sys.path:
+    sys.path.insert(0, BASE_DIR)
+
+
 # Import your Base and models so Alembic can autogenerate diffs
 from backend.db.session import Base  # <- our Base
 
 # Import models for autogenerate to detect them
-from backend.models.ORM import (
+from backend.models.orm import (
     doctor,  # noqa: F401
+    preference,  # noqa: F401
+    schedule,  # noqa: F401
     user,  # noqa: F401
 )
 
@@ -22,10 +34,9 @@ config = context.config
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-# Set DB URL from env (overrides alembic.ini)
-database_url = os.getenv("DATABASE_URL")
-if database_url:
-    config.set_main_option("sqlalchemy.url", database_url)
+# Set DB URL (ENV or safe local SQLite fallback)
+database_url = os.getenv("DATABASE_URL", "sqlite:///backend/db/sqlite.db")
+config.set_main_option("sqlalchemy.url", database_url)
 
 
 # Provide metadata for 'autogenerate' support

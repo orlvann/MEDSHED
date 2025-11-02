@@ -1,7 +1,11 @@
-from datetime import datetime, timezone
-from typing import Literal
+# backend/routers/doctors.py
 
-from fastapi import APIRouter, Body, Path, Query, status
+
+from __future__ import annotations
+
+from typing import Literal, Optional
+
+from fastapi import APIRouter, Body, Depends, Path, Query, status
 
 from backend.models.schemas import (
     DoctorCreate,
@@ -10,54 +14,53 @@ from backend.models.schemas import (
     DoctorRead,
     DoctorRole,
 )
+from backend.routers.deps import UserCtx, require_admin
+from backend.services.doctor_service import (
+    create_doctor,
+    delete_doctor,
+    get_doctor,
+    list_doctors,
+    put_doctor,
+)
 
 router = APIRouter(tags=["doctors"])
+
+# Semantics:
+# - doctors.is_active controls directory/scheduling pool ONLY (not login).
+# - Linked user login is governed by users.is_active; newly created users (via auto-provision)
+#   should also set must_change_password=True by default (first-login policy).
+# - Email updates propagate to users.email (409 on duplicates). Soft/hard delete affects linked user
+#   per policy (see doctor_service).
 
 
 @router.get(
     "/api/v1/doctors",
     response_model=DoctorList,
     summary="List doctors (pagination + optional filters)",
+    operation_id="doctors_list",
 )
-def list_doctors(
+def doctors_list(
+    user: UserCtx = Depends(require_admin),
     page: int = Query(1, ge=1, description="1-based page number"),
     size: int = Query(50, ge=1, le=200, description="Page size"),
-    role: DoctorRole | None = Query(None, description="Filter by role"),
-    search: str | None = Query(None, description="Search by name"),
-    is_active: Literal["true", "false", "all"] = Query(
-        "all", description='Filter by active flag: "true" | "false" | "all"'
-    ),
+    role: Optional[DoctorRole] = Query(None, description="Filter by role"),
+    search: Optional[str] = Query(None, description="Search by name/email"),
+    is_active: Literal["true", "false", "all"] = Query("all", description='Active flag: "true" | "false" | "all"'),
 ):
-    """
-    Stub: fetch a page of doctors + total count.
-    Replace with: doctor_service.list(page, size, role, search, is_active).
-    """
-    items = [
-        {
-            "id": 1,
-            "first_name": "Anna",
-            "last_name": "Nowak",
-            "role": DoctorRole.specialist,
-            "is_active": True,
-            "is_head": True,
-            "email": "anna.nowak@hospital.pl",
-            "created_at": "2026-01-05T10:22:31Z",
-            "updated_at": "2026-01-05T10:22:31Z",
-        },
-        {
-            "id": 2,
-            "first_name": "Piotr",
-            "last_name": "Zieliński",
-            "role": DoctorRole.resident,
-            "is_active": False,
-            "is_head": False,
-            "email": "piotr.zielinski@hospital.pl",
-            "created_at": "2026-01-06T09:10:00Z",
-            "updated_at": "2026-01-06T09:10:00Z",
-        },
-    ]
-    # In a real impl, slice/filter by `page/size/role/search` and compute `total`.
-    return {"items": items, "page": page, "size": size, "total": len(items)}
+    return list_doctors(page=page, size=size, role=role, search=search, is_active=is_active)
+
+
+@router.get(
+    "/api/v1/doctors/{doctor_id}",
+    response_model=DoctorRead,
+    summary="Get doctor by id",
+    operation_id="doctors_get",
+)
+def doctors_get(
+    user: UserCtx = Depends(require_admin),
+    doctor_id: int = Path(..., ge=1),
+):
+    return get_doctor(doctor_id=doctor_id)
 
 
 @router.post(
@@ -65,51 +68,38 @@ def list_doctors(
     response_model=DoctorRead,
     status_code=status.HTTP_201_CREATED,
     summary="Create doctor",
+    operation_id="doctors_create",
 )
-def create_doctor(payload: DoctorCreate = Body(...)):
-    """
-    Stub: create and return the new doctor.
-    Replace with: doctor_service.create(payload).
-    """
-    now = datetime.now(timezone.utc)
-    return {
-        "id": 101,
-        **payload.model_dump(),
-        "created_at": now,
-        "updated_at": now,
-    }
+def doctors_create(
+    user: UserCtx = Depends(require_admin),
+    payload: DoctorCreate = Body(...),
+):
+    return create_doctor(payload=payload)
 
 
 @router.put(
     "/api/v1/doctors/{doctor_id}",
     response_model=DoctorRead,
     summary="Update doctor (PUT-first, full object)",
+    operation_id="doctors_update",
 )
-def put_doctor(
+def doctors_update(
+    user: UserCtx = Depends(require_admin),
     doctor_id: int = Path(..., ge=1),
     payload: DoctorPut = Body(...),
 ):
-    """
-    Stub: full replace of the doctor (PUT-first).
-    Replace with: doctor_service.put(doctor_id, payload).
-    """
-    now = datetime.now(timezone.utc)
-    return {
-        "id": doctor_id,
-        **payload.model_dump(),
-        "created_at": "2026-01-05T10:22:31Z",
-        "updated_at": now,
-    }
+    return put_doctor(doctor_id=doctor_id, payload=payload)
 
 
 @router.delete(
     "/api/v1/doctors/{doctor_id}",
     status_code=status.HTTP_204_NO_CONTENT,
     summary="Delete doctor",
+    operation_id="doctors_delete",
 )
-def delete_doctor(doctor_id: int = Path(..., ge=1)):
-    """
-    Stub: delete (or soft-delete) the doctor.
-    Replace with: doctor_service.delete(doctor_id).
-    """
+def doctors_delete(
+    user: UserCtx = Depends(require_admin),
+    doctor_id: int = Path(..., ge=1),
+):
+    delete_doctor(doctor_id=doctor_id)
     return None

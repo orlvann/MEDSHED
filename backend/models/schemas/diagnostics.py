@@ -1,9 +1,8 @@
-from datetime import datetime
-from typing import Dict, Optional
-
-from pydantic import BaseModel
-
-# MVP contract shape:
+# backend/models/schemas/diagnostics.py
+# -----------------------------------------------------------------------------
+# Diagnostics DTO — kept small and stable (leaf module, no back-imports).
+#
+# MVP contract shape (example):
 # {
 #   "version_id": "schv_2026_02_0002",
 #   "computed_at": "2026-02-01T11:06:00Z",
@@ -16,21 +15,77 @@ from pydantic import BaseModel
 #   },
 #   "details": { ... }  // optional
 # }
+#
+# Why this file is a "leaf":
+# - It does NOT import schedule schemas (or other app schemas), so others can
+#   safely import DiagnosticsRead without creating circular imports.
+# -----------------------------------------------------------------------------
+
+from __future__ import annotations
+
+from datetime import datetime
+from typing import Any, Optional
+
+from pydantic import BaseModel, Field
 
 
 class DiagnosticsSummary(BaseModel):
-    penalty_total: int
-    understaffed_days: int
-    rest_violations: int
-    fairness_index: float
-    preference_fulfillment_pct: float
+    """Compact KPIs for a single schedule version (draft checkpoint or published).
+    Defaults are safe so the server can always return a minimal payload.
+    """
+
+    penalty_total: int = Field(
+        0,
+        description="Total optimization penalty (lower is better). Aggregated objective or proxy.",
+    )
+    understaffed_days: int = Field(
+        0,
+        description="Number of days with missing required assignments.",
+    )
+    rest_violations: int = Field(
+        0,
+        description="Count of hard rest-rule violations detected.",
+    )
+    fairness_index: float = Field(
+        1.0,
+        description="Fairness score in [0..1]. 1.0 = perfectly even workload.",
+    )
+    preference_fulfillment_pct: float = Field(
+        100.0,
+        description="Satisfied preferences in percent (0..100).",
+    )
 
 
 class DiagnosticsRead(BaseModel):
-    version_id: str
-    computed_at: datetime
-    summary: DiagnosticsSummary
-    details: Optional[Dict] = None  # place richer breakdowns here if you have them
+    """
+    Diagnostics payload bound to a concrete schedule version.
+    Returned by: GET /api/v1/schedules/{y}/{m}/diagnostics?target=draft|published
+    """
+
+    version_id: str = Field(
+        ...,
+        description="Version identifier (draft checkpoint or published) the diagnostics refer to.",
+    )
+    computed_at: datetime = Field(
+        ...,
+        description="UTC timestamp when diagnostics were computed/refreshed (server-side UTC).",
+    )
+    # NOTE: default_factory must be a zero-arg callable for Pydantic v2 & type checkers.
+    summary: DiagnosticsSummary = Field(
+        default_factory=lambda: DiagnosticsSummary(),
+        description="Compact KPIs for quick UI consumption.",
+    )
+    # Keep 'details' flexible in MVP. Post-MVP we may replace with a strong type (see below).
+    details: Optional[dict[str, Any]] = Field(
+        default=None,
+        description="Optional rich breakdown (JSON). Absent in MVP or when not computed.",
+    )
+
+
+__all__ = [
+    "DiagnosticsSummary",
+    "DiagnosticsRead",
+]
 
 
 # -----------------------------------------------------------------------------
@@ -38,6 +93,8 @@ class DiagnosticsRead(BaseModel):
 # -----------------------------------------------------------------------------
 #
 # 1) Strongly-typed `details` instead of a free Dict:
+#
+# from pydantic import BaseModel, Field
 #
 # class RestRuleFlag(BaseModel):
 #     day: int  # 1..31

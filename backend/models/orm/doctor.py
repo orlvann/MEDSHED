@@ -1,4 +1,4 @@
-# backend/models/ORM/doctor.py
+# backend/models/orm/doctor.py
 from __future__ import annotations
 
 from datetime import datetime

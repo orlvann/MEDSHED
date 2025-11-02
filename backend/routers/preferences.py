@@ -1,30 +1,51 @@
 # backend/routers/preferences.py
-# Preferences (Admin & Doctor) + Availability (pre-flight) — MVP endpoints.
+# Preferences (Admin & Doctor) — unified router with RBAC, error shape, and clean Swagger.
 
-from datetime import datetime, timezone
+from __future__ import annotations
 
-from fastapi import APIRouter, Body, Path, Query, status
+from fastapi import APIRouter, Body, Depends, HTTPException, Path, Query, status
 
 from backend.models.schemas import (
-    AvailabilityDayRead,
-    # Availability (co-located with preferences)
-    AvailabilityOverviewRead,
     PreferenceAutosaveAck,
     PreferenceCheckpointCreated,
     PreferenceRevertRead,
     PreferencesDeadlinePut,
     PreferencesDeadlineRead,
     PreferencesSummaryRead,
-    # Preferences (admin + doctor)
     PreferenceWorkingPut,
     PreferenceWorkingRead,
 )
+from backend.models.schemas.dto_common import MonthInt, YearInt, make_error
+from backend.routers.deps import UserCtx, require_admin, require_doctor
+from backend.services.preference_service import (
+    create_checkpoint,
+    get_deadline,
+    get_working,
+    read_summary,
+    revert_last,
+    revert_next,
+    save_working_autosave,
+    upsert_deadline,
+)
+from backend.utils.timez import is_period_closed
 
-router = APIRouter(tags=["preferences"])
+router: APIRouter = APIRouter()
 
 
-def _now_utc() -> datetime:
-    return datetime.now(timezone.utc)
+def _guard_period_closed(year: int, month: int) -> None:
+    """
+    Central guard: blocks write operations for past periods (org TZ).
+    Contract choice: we return 409 'period_closed' (consistent with schedules/preferences).
+    """
+    if is_period_closed(year, month):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=make_error(
+                "period_closed",
+                detail="preferences for this past period are closed",
+                context={"year": year, "month": month},
+            ),
+        )
 
 
 # ------------------------------------------------------------------------------
@@ -33,20 +54,16 @@ def _now_utc() -> datetime:
 @router.get(
     "/api/v1/preferences/summary",
     response_model=PreferencesSummaryRead,
-    summary="Summary: who submitted vs who is missing",
+    tags=["preferences:admin"],
+    summary="Who submitted vs. who is missing",
+    operation_id="preferences_admin_summary_get",
 )
 def preferences_summary(
-    year: int = Query(..., ge=1900, le=2100),
-    month: int = Query(..., ge=1, le=12),
+    user: UserCtx = Depends(require_admin),
+    year: YearInt = Query(...),
+    month: MonthInt = Query(...),
 ):
-    # Stub: replace with service aggregation
-    return {
-        "year": year,
-        "month": month,
-        "submitted": [42, 7, 9],
-        "missing": [11, 13, 21],
-        "last_update_at": _now_utc(),
-    }
+    return read_summary(year=year, month=month, actor=user)
 
 
 # ------------------------------------------------------------------------------
@@ -55,196 +72,89 @@ def preferences_summary(
 @router.get(
     "/api/v1/preferences/{year}/{month}/{doctor_id}",
     response_model=PreferenceWorkingRead,
-    summary="Read current form (working + pointer hints) — ADMIN",
+    tags=["preferences:admin"],
+    summary="Read current form (working + hints)",
+    operation_id="preferences_admin_working_get",
 )
 def admin_read_working(
-    year: int = Path(..., ge=1900, le=2100),
-    month: int = Path(..., ge=1, le=12),
+    user: UserCtx = Depends(require_admin),
+    year: YearInt = Path(...),
+    month: MonthInt = Path(...),
     doctor_id: int = Path(..., ge=1),
 ):
-    # Stub: replace with service fetch (working + pointer hints)
-    return {
-        "doctor_id": doctor_id,
-        "year": year,
-        "month": month,
-        "unavailable_duty_days": [],
-        "unavailable_oncall_days": [],
-        "preferred_duty_days": [],
-        "preferred_oncall_days": [],
-        "min_duties_weekdays": 0,
-        "max_duties_weekdays": 999,
-        "min_duties_weekends": 0,
-        "max_duties_weekends": 999,
-        "min_oncall_weekdays": 0,
-        "max_oncall_weekdays": 999,
-        "min_oncall_weekends": 0,
-        "max_oncall_weekends": 999,
-        "weekend_back_to_back_allowed": True,
-        "preferred_partners": [],
-        "comments": "",
-        "status": "missing",
-        "version_id": None,
-        "submitted_at": None,
-        "submitted_by_role": None,
-        "submitted_by_user_id": None,
-        "last_admin_note": None,
-        "can_undo": False,
-        "can_redo": False,
-        "org_timezone": "Europe/Warsaw",
-        "period_status": "current",
-    }
+    return get_working(year=year, month=month, doctor_id=doctor_id, actor=user)
 
 
 @router.put(
     "/api/v1/preferences/{year}/{month}/{doctor_id}/working",
     response_model=PreferenceAutosaveAck,
-    summary="Autosave working (no checkpoint) — ADMIN",
+    tags=["preferences:admin"],
+    summary="Autosave working (no checkpoint)",
+    operation_id="preferences_admin_working_put",
 )
 def admin_put_working(
-    year: int = Path(..., ge=1900, le=2100),
-    month: int = Path(..., ge=1, le=12),
+    user: UserCtx = Depends(require_admin),
+    year: YearInt = Path(...),
+    month: MonthInt = Path(...),
     doctor_id: int = Path(..., ge=1),
     payload: PreferenceWorkingPut = Body(...),
 ):
-    # Stub: replace with service update of preferences_working
-    now = _now_utc()
-    return {
-        "doctor_id": doctor_id,
-        "year": year,
-        "month": month,
-        "updated_at": now,
-        "status": "missing",
-        "version_id": None,
-        "can_undo": False,
-        "can_redo": False,
-        "processed_at": now,
-    }
+    _guard_period_closed(year, month)
+    return save_working_autosave(year=year, month=month, doctor_id=doctor_id, payload=payload, actor=user)
 
 
 @router.post(
     "/api/v1/preferences/{year}/{month}/{doctor_id}/checkpoint",
     response_model=PreferenceCheckpointCreated,
     status_code=status.HTTP_201_CREATED,
-    summary="Save (create checkpoint) — ADMIN",
+    tags=["preferences:admin"],
+    summary="Save (create checkpoint)",
+    operation_id="preferences_admin_checkpoint_post",
 )
 def admin_create_checkpoint(
-    year: int = Path(..., ge=1900, le=2100),
-    month: int = Path(..., ge=1, le=12),
+    user: UserCtx = Depends(require_admin),
+    year: YearInt = Path(...),
+    month: MonthInt = Path(...),
     doctor_id: int = Path(..., ge=1),
     body: dict = Body(default_factory=dict),
 ):
-    # Stub: replace with service save (working -> versions checkpoint + pointer move)
-    now = _now_utc()
-    return {
-        "doctor_id": doctor_id,
-        "year": year,
-        "month": month,
-        "unavailable_duty_days": [7, 14],
-        "unavailable_oncall_days": [8],
-        "preferred_duty_days": [10, 11],
-        "preferred_oncall_days": [12],
-        "min_duties_weekdays": 2,
-        "max_duties_weekdays": 6,
-        "min_duties_weekends": 1,
-        "max_duties_weekends": 2,
-        "min_oncall_weekdays": 2,
-        "max_oncall_weekdays": 4,
-        "min_oncall_weekends": 0,
-        "max_oncall_weekends": 2,
-        "weekend_back_to_back_allowed": False,
-        "preferred_partners": [7],
-        "comments": "avoid Mondays",
-        "status": "submitted",
-        "version_id": "prefv_2026_02_doctor11_0001",
-        "submitted_at": now,
-        "submitted_by_user_id": 101,
-        "submitted_by_role": "admin",
-        "can_undo": True,
-        "can_redo": False,
-        "processed_at": now,
-    }
+    _guard_period_closed(year, month)
+    # body reserved for future flags
+    return create_checkpoint(year=year, month=month, doctor_id=doctor_id, actor=user)
 
 
 @router.post(
     "/api/v1/preferences/{year}/{month}/{doctor_id}/revert-last",
     response_model=PreferenceRevertRead,
-    summary="UNDO one checkpoint — ADMIN",
+    tags=["preferences:admin"],
+    summary="UNDO one checkpoint",
+    operation_id="preferences_admin_revert_last_post",
 )
 def admin_revert_last(
-    year: int = Path(..., ge=1900, le=2100),
-    month: int = Path(..., ge=1, le=12),
+    user: UserCtx = Depends(require_admin),
+    year: YearInt = Path(...),
+    month: MonthInt = Path(...),
     doctor_id: int = Path(..., ge=1),
 ):
-    # Stub: replace with service pointer move to previous + working overwrite
-    now = _now_utc()
-    return {
-        "doctor_id": doctor_id,
-        "year": year,
-        "month": month,
-        "unavailable_duty_days": [7, 14],
-        "unavailable_oncall_days": [8],
-        "preferred_duty_days": [10, 11],
-        "preferred_oncall_days": [12],
-        "min_duties_weekdays": 2,
-        "max_duties_weekdays": 6,
-        "min_duties_weekends": 1,
-        "max_duties_weekends": 2,
-        "min_oncall_weekdays": 2,
-        "max_oncall_weekdays": 4,
-        "min_oncall_weekends": 0,
-        "max_oncall_weekends": 2,
-        "weekend_back_to_back_allowed": False,
-        "preferred_partners": [7],
-        "comments": "avoid Mondays",
-        "reverted_at": now,
-        "version_id": "prefv_2026_02_doctor11_0000",
-        "current_created_by_role": "admin",
-        "current_created_by_user_id": 101,
-        "current_created_at": now,
-        "can_undo": True,
-        "can_redo": True,
-    }
+    _guard_period_closed(year, month)
+    return revert_last(year=year, month=month, doctor_id=doctor_id, actor=user)
 
 
 @router.post(
     "/api/v1/preferences/{year}/{month}/{doctor_id}/revert-next",
     response_model=PreferenceRevertRead,
-    summary="REDO one checkpoint — ADMIN",
+    tags=["preferences:admin"],
+    summary="REDO one checkpoint",
+    operation_id="preferences_admin_revert_next_post",
 )
 def admin_revert_next(
-    year: int = Path(..., ge=1900, le=2100),
-    month: int = Path(..., ge=1, le=12),
+    user: UserCtx = Depends(require_admin),
+    year: YearInt = Path(...),
+    month: MonthInt = Path(...),
     doctor_id: int = Path(..., ge=1),
 ):
-    # Stub: replace with service pointer move to next + working overwrite
-    now = _now_utc()
-    return {
-        "doctor_id": doctor_id,
-        "year": year,
-        "month": month,
-        "unavailable_duty_days": [7, 14],
-        "unavailable_oncall_days": [8],
-        "preferred_duty_days": [10, 11],
-        "preferred_oncall_days": [12],
-        "min_duties_weekdays": 2,
-        "max_duties_weekdays": 6,
-        "min_duties_weekends": 1,
-        "max_duties_weekends": 2,
-        "min_oncall_weekdays": 2,
-        "max_oncall_weekdays": 4,
-        "min_oncall_weekends": 0,
-        "max_oncall_weekends": 2,
-        "weekend_back_to_back_allowed": False,
-        "preferred_partners": [7],
-        "comments": "avoid Mondays",
-        "reverted_at": now,
-        "version_id": "prefv_2026_02_doctor11_0001",
-        "current_created_by_role": "admin",
-        "current_created_by_user_id": 101,
-        "current_created_at": now,
-        "can_undo": True,
-        "can_redo": False,
-    }
+    _guard_period_closed(year, month)
+    return revert_next(year=year, month=month, doctor_id=doctor_id, actor=user)
 
 
 # ------------------------------------------------------------------------------
@@ -253,40 +163,32 @@ def admin_revert_next(
 @router.get(
     "/api/v1/preferences/deadlines/{year}/{month}",
     response_model=PreferencesDeadlineRead,
+    tags=["preferences:admin"],
     summary="Read deadline for a period",
+    operation_id="preferences_admin_deadline_get",
 )
-def get_deadline(
-    year: int = Path(..., ge=1900, le=2100),
-    month: int = Path(..., ge=1, le=12),
+def deadline_get(
+    user: UserCtx = Depends(require_admin),
+    year: YearInt = Path(...),
+    month: MonthInt = Path(...),
 ):
-    # Stub: replace with service read
-    return {
-        "year": year,
-        "month": month,
-        "deadline": _now_utc(),
-        "status": "open",
-        "org_timezone": "Europe/Warsaw",
-    }
+    return get_deadline(year=year, month=month, actor=user)
 
 
 @router.put(
     "/api/v1/preferences/deadlines/{year}/{month}",
     response_model=PreferencesDeadlinePut,
-    summary="Create/Update deadline (PUT-as-upsert)",
+    tags=["preferences:admin"],
+    summary="Create/Update deadline (upsert)",
+    operation_id="preferences_admin_deadline_put",
 )
-def put_deadline(
-    year: int = Path(..., ge=1900, le=2100),
-    month: int = Path(..., ge=1, le=12),
-    body: dict = Body(..., description='{"deadline": "2026-01-22T23:59:59Z"}'),
+def deadline_put(
+    user: UserCtx = Depends(require_admin),
+    year: YearInt = Path(...),
+    month: MonthInt = Path(...),
+    body: dict = Body(..., description='{"deadline": "2026-01-22T23:59:59Z"} (org tz aware in BE)'),
 ):
-    # Stub: replace with service upsert
-    return {
-        "year": year,
-        "month": month,
-        "deadline": _now_utc(),
-        "status": "open",
-        "org_timezone": "Europe/Warsaw",
-    }
+    return upsert_deadline(year=year, month=month, body=body, actor=user)
 
 
 # ------------------------------------------------------------------------------
@@ -295,108 +197,85 @@ def put_deadline(
 @router.get(
     "/api/v1/preferences/{year}/{month}/me",
     response_model=PreferenceWorkingRead,
-    summary="Read my preferences (working + hints) — DOCTOR",
+    tags=["preferences:doctor"],
+    summary="Read my preferences (working + hints)",
+    operation_id="preferences_doctor_me_working_get",
 )
 def me_read_working(
-    year: int = Path(..., ge=1900, le=2100),
-    month: int = Path(..., ge=1, le=12),
+    user: UserCtx = Depends(require_doctor),
+    year: YearInt = Path(...),
+    month: MonthInt = Path(...),
 ):
-    # Stub: service infers doctor_id from token
-    return admin_read_working(year=year, month=month, doctor_id=11)
+    doctor_id = user.user_id
+    return get_working(year=year, month=month, doctor_id=doctor_id, actor=user)
 
 
 @router.put(
     "/api/v1/preferences/{year}/{month}/me/working",
     response_model=PreferenceAutosaveAck,
-    summary="Autosave my working — DOCTOR",
+    tags=["preferences:doctor"],
+    summary="Autosave my working (no checkpoint)",
+    operation_id="preferences_doctor_me_working_put",
 )
 def me_put_working(
-    year: int = Path(..., ge=1900, le=2100),
-    month: int = Path(..., ge=1, le=12),
+    user: UserCtx = Depends(require_doctor),
+    year: YearInt = Path(...),
+    month: MonthInt = Path(...),
     payload: PreferenceWorkingPut = Body(...),
 ):
-    # Stub: service infers doctor_id from token
-    return admin_put_working(year=year, month=month, doctor_id=11, payload=payload)
+    _guard_period_closed(year, month)
+    doctor_id = user.user_id
+    return save_working_autosave(year=year, month=month, doctor_id=doctor_id, payload=payload, actor=user)
 
 
 @router.post(
     "/api/v1/preferences/{year}/{month}/me/checkpoint",
     response_model=PreferenceCheckpointCreated,
     status_code=status.HTTP_201_CREATED,
-    summary="Save (create checkpoint) — DOCTOR",
+    tags=["preferences:doctor"],
+    summary="Save (create checkpoint)",
+    operation_id="preferences_doctor_me_checkpoint_post",
 )
 def me_create_checkpoint(
-    year: int = Path(..., ge=1900, le=2100),
-    month: int = Path(..., ge=1, le=12),
+    user: UserCtx = Depends(require_doctor),
+    year: YearInt = Path(...),
+    month: MonthInt = Path(...),
     body: dict = Body(default_factory=dict),
 ):
-    # Stub: service infers doctor_id from token
-    resp = admin_create_checkpoint(year=year, month=month, doctor_id=11, body=body)
-    resp["submitted_by_role"] = "doctor"
-    resp["submitted_by_user_id"] = 11
-    return resp
+    _guard_period_closed(year, month)
+    doctor_id = user.user_id
+    return create_checkpoint(year=year, month=month, doctor_id=doctor_id, actor=user)
 
 
 @router.post(
     "/api/v1/preferences/{year}/{month}/me/revert-last",
     response_model=PreferenceRevertRead,
-    summary="UNDO one checkpoint — DOCTOR",
+    tags=["preferences:doctor"],
+    summary="UNDO one checkpoint",
+    operation_id="preferences_doctor_me_revert_last_post",
 )
 def me_revert_last(
-    year: int = Path(..., ge=1900, le=2100),
-    month: int = Path(..., ge=1, le=12),
+    user: UserCtx = Depends(require_doctor),
+    year: YearInt = Path(...),
+    month: MonthInt = Path(...),
 ):
-    return admin_revert_last(year=year, month=month, doctor_id=11)
+    _guard_period_closed(year, month)
+    doctor_id = user.user_id
+    return revert_last(year=year, month=month, doctor_id=doctor_id, actor=user)
 
 
 @router.post(
     "/api/v1/preferences/{year}/{month}/me/revert-next",
     response_model=PreferenceRevertRead,
-    summary="REDO one checkpoint — DOCTOR",
+    tags=["preferences:doctor"],
+    summary="REDO one checkpoint",
+    operation_id="preferences_doctor_me_revert_next_post",
 )
 def me_revert_next(
-    year: int = Path(..., ge=1900, le=2100),
-    month: int = Path(..., ge=1, le=12),
+    user: UserCtx = Depends(require_doctor),
+    year: YearInt = Path(...),
+    month: MonthInt = Path(...),
 ):
-    return admin_revert_next(year=year, month=month, doctor_id=11)
-
-
-# ------------------------------------------------------------------------------
-# 3.3 Availability (pre-flight) — colocated here
-# ------------------------------------------------------------------------------
-@router.get(
-    "/api/v1/availability/overview",
-    response_model=AvailabilityOverviewRead,
-    summary="Monthly availability overview",
-)
-def availability_overview(
-    year: int = Query(..., ge=1900, le=2100),
-    month: int = Query(..., ge=1, le=12),
-):
-    # Stub: replace with service aggregation
-    return {
-        "days": [
-            {"day": 1, "available_specialists": 5, "available_residents": 6, "risk": "ok"},
-            {"day": 10, "available_specialists": 1, "available_residents": 1, "risk": "alert"},
-            {"day": 12, "available_specialists": 0, "available_residents": 2, "risk": "critical"},
-        ]
-    }
-
-
-@router.get(
-    "/api/v1/availability/{year}/{month}/{day}",
-    response_model=AvailabilityDayRead,
-    summary="Day drill-down of availability",
-)
-def availability_day(
-    year: int = Path(..., ge=1900, le=2100),
-    month: int = Path(..., ge=1, le=12),
-    day: int = Path(..., ge=1, le=31),
-):
-    # Stub: replace with service drill-down
-    return {
-        "day": day,
-        "specialists": [],
-        "residents": [{"id": 3, "first_name": "Ola", "last_name": "Nowicka"}],
-        "risk": "critical",
-    }
+    _guard_period_closed(year, month)
+    doctor_id = user.user_id
+    return revert_next(year=year, month=month, doctor_id=doctor_id, actor=user)
