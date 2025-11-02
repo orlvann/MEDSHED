@@ -1,4 +1,5 @@
 # ruff: noqa: E402
+# backend/alembic/env.py
 
 import os
 import sys
@@ -20,6 +21,7 @@ from backend.db.session import Base  # <- our Base
 from backend.models.orm import (
     doctor,  # noqa: F401
     preference,  # noqa: F401
+    schedule,  # noqa: F401
     user,  # noqa: F401
 )
 
