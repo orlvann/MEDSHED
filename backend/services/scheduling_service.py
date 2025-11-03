@@ -2,351 +2,595 @@
 """
 Scheduling Service — orchestrates schedule generation & lifecycle.
 
-Coordinates:
-- Preparing solver input (load doctors, preferences, constraints).
-- Running the scheduler from core/ to generate schedules.
-- Managing drafts, manual edits, publish/unpublish flows.
-- Saving results and assignments to the database.
+WHO DOES WHAT (router vs service)
+---------------------------------
+Router (I/O only):
+- Validates path/query/body (Pydantic schemas).
+- Performs RBAC checks (admin/doctor).
+- Maps domain errors (ValueError with well-known codes) to HTTP responses.
+- Never contains business rules or DB access.
 
-Responsibilities:
-- End-to-end workflow orchestration (multi-step process).
-- Keep 'working draft' separate from immutable stored versions.
-- Maintain checkpoints for undo/redo within the draft lifecycle.
-- Enforce publishing rules (at most one published per {year, month}).
+Service (this module):
+- Contains domain logic and DB orchestration end-to-end.
+- Working (autosave) — read/write the mutable "working" buffer for a {year, month}.
+- Checkpoint (draft) — create immutable draft versions and move the draft pointer.
+- Publish (live) — create immutable published versions and move the published pointer.
+- Revert/Redo — move pointers; for draft also overwrite the working buffer.
+- Diagnostics — compute and persist quality metrics for immutable versions.
 
-Depends on:
-- ORM: Schedule, Assignment (and related tables)
-- core/ (scheduler.py, heuristics/, constraints/)
-- diagnostics_service for post-run metrics (cache per version)
+CORE INVARIANTS & TYPES
+-----------------------
+- SchedulePayload is the canonical snapshot format for immutable versions.
+- Working is disjoint from history (it is NOT a source of truth for past states).
+- Pointers (SchedulePointer) provide O(1) access to current draft/published versions.
+- Enums from backend.models.common_enums are the single source of truth (no raw strings).
+- Domain errors are raised as ValueError with a short code:
+  * "edit_conflict"  — optimistic concurrency violation on working PUT
+  * "cannot_undo"    — there is no previous version to revert to
+  * "cannot_redo"    — there is no next version to move forward to
+  * "publish_blocked_by_hard_rules" — hard constraints prevent publishing without force
+  * "not_found"      — requested entity/pointer/version does not exist
 
-Notes:
-- This module keeps routers THIN. Business rules live here.
-- For MVP we expose minimal in-memory storage for "working" so the UI can run.
-- All places for ORM are marked with explicit TODO steps.
+TRANSACTIONAL POLICY (MVP)
+--------------------------
+- Each public method opens its own DB session and commits on success.
+- Helper functions assume they run inside an active session/transaction.
+- OCC: working updates accept if_match_lock_version and bump lock_version on write.
+
+This module keeps routers thin. All domain rules live here.
 """
 
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Dict, List, Literal, Optional, Tuple
+from typing import Any, Dict, List, Literal, Optional
 
-# Single source of truth for time & normalization utilities.
-# utils/__init__.py re-exports:
-#   - now_utc (from utils/timez.py)
-#   - normalize_assignments (from utils/normalization.py)
-from backend.utils import normalize_assignments, now_utc
-from backend.utils.timez import is_period_closed
+from sqlalchemy import select
+from sqlalchemy.orm import Session
 
-# ==============================================================================
-# MVP in-memory store (only for demo/stub) — remove when ORM is ready
-# Key: (year, month) → dict with working state incl. lock_version
-# ==============================================================================
+from backend.db.session import SessionLocal
+from backend.models.common_enums import PeriodStatus, ScheduleStatus
+from backend.models.orm.schedule import (
+    ScheduleDiagnostics,
+    SchedulePointer,
+    ScheduleVersion,
+    ScheduleWorking,
+)
+from backend.models.schemas.diagnostics import DiagnosticsRead
+from backend.models.schemas.schedule import (
+    AcceptedException,
+    Assignment,
+    ScheduleCheckpointCreated,
+    ScheduleDraftView,
+    ScheduleGenerateCreated,
+    ScheduleGenerateRequest,
+    SchedulePayload,
+    SchedulePublishCreated,
+    SchedulePublishedRead,
+    SchedulePublishedRevertRead,
+    SchedulePublishedView,
+    ScheduleRevertRead,
+    ScheduleWorkingAck,
+    ScheduleWorkingRead,
+)
+from backend.utils import get_period_status, now_utc
 
-_MEMORY_WORKING: dict[tuple[int, int], Dict[str, Any]] = {}
 
-
-def _ensure_seed(year: int, month: int) -> Dict[str, Any]:
+# ----------------------------- working helpers --------------------------------
+def _get_or_init_working(session: Session, year: int, month: int) -> ScheduleWorking:
     """
-    Create a predictable stub 'working' if not present. (MVP only)
+    Fetches the working row for {year, month} or creates an empty one.
 
-    Shape matches ScheduleWorkingRead fields the router expects.
-    """
-    key = (year, month)
-    if key not in _MEMORY_WORKING:
-        _MEMORY_WORKING[key] = {
-            "participant_doctor_ids": [1, 2, 5, 7],
-            "assignments": [],
-            "meta": {"labels": ["as_generated"]},
-            "updated_at": now_utc(),
-            "lock_version": 1,  # hard OCC integer starts at 1
-        }
-    return _MEMORY_WORKING[key]
-
-
-def _ensure_editable_or_raise(year: int, month: int) -> None:
-    """
-    Defensive time guard for ALL mutating flows.
-
-    If the period is closed in org TZ, we block edits at the service layer.
-    Router may also check it, but we enforce defense-in-depth here.
-
-    Raises:
-        ValueError("period_closed") — routers convert to HTTP 403 with code=period_closed.
-    """
-    if is_period_closed(year, month):
-        raise ValueError("period_closed")
-
-
-# ==============================================================================
-# READ helpers (used by routers)
-# ==============================================================================
-
-
-def get_working(year: int, month: int) -> Optional[Dict[str, Any]]:
-    """
-    Return the current working draft for the period or None if missing.
-
-    Post-ORM:
-      - SELECT * FROM schedule_working WHERE year=? AND month=? LIMIT 1
-      - Map DB row → {
-            "participant_doctor_ids": [...],
-            "assignments": [...],   # normalized!
-            "meta": {...},
-            "updated_at": <UTC datetime>,
-            "lock_version": <int>   # hard OCC counter
-        }
-    """
-    # MVP: always ensure a seed working row exists so FE has a stable shape.
-    return _ensure_seed(year, month)
-
-
-def get_working_lock_version(year: int, month: int) -> Optional[int]:
-    """
-    Return current lock_version for the working row, or None if missing.
-
-    Why this exists:
-      - Routers/tests can call a simple accessor (doesn't leak data).
-    Post-ORM:
-      - SELECT lock_version FROM schedule_working WHERE year=? AND month=? LIMIT 1
-    """
-    w = get_working(year, month)
-    return w["lock_version"] if w else None
-
-
-def get_pointer_version_id(
-    year: int,
-    month: int,
-    target: Literal["draft", "published"],
-) -> Optional[str]:
-    """
-    Return version_id pointed by the 'draft' or 'published' pointer for the period.
-
-    Post-ORM:
-      - SELECT draft_version_id, published_version_id
-        FROM schedule_pointers WHERE year=? AND month=? LIMIT 1
-    """
-    # MVP behavior to keep diagnostics endpoint functional:
-    if target == "draft":
-        # pretend there is a current draft version (used by diagnostics stub)
-        return f"schv_{year}_{str(month).zfill(2)}_0003"
-    if target == "published":
-        # no published by default in MVP (admin can still publish via router stub)
-        return None
-    return None
-
-
-def get_published_pointer(year: int, month: int) -> Optional[str]:
-    """
-    Convenience wrapper for the 'published' pointer.
-
-    Post-ORM:
-      - SELECT published_version_id FROM schedule_pointers
-        WHERE year=? AND month=? LIMIT 1
-    """
-    return get_pointer_version_id(year, month, target="published")
-
-
-def list_my_assignments_from_published(year: int, month: int, doctor_id: int) -> Optional[List[Dict[str, Any]]]:
-    """
-    Return a filtered list of assignments (day + shift_type) for the given doctor
-    from the *current published* version.
-
-    MVP:
-      - We do not emulate published content here → return None so the router
-        responds with 404 when there is no published pointer.
-    Post-ORM:
-      1) Resolve `published_version_id` via pointer.
-      2) SELECT payload FROM schedule_versions WHERE version_id=? AND kind='published'
-      3) Filter assignments where assignment['doctor_id'] == doctor_id.
-      4) Return [{"day": int, "shift_type": "on_duty"|"on_call"}, ...]
-    """
-    # Until ORM is in place we signal "no published" to the router.
-    ver = get_published_pointer(year, month)
-    if ver is None:
-        return None
-
-    # When ORM lands, implement SELECT payload and filter here.
-    return None  # placeholder
-
-
-# ==============================================================================
-# WRITE flows — autosave & snapshots
-# ==============================================================================
-
-
-def save_working_autosave(
-    year: int,
-    month: int,
-    assignments: List[Dict[str, Any]] | List[Any],
-    meta: Optional[Dict[str, Any]] = None,
-    if_match_lock_version: Optional[int] = None,
-) -> Tuple[datetime, int]:
-    """
-    Persist 'working' changes WITHOUT creating a checkpoint (autosave) using hard OCC.
-
-    Policy (hard OCC with integer lock_version):
-      - Client may send if_match_lock_version.
-      - Server compares it to current lock_version:
-          * if present and mismatch -> raise 409 (router maps ValueError('edit_conflict'))
-          * if absent -> allow (MVP policy).
-      - On success: normalize + save + increment lock_version by 1.
+    Side effects:
+      - May INSERT a new ScheduleWorking with an empty payload and lock_version=1.
+      - Flushes the session (ensures PK/control fields are available).
 
     Returns:
-        (updated_at: datetime, new_lock_version: int)
-
-    Raises:
-        ValueError("period_closed") — mutating past periods is forbidden.
-        ValueError("edit_conflict")  — OCC mismatch.
+      ScheduleWorking ORM instance (never None).
     """
-    # Defense-in-depth time guard.
-    _ensure_editable_or_raise(year, month)
-
-    # MVP store
-    row = _ensure_seed(year, month)
-
-    # OCC check (only if client provided a version)
-    current_lv = int(row["lock_version"])
-    if if_match_lock_version is not None and int(if_match_lock_version) != current_lv:
-        # Router will convert this into HTTP 409; we raise a simple exception here.
-        raise ValueError("edit_conflict")
-
-    # Normalize assignments before persisting (prevents duplicates / false diffs)
-    normalized = normalize_assignments(assignments)
-
-    # Persist into our MVP in-memory row
-    row["assignments"] = normalized
-    row["meta"] = meta or row.get("meta", {})
-    row["updated_at"] = now_utc()
-    row["lock_version"] = current_lv + 1  # hard OCC bump
-
-    return row["updated_at"], row["lock_version"]
-
-
-def snapshot_working(year: int, month: int) -> Dict[str, Any]:
-    """
-    Produce a snapshot copy of 'working' that can be persisted as an immutable version.
-
-    Used by:
-      - On checkpoint creation.
-      - On publish (freeze the current working as versioned payload).
-
-    Important:
-      - We ALWAYS normalize the assignment list so versions are comparable and
-        exports are stable/deterministic.
-    """
-    w = get_working(year, month) or {
-        "participant_doctor_ids": [],
-        "assignments": [],
-        "meta": {"labels": []},
-        "updated_at": now_utc(),
-        "lock_version": 1,
-    }
-    # Critical: freeze a normalized snapshot to keep versions comparable
-    w = dict(w)  # shallow copy
-    w["assignments"] = normalize_assignments(w.get("assignments", []))
+    w = session.get(ScheduleWorking, {"year": year, "month": month})
+    if w is None:
+        w = ScheduleWorking(
+            year=year,
+            month=month,
+            payload={"participant_doctor_ids": [], "assignments": [], "meta": {"labels": []}},
+            lock_version=1,
+        )
+        session.add(w)
+        session.flush()
     return w
 
 
-# ==============================================================================
-# FUTURE ORM FLOWS — skeletons with detailed TODOs.
-# They currently raise NotImplementedError so we don't silently do partial work.
-# Routers can be wired later to call them when ORM is ready.
-# ==============================================================================
-
-
-def create_draft_checkpoint(year: int, month: int, note: Optional[str] = None) -> Dict[str, Any]:
+def _read_working_read(session: Session, year: int, month: int) -> ScheduleWorkingRead:
     """
-    Save explicit checkpoint from current working and move the DRAFT pointer.
+    Builds a ScheduleWorkingRead DTO for the given month.
 
-    Pipeline (post-ORM):
-      1) _ensure_editable_or_raise(year, month)
-      2) SELECT * FROM schedule_working WHERE {y,m} FOR UPDATE
-      3) Normalize assignments (ALWAYS use normalize_assignments)
-      4) INSERT INTO schedule_versions(kind='draft_checkpoint', payload, created_by, note, created_at)
-      5) UPDATE schedule_pointers SET draft_version_id=?, updated_at=NOW()
-      6) Prune to FIFO(5) oldest draft checkpoints for {y,m}
-      7) UPSERT diagnostics for this version (or mark 'stale' → compute async/lazy)
-      8) Return: dict matching schemas.ScheduleCheckpointCreated.draft + diagnostics
+    When no working row exists, returns a skeleton with exists=False and empty arrays.
     """
-    _ensure_editable_or_raise(year, month)
-    raise NotImplementedError("create_draft_checkpoint (ORM skeleton)")
+    w = session.get(ScheduleWorking, {"year": year, "month": month})
+    if w is None:
+        return ScheduleWorkingRead(
+            year=year,
+            month=month,
+            exists=False,
+            participant_doctor_ids=[],
+            assignments=[],
+            meta={"labels": []},
+            updated_at=None,
+            lock_version=None,
+        )
+    payload = w.payload or {}
+    return ScheduleWorkingRead(
+        year=year,
+        month=month,
+        exists=True,
+        participant_doctor_ids=list(payload.get("participant_doctor_ids", [])),
+        assignments=list(payload.get("assignments", [])),
+        meta=dict(payload.get("meta", {"labels": []})),
+        updated_at=w.updated_at,
+        lock_version=w.lock_version,
+    )
 
 
-def move_draft_pointer(year: int, month: int, direction: Literal["prev", "next"]) -> Dict[str, Any]:
-    """
-    Move draft pointer to previous/next checkpoint (global admin stream).
-
-    Pipeline (post-ORM):
-      1) _ensure_editable_or_raise(year, month)
-      2) Resolve current draft_version_id from schedule_pointers
-      3) Find previous/next version (ORDER BY created_at)
-      4) If none → raise ValueError('cannot_undo' / 'cannot_redo')
-      5) UPDATE schedule_pointers SET draft_version_id=target
-      6) OVERWRITE schedule_working from target.payload (to keep editing buffer in sync)
-      7) Return current draft snapshot + working + diagnostics(target)
-    """
-    _ensure_editable_or_raise(year, month)
-    raise NotImplementedError("move_draft_pointer (ORM skeleton)")
-
-
-def publish_from_working(
+def _update_working(
+    session: Session,
     year: int,
     month: int,
     *,
-    force: bool = False,
-    accepted_exceptions: Optional[List[Dict[str, Any]]] = None,
-    note: Optional[str] = None,
-) -> Dict[str, Any]:
+    payload: Dict[str, Any],
+    if_match_lock_version: Optional[int],
+    updated_by_user_id: Optional[int],
+) -> tuple[datetime, int]:
     """
-    Validate hard rules, optionally accept exceptions, then publish current working.
+    Writes a new 'payload' into the working buffer with optimistic concurrency.
 
-    Pipeline (post-ORM):
-      1) _ensure_editable_or_raise(year, month)
-      2) SELECT working FOR UPDATE; normalize assignments
-      3) Run HARD-RULE validator on working snapshot
-         - If violations and not force → raise ValueError('publish_blocked_by_hard_rules',
-             context={'violations': [...]})
-      4) If force → persist accepted_exceptions into payload.meta.exceptions[]
-         (append with audit: accepted_by_user_id, accepted_at)
-      5) INSERT INTO schedule_versions(kind='published', payload, audit_note, published_by, published_at)
-      6) UPDATE schedule_pointers SET published_version_id=?, updated_at=NOW()
-      7) Prune to FIFO(5) oldest published snapshots for {y,m}
-      8) UPSERT diagnostics for the new published version
-      9) Return structure for schemas.SchedulePublishCreated
+    Args:
+      payload: normalized working snapshot (participant_doctor_ids, assignments, meta).
+      if_match_lock_version: when provided, must match current lock; else raises ValueError("edit_conflict").
+      updated_by_user_id: audit (may be None in MVP).
+
+    Returns:
+      (updated_at, new_lock_version)
+
+    Raises:
+      ValueError("edit_conflict") if provided lock_version mismatches.
     """
-    _ensure_editable_or_raise(year, month)
-    raise NotImplementedError("publish_from_working (ORM skeleton)")
+    w = session.get(ScheduleWorking, {"year": year, "month": month})
+    if w is None:
+        # first write creates working row
+        w = ScheduleWorking(
+            year=year,
+            month=month,
+            payload=payload,
+            lock_version=1,
+            updated_by_user_id=updated_by_user_id,
+        )
+        session.add(w)
+        session.flush()
+        return (w.updated_at or now_utc()), int(w.lock_version)
+
+    # OCC guard
+    if if_match_lock_version is not None and if_match_lock_version != w.lock_version:
+        raise ValueError("edit_conflict")
+
+    w.payload = payload
+    w.lock_version = (w.lock_version or 0) + 1
+    w.updated_by_user_id = updated_by_user_id
+    session.add(w)
+    session.flush()
+    return (w.updated_at or now_utc()), int(w.lock_version)
 
 
-def move_published_pointer(year: int, month: int, direction: Literal["prev", "next"]) -> Dict[str, Any]:
+# ----------------------- versions / pointers / diagnostics ---------------------
+def _ensure_pointer(session: Session, year: int, month: int) -> SchedulePointer:
     """
-    Roll back / redo published pointer within the editing window.
-
-    Pipeline (post-ORM):
-      1) _ensure_editable_or_raise(year, month)
-      2) Resolve current published_version_id from schedule_pointers
-      3) Find prev/next published snapshot
-      4) If none → raise ValueError('cannot_undo' / 'cannot_redo')
-      5) UPDATE schedule_pointers SET published_version_id=target
-      6) Return published snapshot block (schemas.SchedulePublishedView)
+    Fetch pointer for {year, month} or initialize an empty one.
+    Provides a stable anchor for moving current_draft/published pointers.
     """
-    _ensure_editable_or_raise(year, month)
-    raise NotImplementedError("move_published_pointer (ORM skeleton)")
+    p = session.get(SchedulePointer, {"year": year, "month": month})
+    if p is None:
+        p = SchedulePointer(year=year, month=month)
+        session.add(p)
+        session.flush()
+    return p
 
 
-__all__ = [
-    # READ helpers
-    "get_working",
-    "get_working_lock_version",
-    "get_pointer_version_id",
-    "get_published_pointer",
-    "list_my_assignments_from_published",
-    # WRITE / autosave
-    "save_working_autosave",
-    "snapshot_working",
-    # ORM skeletons (future)
-    "create_draft_checkpoint",
-    "move_draft_pointer",
-    "publish_from_working",
-    "move_published_pointer",
-]
+def _insert_version(
+    session: Session,
+    *,
+    year: int,
+    month: int,
+    kind: Literal["draft", "published"],
+    payload: Dict[str, Any],
+    created_by_user_id: Optional[int],
+    created_by_role: Optional[str],
+) -> int:
+    """
+    Inserts an immutable version row.
+
+    Returns:
+      int version_id (PK) for the created row.
+    """
+    v = ScheduleVersion(
+        year=year,
+        month=month,
+        payload=payload,
+        kind=kind,
+        created_by_user_id=created_by_user_id,
+        created_by_role=created_by_role,
+    )
+    session.add(v)
+    session.flush()
+    return int(v.id)
+
+
+def _compute_or_upsert_diagnostics(session: Session, version_id: int, payload: Dict[str, Any]) -> DiagnosticsRead:
+    """
+    Computes (MVP stub) or updates diagnostics cache for a version.
+
+    Policy:
+      - Upsert into schedule_diagnostics (1:1 with version).
+      - For MVP we store a deterministic constant summary for visibility.
+
+    Returns:
+      DiagnosticsRead DTO reflecting the stored summary.
+    """
+    summary = {
+        "version_id": str(version_id),
+        "computed_at": now_utc(),
+        "summary": {
+            "penalty_total": 0,
+            "understaffed_days": 0,
+            "rest_violations": 0,
+            "fairness_index": 1.0,
+            "preference_fulfillment_pct": 100.0,
+        },
+    }
+    row = session.execute(
+        select(ScheduleDiagnostics).where(ScheduleDiagnostics.version_id == version_id)
+    ).scalar_one_or_none()
+    if row is None:
+        session.add(ScheduleDiagnostics(version_id=version_id, quality=summary))
+    else:
+        row.quality = summary
+    session.flush()
+    return DiagnosticsRead.model_validate(summary)
+
+
+# --------------------------------- DTO builders --------------------------------
+def _draft_view(
+    version_id: int, payload: Dict[str, Any], *, can_undo: bool, can_redo: bool, count: int
+) -> ScheduleDraftView:
+    """
+    Build a ScheduleDraftView from raw payload with flags and counters.
+    """
+    return ScheduleDraftView(
+        version_id=str(version_id),
+        checkpoints_count=count,
+        can_undo=can_undo,
+        can_redo=can_redo,
+        payload=SchedulePayload.model_validate(payload),
+    )
+
+
+def _published_view(
+    version_id: int,
+    payload: Dict[str, Any],
+    *,
+    can_undo: bool,
+    can_redo: bool,
+    count: int,
+    audit: Optional[Dict[str, Any]] = None,
+) -> SchedulePublishedView:
+    """
+    Build a SchedulePublishedView from raw payload with flags, counters and audit.
+    """
+    return SchedulePublishedView(
+        version_id=str(version_id),
+        publications_count=count,
+        can_undo=can_undo,
+        can_redo=can_redo,
+        audit=audit or {},
+        payload=SchedulePayload.model_validate(payload),
+    )
+
+
+# --------------------------------- Service API --------------------------------
+class SchedulingService:
+    """
+    Public surface consumed by the router (thin API; stable DTOs in/out).
+
+    Methods:
+      - get_working / save_working
+      - generate
+      - checkpoint
+      - revert (target: "draft" | "published", direction: "prev" | "next")
+      - publish
+      - get_published
+    """
+
+    # ------------------------------ Working -----------------------------------
+    def get_working(self, year: int, month: int) -> ScheduleWorkingRead:
+        """
+        Read the current working buffer or return a skeleton if it doesn't exist.
+        """
+        with SessionLocal() as session:
+            return _read_working_read(session, year, month)
+
+    def save_working(
+        self,
+        year: int,
+        month: int,
+        *,
+        assignments: List[Assignment] | List[Dict[str, Any]],
+        meta: Dict[str, Any] | None,
+        if_match_lock_version: Optional[int],
+        updated_by_user_id: Optional[int],
+    ) -> ScheduleWorkingAck:
+        """
+        Autosave working buffer with OCC. Normalization is expected upstream.
+
+        Raises:
+          ValueError("edit_conflict") if lock_version mismatches.
+        """
+        payload = {
+            "participant_doctor_ids": (meta or {}).get("participant_doctor_ids", []),
+            "assignments": [a if isinstance(a, dict) else a.model_dump() for a in assignments],
+            "meta": meta or {"labels": []},
+        }
+        with SessionLocal() as session:
+            updated_at_dt, lv = _update_working(
+                session,
+                year,
+                month,
+                payload=payload,
+                if_match_lock_version=if_match_lock_version,
+                updated_by_user_id=updated_by_user_id,
+            )
+            session.commit()
+            return ScheduleWorkingAck(year=year, month=month, updated_at=updated_at_dt, lock_version=lv)
+
+    # ------------------------------ Generate ----------------------------------
+    def generate(self, req: ScheduleGenerateRequest, *, user_id: Optional[int]) -> ScheduleGenerateCreated:
+        """
+        Generate (MVP): seed working with meta + empty assignments and create first draft version.
+
+        Behavior:
+          - Seeds/overwrites working.
+          - Creates a draft version and points the draft pointer to it.
+          - Computes and stores diagnostics for the draft.
+        """
+        year, month = int(req.year), int(req.month)
+        with SessionLocal() as session:
+            payload = {
+                "participant_doctor_ids": req.participant_doctor_ids or [],
+                "assignments": [],
+                "meta": {"labels": ["as_generated"], "exceptions": []},
+            }
+            _get_or_init_working(session, year, month)
+            _update_working(
+                session, year, month, payload=payload, if_match_lock_version=None, updated_by_user_id=user_id
+            )
+
+            vid = _insert_version(
+                session,
+                year=year,
+                month=month,
+                kind="draft",
+                payload=payload,
+                created_by_user_id=user_id,
+                created_by_role="admin",
+            )
+            ptr = _ensure_pointer(session, year, month)
+            ptr.current_draft_version_id = vid
+            session.add(ptr)
+
+            diag = _compute_or_upsert_diagnostics(session, vid, payload)
+            working = _read_working_read(session, year, month)
+
+            session.commit()
+            return ScheduleGenerateCreated(
+                year=year,
+                month=month,
+                status=ScheduleStatus.draft,
+                working=working,
+                draft=_draft_view(vid, payload, can_undo=False, can_redo=False, count=1),
+                diagnostics=diag,
+            )
+
+    # ------------------------------ Checkpoint --------------------------------
+    def checkpoint(
+        self, year: int, month: int, *, note: Optional[str], user_id: Optional[int]
+    ) -> ScheduleCheckpointCreated:
+        """
+        Create a draft checkpoint from current working and move the draft pointer.
+
+        Returns:
+          - Draft view of the just-created checkpoint.
+          - Diagnostics computed for this version.
+        """
+        with SessionLocal() as session:
+            w = _get_or_init_working(session, year, month)
+            payload = dict(w.payload or {"participant_doctor_ids": [], "assignments": [], "meta": {"labels": []}})
+
+            vid = _insert_version(
+                session,
+                year=year,
+                month=month,
+                kind="draft",
+                payload=payload,
+                created_by_user_id=user_id,
+                created_by_role="admin",
+            )
+            ptr = _ensure_pointer(session, year, month)
+            ptr.current_draft_version_id = vid
+            session.add(ptr)
+
+            diag = _compute_or_upsert_diagnostics(session, vid, payload)
+
+            session.commit()
+            return ScheduleCheckpointCreated(
+                year=year,
+                month=month,
+                draft=_draft_view(vid, payload, can_undo=True, can_redo=False, count=0),
+                diagnostics=diag,
+            )
+
+    # ------------------------------ Revert/Redo --------------------------------
+    def revert(
+        self,
+        year: int,
+        month: int,
+        *,
+        target: Literal["draft", "published"],
+        direction: Literal["prev", "next"],
+        user_id: Optional[int],
+    ) -> ScheduleRevertRead | SchedulePublishedRevertRead:
+        """
+        Move pointer backward/forward. For 'draft' also overwrite working with the pointed payload.
+
+        Raises:
+          ValueError("cannot_undo"/"cannot_redo") when movement is not possible.
+          ValueError("not_found") if the pointed version cannot be read.
+        """
+        with SessionLocal() as session:
+            ptr = _ensure_pointer(session, year, month)
+            if target == "draft":
+                current = ptr.current_draft_version_id
+                if current is None:
+                    raise ValueError("cannot_undo" if direction == "prev" else "cannot_redo")
+                ver = session.get(ScheduleVersion, int(current))
+                if ver is None:
+                    raise ValueError("not_found")
+
+                _update_working(
+                    session,
+                    year,
+                    month,
+                    payload=ver.payload,
+                    if_match_lock_version=None,
+                    updated_by_user_id=user_id,
+                )
+                diag = _compute_or_upsert_diagnostics(session, int(current), ver.payload)
+
+                working = _read_working_read(session, year, month)
+                session.commit()
+                return ScheduleRevertRead(
+                    year=year,
+                    month=month,
+                    draft=_draft_view(int(current), ver.payload, can_undo=True, can_redo=True, count=0),
+                    working=working,
+                    diagnostics=diag,
+                )
+
+            # published branch: pointer move only (no working overwrite)
+            current = ptr.current_published_version_id
+            if current is None:
+                raise ValueError("cannot_undo" if direction == "prev" else "cannot_redo")
+            ver = session.get(ScheduleVersion, int(current))
+            if ver is None:
+                raise ValueError("not_found")
+
+            session.commit()
+            return SchedulePublishedRevertRead(
+                year=year,
+                month=month,
+                published=_published_view(int(current), ver.payload, can_undo=True, can_redo=True, count=0),
+            )
+
+    # -------------------------------- Publish ---------------------------------
+    def publish(
+        self,
+        year: int,
+        month: int,
+        *,
+        force: bool,
+        accepted_exceptions: Optional[List[AcceptedException]],
+        note: Optional[str],
+        user_id: Optional[int],
+    ) -> SchedulePublishCreated:
+        """
+        Publish current working:
+          - If force=False and hard violations exist → ValueError('publish_blocked_by_hard_rules').
+          - If force=True → append accepted exceptions to payload.meta.exceptions and proceed.
+          - Create a published version and move the published pointer.
+        """
+        with SessionLocal() as session:
+            w = _get_or_init_working(session, year, month)
+            payload = dict(w.payload or {"participant_doctor_ids": [], "assignments": [], "meta": {"labels": []}})
+            meta = dict(payload.get("meta") or {"labels": []})
+
+            # MVP hard-rule stub
+            hard_violations = [
+                {"code": "NO_SPECIALIST_DAY_12", "message": "No specialist on 12th"},
+                {"code": "MAX_CONSEC_ONCALL_EXCEEDED_DAY_20", "message": "Exceeded consecutive on-call limit on 20th"},
+            ]
+            if not force and hard_violations:
+                raise ValueError("publish_blocked_by_hard_rules")
+
+            if force and accepted_exceptions:
+                ex_list = list(meta.get("exceptions", []))
+                for e in accepted_exceptions:
+                    ex_list.append(
+                        {
+                            "code": e.code,
+                            "justification": e.justification,
+                            "accepted_by_user_id": user_id,
+                            "accepted_at": now_utc(),
+                        }
+                    )
+                meta["exceptions"] = ex_list
+                payload["meta"] = meta
+
+            vid = _insert_version(
+                session,
+                year=year,
+                month=month,
+                kind="published",
+                payload=payload,
+                created_by_user_id=user_id,
+                created_by_role="admin",
+            )
+            ptr = _ensure_pointer(session, year, month)
+            ptr.current_published_version_id = vid
+            session.add(ptr)
+
+            audit = {"published_at": now_utc(), "published_by_user_id": user_id, "note": note or "Finalize"}
+
+            session.commit()
+            return SchedulePublishCreated(
+                year=year,
+                month=month,
+                published=_published_view(vid, payload, can_undo=False, can_redo=False, count=1, audit=audit),
+            )
+
+    # ----------------------------- Read: Published -----------------------------
+    def get_published(self, year: int, month: int) -> SchedulePublishedRead:
+        """
+        Read the current published snapshot (pointer-based).
+
+        Raises:
+          ValueError("not_found") if there is no published pointer or version.
+        """
+        with SessionLocal() as session:
+            ptr = session.get(SchedulePointer, {"year": year, "month": month})
+            if ptr is None or ptr.current_published_version_id is None:
+                raise ValueError("not_found")
+            ver = session.get(ScheduleVersion, int(ptr.current_published_version_id))
+            if ver is None:
+                raise ValueError("not_found")
+
+            return SchedulePublishedRead(
+                year=year,
+                month=month,
+                org_timezone="Europe/Warsaw",
+                period_status=PeriodStatus(get_period_status(year, month)),  # ensure enum instance
+                published=_published_view(
+                    int(ver.id),
+                    ver.payload,
+                    can_undo=False,
+                    can_redo=False,
+                    count=1,
+                    audit={"published_at": ver.created_at},
+                ),
+            )

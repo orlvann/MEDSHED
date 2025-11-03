@@ -1,4 +1,4 @@
-# schedule tables
+# backend/models/orm/schedule.py
 """
 Schedules ORM models.
 

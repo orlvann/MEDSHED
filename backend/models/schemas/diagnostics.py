@@ -56,6 +56,10 @@ class DiagnosticsSummary(BaseModel):
     )
 
 
+def _make_diag_summary() -> "DiagnosticsSummary":
+    return DiagnosticsSummary()
+
+
 class DiagnosticsRead(BaseModel):
     """
     Diagnostics payload bound to a concrete schedule version.
@@ -72,9 +76,10 @@ class DiagnosticsRead(BaseModel):
     )
     # NOTE: default_factory must be a zero-arg callable for Pydantic v2 & type checkers.
     summary: DiagnosticsSummary = Field(
-        default_factory=lambda: DiagnosticsSummary(),
+        default_factory=_make_diag_summary,
         description="Compact KPIs for quick UI consumption.",
     )
+
     # Keep 'details' flexible in MVP. Post-MVP we may replace with a strong type (see below).
     details: Optional[dict[str, Any]] = Field(
         default=None,
