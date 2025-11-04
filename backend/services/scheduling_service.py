@@ -45,7 +45,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Dict, List, Literal, Optional
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from backend.db.session import SessionLocal
@@ -224,37 +224,133 @@ def _insert_version(
     return int(v.id)
 
 
+def _drafts_total(session: Session, year: int, month: int) -> int:
+    """
+    Count how many draft versions exist for a given {year, month}.
+    """
+    return (
+        session.scalar(
+            select(func.count(ScheduleVersion.id)).where(
+                ScheduleVersion.year == year,
+                ScheduleVersion.month == month,
+                ScheduleVersion.kind == "draft",
+            )
+        )
+        or 0
+    )
+
+
+def _draft_neighbors(session: Session, year: int, month: int, current_id: int) -> tuple[bool, bool]:
+    """
+    For the current draft (current_id) within {year, month}, return (has_prev, has_next).
+    Ordering is by increasing version id; snapshots are immutable.
+    """
+    older = session.scalar(
+        select(func.max(ScheduleVersion.id)).where(
+            ScheduleVersion.year == year,
+            ScheduleVersion.month == month,
+            ScheduleVersion.kind == "draft",
+            ScheduleVersion.id < current_id,
+        )
+    )
+    newer = session.scalar(
+        select(func.min(ScheduleVersion.id)).where(
+            ScheduleVersion.year == year,
+            ScheduleVersion.month == month,
+            ScheduleVersion.kind == "draft",
+            ScheduleVersion.id > current_id,
+        )
+    )
+    return (older is not None, newer is not None)
+
+
+def _published_total(session: Session, year: int, month: int) -> int:
+    """
+    Count how many published versions exist for a given {year, month}.
+    """
+    return (
+        session.scalar(
+            select(func.count(ScheduleVersion.id)).where(
+                ScheduleVersion.year == year,
+                ScheduleVersion.month == month,
+                ScheduleVersion.kind == "published",
+            )
+        )
+        or 0
+    )
+
+
+def _published_neighbors(session: Session, year: int, month: int, current_id: int) -> tuple[bool, bool]:
+    """
+    Return (has_prev, has_next) for the current published version within {year, month}.
+    - has_prev: exists published with id < current_id
+    - has_next: exists published with id > current_id
+    """
+    # any older?
+    older = session.scalar(
+        select(func.max(ScheduleVersion.id)).where(
+            ScheduleVersion.year == year,
+            ScheduleVersion.month == month,
+            ScheduleVersion.kind == "published",
+            ScheduleVersion.id < current_id,
+        )
+    )
+    # any newer?
+    newer = session.scalar(
+        select(func.min(ScheduleVersion.id)).where(
+            ScheduleVersion.year == year,
+            ScheduleVersion.month == month,
+            ScheduleVersion.kind == "published",
+            ScheduleVersion.id > current_id,
+        )
+    )
+    return (older is not None, newer is not None)
+
+
 def _compute_or_upsert_diagnostics(session: Session, version_id: int, payload: Dict[str, Any]) -> DiagnosticsRead:
     """
-    Computes (MVP stub) or updates diagnostics cache for a version.
+    Compute (MVP stub) or upsert diagnostics cache for a given schedule version.
 
-    Policy:
-      - Upsert into schedule_diagnostics (1:1 with version).
-      - For MVP we store a deterministic constant summary for visibility.
-
-    Returns:
-      DiagnosticsRead DTO reflecting the stored summary.
+    Design:
+    - Store only plain analytics under JSON column `quality` (no datetimes inside JSON).
+    - Keep timestamps in the dedicated DB column `computed_at`.
+    - Ensure 1:1 relation per version_id (upsert behavior).
     """
-    summary = {
-        "version_id": str(version_id),
-        "computed_at": now_utc(),
+
+    # JSON payload must contain only JSON-serializable primitives.
+    quality_payload: Dict[str, Any] = {
         "summary": {
             "penalty_total": 0,
             "understaffed_days": 0,
             "rest_violations": 0,
             "fairness_index": 1.0,
             "preference_fulfillment_pct": 100.0,
-        },
+        }
+        # NOTE: DO NOT put `computed_at` or `version_id` here — keep them as columns/fields, not in JSON.
     }
+
+    # Try to fetch existing diagnostics row for this version
     row = session.execute(
         select(ScheduleDiagnostics).where(ScheduleDiagnostics.version_id == version_id)
     ).scalar_one_or_none()
+
     if row is None:
-        session.add(ScheduleDiagnostics(version_id=version_id, quality=summary))
+        # Insert new row; computed_at should be handled by DB default or ORM default
+        row = ScheduleDiagnostics(version_id=version_id, quality=quality_payload)
+        session.add(row)
     else:
-        row.quality = summary
+        # Update existing row's quality JSON
+        row.quality = quality_payload
+
+    # Flush to get DB-generated values (e.g., computed_at, id)
     session.flush()
-    return DiagnosticsRead.model_validate(summary)
+
+    # Build and return the DTO; Pydantic will serialize datetime to ISO8601 automatically
+    return DiagnosticsRead(
+        version_id=str(version_id),
+        computed_at=row.computed_at,
+        summary=quality_payload["summary"],
+    )
 
 
 # --------------------------------- DTO builders --------------------------------
@@ -388,13 +484,22 @@ class SchedulingService:
             diag = _compute_or_upsert_diagnostics(session, vid, payload)
             working = _read_working_read(session, year, month)
 
+            drafts_total = _drafts_total(session, year, month)
+            has_prev, has_next = _draft_neighbors(session, year, month, vid)
+
             session.commit()
             return ScheduleGenerateCreated(
                 year=year,
                 month=month,
                 status=ScheduleStatus.draft,
                 working=working,
-                draft=_draft_view(vid, payload, can_undo=False, can_redo=False, count=1),
+                draft=_draft_view(
+                    vid,
+                    payload,
+                    can_undo=has_prev,
+                    can_redo=has_next,
+                    count=drafts_total,
+                ),
                 diagnostics=diag,
             )
 
@@ -428,11 +533,20 @@ class SchedulingService:
 
             diag = _compute_or_upsert_diagnostics(session, vid, payload)
 
+            drafts_total = _drafts_total(session, year, month)
+            has_prev, has_next = _draft_neighbors(session, year, month, vid)
+
             session.commit()
             return ScheduleCheckpointCreated(
                 year=year,
                 month=month,
-                draft=_draft_view(vid, payload, can_undo=True, can_redo=False, count=0),
+                draft=_draft_view(
+                    vid,
+                    payload,
+                    can_undo=has_prev,
+                    can_redo=has_next,
+                    count=drafts_total,
+                ),
                 diagnostics=diag,
             )
 
@@ -455,11 +569,50 @@ class SchedulingService:
         """
         with SessionLocal() as session:
             ptr = _ensure_pointer(session, year, month)
+
+            # draft branch: pointer move, working overwrite
             if target == "draft":
+                # Guard: there must be a current draft pointer to move from
                 current = ptr.current_draft_version_id
                 if current is None:
                     raise ValueError("cannot_undo" if direction == "prev" else "cannot_redo")
-                ver = session.get(ScheduleVersion, int(current))
+
+                # Find the neighbor draft version id based on direction
+                if direction == "prev":
+                    # Move pointer to the previous (older) draft version by id
+                    prev_id = session.scalar(
+                        select(func.max(ScheduleVersion.id)).where(
+                            ScheduleVersion.year == year,
+                            ScheduleVersion.month == month,
+                            ScheduleVersion.kind == "draft",
+                            ScheduleVersion.id < current,
+                        )
+                    )
+                    if prev_id is None:
+                        # No older draft exists → cannot undo
+                        raise ValueError("cannot_undo")
+                    new_id = int(prev_id)
+                else:  # direction == "next"
+                    # Move pointer to the next (newer) draft version by id
+                    next_id = session.scalar(
+                        select(func.min(ScheduleVersion.id)).where(
+                            ScheduleVersion.year == year,
+                            ScheduleVersion.month == month,
+                            ScheduleVersion.kind == "draft",
+                            ScheduleVersion.id > current,
+                        )
+                    )
+                    if next_id is None:
+                        # No newer draft exists → cannot redo
+                        raise ValueError("cannot_redo")
+                    new_id = int(next_id)
+
+                # Update the draft pointer to the newly selected draft
+                ptr.current_draft_version_id = new_id
+                session.add(ptr)
+
+                # Load the pointed draft snapshot and overwrite working payload with it
+                ver = session.get(ScheduleVersion, new_id)
                 if ver is None:
                     raise ValueError("not_found")
 
@@ -468,17 +621,25 @@ class SchedulingService:
                     year,
                     month,
                     payload=ver.payload,
-                    if_match_lock_version=None,
+                    if_match_lock_version=None,  # working overwrite by pointer move is authoritative
                     updated_by_user_id=user_id,
                 )
-                diag = _compute_or_upsert_diagnostics(session, int(current), ver.payload)
 
+                # Recompute/refresh diagnostics for the selected draft version
+                diag = _compute_or_upsert_diagnostics(session, new_id, ver.payload)
+
+                # Read the updated working view for the response
                 working = _read_working_read(session, year, month)
+
+                # Compute flags and counters AFTER the pointer has moved
+                drafts_total = _drafts_total(session, year, month)
+                has_prev, has_next = _draft_neighbors(session, year, month, new_id)
+
                 session.commit()
                 return ScheduleRevertRead(
                     year=year,
                     month=month,
-                    draft=_draft_view(int(current), ver.payload, can_undo=True, can_redo=True, count=0),
+                    draft=_draft_view(new_id, ver.payload, can_undo=has_prev, can_redo=has_next, count=drafts_total),
                     working=working,
                     diagnostics=diag,
                 )
@@ -491,11 +652,20 @@ class SchedulingService:
             if ver is None:
                 raise ValueError("not_found")
 
+            publications_total = _published_total(session, year, month)
+            has_prev, has_next = _published_neighbors(session, year, month, int(current))
+
             session.commit()
             return SchedulePublishedRevertRead(
                 year=year,
                 month=month,
-                published=_published_view(int(current), ver.payload, can_undo=True, can_redo=True, count=0),
+                published=_published_view(
+                    int(current),
+                    ver.payload,
+                    can_undo=has_prev,
+                    can_redo=has_next,
+                    count=publications_total,
+                ),
             )
 
     # -------------------------------- Publish ---------------------------------
@@ -557,11 +727,21 @@ class SchedulingService:
 
             audit = {"published_at": now_utc(), "published_by_user_id": user_id, "note": note or "Finalize"}
 
+            publications_total = _published_total(session, year, month)
+            has_prev, has_next = _published_neighbors(session, year, month, vid)
+
             session.commit()
             return SchedulePublishCreated(
                 year=year,
                 month=month,
-                published=_published_view(vid, payload, can_undo=False, can_redo=False, count=1, audit=audit),
+                published=_published_view(
+                    vid,
+                    payload,
+                    can_undo=has_prev,
+                    can_redo=has_next,
+                    count=publications_total,
+                    audit=audit,
+                ),
             )
 
     # ----------------------------- Read: Published -----------------------------
@@ -580,17 +760,20 @@ class SchedulingService:
             if ver is None:
                 raise ValueError("not_found")
 
+            publications_total = _published_total(session, year, month)
+            has_prev, has_next = _published_neighbors(session, year, month, int(ver.id))
+
             return SchedulePublishedRead(
                 year=year,
                 month=month,
                 org_timezone="Europe/Warsaw",
-                period_status=PeriodStatus(get_period_status(year, month)),  # ensure enum instance
+                period_status=PeriodStatus(get_period_status(year, month)),
                 published=_published_view(
                     int(ver.id),
                     ver.payload,
-                    can_undo=False,
-                    can_redo=False,
-                    count=1,
+                    can_undo=has_prev,
+                    can_redo=has_next,
+                    count=publications_total,  # lub max(... - 1, 0) — jeśli chcesz "poza headem"
                     audit={"published_at": ver.created_at},
                 ),
             )

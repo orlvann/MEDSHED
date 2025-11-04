@@ -1,17 +1,27 @@
 # backend/models/orm/schedule.py
 """
-Schedules ORM models.
+Schedules ORM models (persistence layer only).
 
-Design highlights (service-layer responsibilities marked as TODO in comments):
-- Immutable versions + (draft|published) label stored in `schedule_versions` table.
-- Pointers table holds the *current* draft/published version_id for each {year,month}.
-- Working table stores the last autosaved "work-in-progress" snapshot for UI.
-- History is created *only* from explicit generate/save (create checkpoint)/publish actions.
-- UTC timestamps (timezone=True); DB servers are expected to run in UTC.
+What lives here (DB shape, not business logic):
+- Immutable snapshots in `schedule_versions` (payload JSON + labels 'draft'|'published').
+- Month-level pointers in `schedule_pointers` pointing to the *current* draft/published version.
+- A single autosave buffer per month in `schedule_working`.
+- Optional per-version analytics cache in `schedule_diagnostics`:
+  * `quality` JSON stores only plain analytics (no datetimes inside JSON),
+  * `computed_at` is a DB timestamp column.
 
-Kinds policy:
-- We intentionally avoid a hard DB ENUM for 'kind' to keep migrations simple
-  across SQLite (dev) and Postgres (prod). Instead, we use a String + CHECK.
+What does NOT live here (done in services):
+- Creating new versions and moving pointers (generate/checkpoint/publish/revert/redo).
+- Overwriting `schedule_working` when the draft pointer moves.
+- Counting history and computing undo/redo flags.
+- Computing diagnostics and upserting `schedule_diagnostics`.
+- Enforcing OCC on working (compare-and-swap on `lock_version`).
+
+Operational notes:
+- Version ids are autoincrement PKs; services use them to order history within the same
+  (year, month, kind). "Previous" == max(id) < current_id; "Next" == min(id) > current_id.
+- We intentionally keep 'kind' as String(+CHECK) to keep migrations easy across SQLite/Postgres.
+- All timestamps are timezone-aware (UTC).
 """
 
 from __future__ import annotations
@@ -38,11 +48,15 @@ KindLiteral = Literal["draft", "published"]
 
 
 class ScheduleVersion(Base):
-    """Immutable snapshot of a schedule for a given {year, month}.
+    """Immutable snapshot for a given {year, month} and 'kind' ('draft' or 'published').
 
-    Each explicit operation (generate/save (create checkpoint)/publish) must create
-    a new row here. The 'kind' is only a *label* of the saved version,
-    not an indicator of "currentness".
+    Service-layer behavior (not here):
+    - On generate/checkpoint: insert a new 'draft' version and point the draft pointer to it.
+    - On publish: insert a new 'published' version and point the published pointer to it.
+    - On draft/published revert/redo: move the respective pointer to the neighbor version.
+
+    The `id` is an autoincrement PK and acts as the ordering key for history within the same
+    (year, month, kind). Services use it to find neighbors (prev/next).
     """
 
     __tablename__ = "schedule_versions"
@@ -87,21 +101,16 @@ class ScheduleVersion(Base):
 
 
 class SchedulePointer(Base):
-    """Holds *current* pointers per {year,month} for draft and published.
+    """Holds the *current* head per {year, month} for both draft and published.
 
-    Only one current draft and one current published per (year, month).
-    Service layer must update these pointers atomically when publishing
-    or moving draft head.
+    Service-layer responsibilities:
+    - After inserting a new version, update the respective pointer (draft/published) atomically.
+    - On revert/redo, move the pointer to the neighbor version id and (for drafts) overwrite
+      `schedule_working` with the pointed payload so the UI reflects the selected state.
 
-    TODO(service): On publish:
-      - insert new ScheduleVersion(kind='published')
-      - set pointer.current_published_version_id to that id
-      - optionally copy the version payload to working for UI refresh
-
-    TODO(service): On "set current draft" (generate/save):
-      - insert new ScheduleVersion(kind='draft')
-      - move pointer.current_draft_version_id to that id
-      - also update working snapshot for immediate UI
+    Invariants:
+    - At most one pointer row per {year, month}.
+    - Pointers store only the *current* head; the full history lives in `schedule_versions`.
     """
 
     __tablename__ = "schedule_pointers"
@@ -144,14 +153,12 @@ class SchedulePointer(Base):
 
 
 class ScheduleWorking(Base):
-    """Autosave-only working snapshot per {year,month}.
+    """Autosave-only working snapshot per {year, month}.
 
-    This table is NOT a history source. It's only the latest "working copy"
-    feeding the UI between explicit checkpoints.
-
-    Concurrency:
-    - Optional `lock_version` (int) supports optimistic concurrency control
-      on the service layer (compare-and-swap on update).
+    Notes:
+    - Not a history source; it's the mutable buffer between explicit checkpoints.
+    - Optimistic Concurrency Control (OCC) is enforced in services by comparing `lock_version`.
+    - Services overwrite this row when the draft pointer moves (revert/redo) to keep UI in sync.
     """
 
     __tablename__ = "schedule_working"
@@ -184,10 +191,13 @@ class ScheduleWorking(Base):
 
 
 class ScheduleDiagnostics(Base):
-    """Optional diagnostics per immutable version.
+    """Optional analytics cache per immutable version (1:1 by `version_id`).
 
-    One row per version_id with computed quality metrics.
-    This table is safe to introduce now; services may start writing to it later.
+    Conventions:
+    - `quality` is plain JSON (numbers/strings/arrays/objects only).
+      Do NOT put datetimes inside this JSON; use the `computed_at` column instead.
+    - Services upsert this row when (re)computing diagnostics for a version.
+    - The 1:1 relation is enforced by a unique constraint on `version_id`.
     """
 
     __tablename__ = "schedule_diagnostics"
@@ -203,9 +213,11 @@ class ScheduleDiagnostics(Base):
     )
 
     # Arbitrary metrics (penalties, coverage, fairness, etc.)
-    quality: Mapped[dict] = mapped_column(JSON, nullable=False)
+    quality: Mapped[dict] = mapped_column(JSON, nullable=False)  # JSON analytics only (no datetimes inside)
 
-    computed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    computed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )  # DB timestamp for when diagnostics were stored/refreshed
 
     version: Mapped[ScheduleVersion] = relationship("ScheduleVersion")
 
