@@ -4,16 +4,15 @@ Dev seed: create sample Doctors and Users for manual testing.
 What it does:
 - Inserts two Doctors (Anna Kowalska / Piotr Nowak) if they don't exist.
 - Inserts two Users:
-    * admin:    admin@hospital.org / admin123!
-    * doctor:   anna@hospital.org  / doctor123!  (linked 1:1 to Doctor(Anna))
+    * admin:    admin@hospital.org / admin123
+    * doctor:   doctor@hospital.org  / doctor123  (linked 1:1 to Doctor(Anna))
 - Idempotent: running multiple times won't duplicate rows.
 
-NOTE: Password hashing here is DEV-ONLY (sha256). For prod use passlib[bcrypt].
+NOTE: Uses proper bcrypt password hashing via backend.utils.security.
 """
 
 from __future__ import annotations
 
-import hashlib
 from typing import Optional
 
 from sqlalchemy import select
@@ -31,11 +30,7 @@ from backend.models.orm.preference import (  # noqa: F401
     PreferenceWorking,
 )
 from backend.models.orm.user import User
-
-
-# --- tiny DEV hash helper (DO NOT use in production) ---
-def dev_hash_password(raw: str) -> str:
-    return hashlib.sha256(("dev_salt::" + raw).encode("utf-8")).hexdigest()
+from backend.utils.security import hash_password
 
 
 def get_or_create_doctor(
@@ -87,7 +82,7 @@ def get_or_create_user(
     user = User(
         email=email,
         role=role,
-        password_hash=dev_hash_password(password_plain),
+        password_hash=hash_password(password_plain),
         is_active=True,
         doctor_id=doctor_id,
     )
@@ -120,14 +115,14 @@ def main() -> None:
             db,
             email="admin@hospital.org",
             role=Role.admin,
-            password_plain="admin123!",
+            password_plain="admin123",
             doctor_id=None,
         )
         doctor_user = get_or_create_user(
             db,
-            email="anna@hospital.org",
+            email="doctor@hospital.org",
             role=Role.doctor,
-            password_plain="doctor123!",
+            password_plain="doctor123",
             doctor_id=anna.id,  # 1:1 link to Doctor(Anna)
         )
 
@@ -137,22 +132,24 @@ def main() -> None:
         print(f"Doctor: #{anna.id} {anna.first_name} {anna.last_name} " f"({anna.role.value}) email={anna.email}")
         print(f"Doctor: #{piotr.id} {piotr.first_name} {piotr.last_name} " f"({piotr.role.value}) email={piotr.email}")
         print(
-            "User(admin):  {email} / admin123!  role={role} active={active}".format(
+            "User(admin):  {email} / admin123  role={role} active={active}".format(
                 email=admin_user.email,
                 role=admin_user.role.value,
                 active=admin_user.is_active,
             )
         )
         print(
-            "User(doctor): {email} / doctor123! role={role} active={active} doctor_id={docid}".format(
+            "User(doctor): {email} / doctor123 role={role} active={active} doctor_id={docid}".format(
                 email=doctor_user.email,
                 role=doctor_user.role.value,
                 active=doctor_user.is_active,
                 docid=doctor_user.doctor_id,
             )
         )
-        print("\nLogin hint (DEV ONLY): passwords above; hashing is sha256 demo.")
-        print("Wire AuthService to verify hashes and issue JWTs.")
+        print("\nLogin credentials:")
+        print("  Admin:  admin@hospital.org / admin123")
+        print("  Doctor: doctor@hospital.org / doctor123")
+        print("Passwords are hashed with bcrypt.")
     except Exception:
         db.rollback()
         raise
