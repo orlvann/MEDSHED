@@ -76,6 +76,24 @@ from backend.models.schemas.schedule import (
 from backend.utils import get_period_status, now_utc
 
 
+# -------------------------- period edit-window helper --------------------------
+def _ensure_editable(year: int, month: int) -> None:
+    """
+    Enforce the admin editing window (current/future only) in the org timezone.
+
+    IMPORTANT (development mode):
+    - Currently a NO-OP to keep development and tests unblocked.
+    - To enable enforcement later, uncomment lines below.
+
+    Raises:
+        ValueError("period_closed"): when the period is in the past.
+    """
+    # status = PeriodStatus(get_period_status(year, month))
+    # if status == PeriodStatus.past:
+    #     raise ValueError("period_closed")
+    return
+
+
 # ----------------------------- working helpers --------------------------------
 def _get_or_init_working(session: Session, year: int, month: int) -> ScheduleWorking:
     """
@@ -307,6 +325,24 @@ def _published_neighbors(session: Session, year: int, month: int, current_id: in
     return (older is not None, newer is not None)
 
 
+def _prune_published(session: Session, year: int, month: int, *, keep_last: int = 0) -> None:
+    """
+    Prune old published versions to enforce retention policy.
+
+    MVP behavior:
+    - No-op by default (keep_last=0 means 'do not prune').
+    - Wire-in point so we can later:
+        * sort published versions by id (ascending),
+        * delete everything except the newest N,
+        * cascade/remove diagnostics as needed.
+
+    Notes:
+    - Implementing actual pruning depends on agreed retention policy and
+      foreign key constraints (e.g., diagnostics referencing versions).
+    """
+    return
+
+
 def _compute_or_upsert_diagnostics(session: Session, version_id: int, payload: Dict[str, Any]) -> DiagnosticsRead:
     """
     Compute (MVP stub) or upsert diagnostics cache for a given schedule version.
@@ -351,6 +387,23 @@ def _compute_or_upsert_diagnostics(session: Session, version_id: int, payload: D
         computed_at=row.computed_at,
         summary=quality_payload["summary"],
     )
+
+
+# ------------------------------ validation helpers -----------------------------
+def _hard_rule_violations(payload: Dict[str, Any]) -> List[Dict[str, str]]:
+    """
+    Evaluate hard (non-overridable) rule violations for a schedule payload.
+
+    Production intent:
+    - This function should run deterministic validations derived from domain rules
+      (e.g., legal staffing minima, rest-period hard constraints).
+    - Return a list of {code, message} dicts. Empty list means "no hard violations".
+
+    Current behavior (MVP):
+    - Returns an empty list to keep publishing unblocked during development.
+    - Replace with real checks once the solver/validator is wired into the service.
+    """
+    return []
 
 
 # --------------------------------- DTO builders --------------------------------
@@ -424,11 +477,24 @@ class SchedulingService:
         updated_by_user_id: Optional[int],
     ) -> ScheduleWorkingAck:
         """
-        Autosave working buffer with OCC. Normalization is expected upstream.
+        Autosave the working buffer with optimistic concurrency (OCC).
+        Scope:
+            - Writes ONLY the mutable 'working' snapshot for {year, month}.
+            - Does NOT create a checkpoint (history remains unchanged).
+        OCC:
+            - If 'if_match_lock_version' is provided and mismatches current lock,
+              raise ValueError("edit_conflict").
+        Edit window:
+            - A past-period edit guard exists but is currently DISABLED for development.
+              To enable later, uncomment the _ensure_editable(...) call below.
+        Normalization:
+            - Deterministic normalization (sort & dedupe of assignments, labels cleanup)
+              will be enforced inside the service in the next step.
+            - Currently, inputs are persisted largely as-is to keep development simple.
 
-        Raises:
-          ValueError("edit_conflict") if lock_version mismatches.
         """
+        # _ensure_editable(year, month)  # Enable later to block edits on past periods
+
         payload = {
             "participant_doctor_ids": (meta or {}).get("participant_doctor_ids", []),
             "assignments": [a if isinstance(a, dict) else a.model_dump() for a in assignments],
@@ -457,6 +523,7 @@ class SchedulingService:
           - Computes and stores diagnostics for the draft.
         """
         year, month = int(req.year), int(req.month)
+        # _ensure_editable(year, month)  # Enable later to block edits on past periods
         with SessionLocal() as session:
             payload = {
                 "participant_doctor_ids": req.participant_doctor_ids or [],
@@ -514,6 +581,7 @@ class SchedulingService:
           - Draft view of the just-created checkpoint.
           - Diagnostics computed for this version.
         """
+        # _ensure_editable(year, month)  # Enable later to block edits on past periods
         with SessionLocal() as session:
             w = _get_or_init_working(session, year, month)
             payload = dict(w.payload or {"participant_doctor_ids": [], "assignments": [], "meta": {"labels": []}})
@@ -567,6 +635,8 @@ class SchedulingService:
           ValueError("cannot_undo"/"cannot_redo") when movement is not possible.
           ValueError("not_found") if the pointed version cannot be read.
         """
+        # _ensure_editable(year, month)  # Enable later to block edits on past periods
+
         with SessionLocal() as session:
             ptr = _ensure_pointer(session, year, month)
 
@@ -647,20 +717,54 @@ class SchedulingService:
             # published branch: pointer move only (no working overwrite)
             current = ptr.current_published_version_id
             if current is None:
+                # No published head to move from
                 raise ValueError("cannot_undo" if direction == "prev" else "cannot_redo")
-            ver = session.get(ScheduleVersion, int(current))
+
+            # Choose neighbor published version id based on direction
+            if direction == "prev":
+                new_id = session.scalar(
+                    select(func.max(ScheduleVersion.id)).where(
+                        ScheduleVersion.year == year,
+                        ScheduleVersion.month == month,
+                        ScheduleVersion.kind == "published",
+                        ScheduleVersion.id < current,
+                    )
+                )
+                if new_id is None:
+                    # No older published exists → cannot undo
+                    raise ValueError("cannot_undo")
+            else:  # direction == "next"
+                new_id = session.scalar(
+                    select(func.min(ScheduleVersion.id)).where(
+                        ScheduleVersion.year == year,
+                        ScheduleVersion.month == month,
+                        ScheduleVersion.kind == "published",
+                        ScheduleVersion.id > current,
+                    )
+                )
+                if new_id is None:
+                    # No newer published exists → cannot redo
+                    raise ValueError("cannot_redo")
+
+            # Move the published pointer to the selected neighbor
+            ptr.current_published_version_id = int(new_id)
+            session.add(ptr)
+
+            # Load the newly pointed published snapshot
+            ver = session.get(ScheduleVersion, int(new_id))
             if ver is None:
                 raise ValueError("not_found")
 
+            # Compute flags and counters AFTER the pointer has moved
             publications_total = _published_total(session, year, month)
-            has_prev, has_next = _published_neighbors(session, year, month, int(current))
+            has_prev, has_next = _published_neighbors(session, year, month, int(new_id))
 
             session.commit()
             return SchedulePublishedRevertRead(
                 year=year,
                 month=month,
                 published=_published_view(
-                    int(current),
+                    int(new_id),
                     ver.payload,
                     can_undo=has_prev,
                     can_redo=has_next,
@@ -685,32 +789,39 @@ class SchedulingService:
           - If force=True → append accepted exceptions to payload.meta.exceptions and proceed.
           - Create a published version and move the published pointer.
         """
+        # _ensure_editable(year, month)  # Enable later to block edits on past periods
         with SessionLocal() as session:
             w = _get_or_init_working(session, year, month)
             payload = dict(w.payload or {"participant_doctor_ids": [], "assignments": [], "meta": {"labels": []}})
             meta = dict(payload.get("meta") or {"labels": []})
 
-            # MVP hard-rule stub
-            hard_violations = [
-                {"code": "NO_SPECIALIST_DAY_12", "message": "No specialist on 12th"},
-                {"code": "MAX_CONSEC_ONCALL_EXCEEDED_DAY_20", "message": "Exceeded consecutive on-call limit on 20th"},
-            ]
+            # Evaluate hard-rule violations via dedicated helper
+            hard_violations = _hard_rule_violations(payload)
+
+            # Block publishing when non-forced and there are hard violations
             if not force and hard_violations:
                 raise ValueError("publish_blocked_by_hard_rules")
 
-            if force and accepted_exceptions:
-                ex_list = list(meta.get("exceptions", []))
-                for e in accepted_exceptions:
-                    ex_list.append(
-                        {
-                            "code": e.code,
-                            "justification": e.justification,
-                            "accepted_by_user_id": user_id,
-                            "accepted_at": now_utc(),
-                        }
-                    )
-                meta["exceptions"] = ex_list
-                payload["meta"] = meta
+            # Forced publish: verify accepted exceptions match detected violations, then append audit details
+            if force:
+                violation_codes = {v.get("code") for v in (hard_violations or []) if v.get("code")}
+                if accepted_exceptions:
+                    bad = [e.code for e in accepted_exceptions if e.code not in violation_codes]
+                    if bad:
+                        # The client attempted to accept exceptions that were not detected as hard violations
+                        raise ValueError("invalid_accepted_exception")
+                    ex_list = list(meta.get("exceptions", []))
+                    for e in accepted_exceptions:
+                        ex_list.append(
+                            {
+                                "code": e.code,
+                                "justification": e.justification,
+                                "accepted_by_user_id": user_id,
+                                "accepted_at": now_utc(),
+                            }
+                        )
+                    meta["exceptions"] = ex_list
+                    payload["meta"] = meta
 
             vid = _insert_version(
                 session,
@@ -724,6 +835,8 @@ class SchedulingService:
             ptr = _ensure_pointer(session, year, month)
             ptr.current_published_version_id = vid
             session.add(ptr)
+
+            _prune_published(session, year, month)  # no-op for now; retention policy to be defined
 
             audit = {"published_at": now_utc(), "published_by_user_id": user_id, "note": note or "Finalize"}
 
