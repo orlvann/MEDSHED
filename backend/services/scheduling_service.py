@@ -587,7 +587,13 @@ class SchedulingService:
           - Seeds/overwrites working.
           - Creates a draft version and points the draft pointer to it.
           - Computes and stores diagnostics for the draft.
+
+        Invariant (clear REDO semantics):
+          - A newly created checkpoint is always the max(version.id) for the month.
+          - The draft pointer is moved to this newest id, so there is no "next" (redo) available.
+          - We assert this by snapping the pointer to max(id) after insertion.
         """
+
         year, month = int(req.year), int(req.month)
         # _ensure_editable(year, month)  # Enable later to block edits on past periods
         with SessionLocal() as session:
@@ -610,6 +616,20 @@ class SchedulingService:
                 created_by_user_id=user_id,
                 created_by_role="admin",
             )
+
+            # Snap the pointer to the newest draft id (clear REDO by construction).
+            newest_id = (
+                session.scalar(
+                    select(func.max(ScheduleVersion.id)).where(
+                        ScheduleVersion.year == year,
+                        ScheduleVersion.month == month,
+                        ScheduleVersion.kind == "draft",
+                    )
+                )
+                or vid
+            )
+            vid = int(newest_id)
+
             ptr = _ensure_pointer(session, year, month)
             ptr.current_draft_version_id = vid
             session.add(ptr)
@@ -648,7 +668,13 @@ class SchedulingService:
         Returns:
           - Draft view of the just-created checkpoint.
           - Diagnostics computed for this version.
+
+        Invariant (clear REDO semantics):
+          - New checkpoint becomes the newest snapshot (max version.id) for the month.
+          - The draft pointer is set to this newest id → no "next" (redo) exists.
+          - We enforce this by snapping the pointer to max(id) after insertion.
         """
+
         # _ensure_editable(year, month)  # Enable later to block edits on past periods
         with SessionLocal() as session:
             w = _get_or_init_working(session, year, month)
@@ -663,6 +689,20 @@ class SchedulingService:
                 created_by_user_id=user_id,
                 created_by_role="admin",
             )
+
+            # Snap the pointer to the newest draft id (clear REDO by construction).
+            newest_id = (
+                session.scalar(
+                    select(func.max(ScheduleVersion.id)).where(
+                        ScheduleVersion.year == year,
+                        ScheduleVersion.month == month,
+                        ScheduleVersion.kind == "draft",
+                    )
+                )
+                or vid
+            )
+            vid = int(newest_id)
+
             ptr = _ensure_pointer(session, year, month)
             ptr.current_draft_version_id = vid
             session.add(ptr)
