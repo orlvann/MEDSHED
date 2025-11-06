@@ -12,7 +12,7 @@ Run:
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone  # use timezone-aware UTC
 from pprint import pprint as pp
 
 from backend.models.schemas.schedule import (
@@ -24,7 +24,8 @@ from backend.services.scheduling_service import SchedulingService
 
 def main() -> None:
     # Use current month for convenience in dev.
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)  # timezone-aware UTC datetime
+
     year, month = now.year, now.month
 
     svc = SchedulingService()
