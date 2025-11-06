@@ -43,7 +43,7 @@ This module keeps routers thin. All domain rules live here.
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Dict, List, Literal, Optional, cast
 
 from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
@@ -73,7 +73,7 @@ from backend.models.schemas.schedule import (
     ScheduleWorkingAck,
     ScheduleWorkingRead,
 )
-from backend.utils import get_period_status, now_utc
+from backend.utils import get_period_status, normalize_assignments, normalize_meta, now_utc
 
 # Retention policy (FIFO): tune here
 # Change these to keep more/fewer historical snapshots.
@@ -472,6 +472,38 @@ def _hard_rule_violations(payload: Dict[str, Any]) -> List[Dict[str, str]]:
     return []
 
 
+def _normalize_snapshot_payload(raw: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Normalize a schedule snapshot payload before persisting as an immutable version.
+
+    What it does:
+    - Ensures participant_doctor_ids are integers (defensive cast).
+    - Normalizes assignments (handles Enum values; sorts & dedupes by (day, shift_type, doctor_id)).
+    - Normalizes meta (labels unique & sorted; exceptions must be a list).
+
+    Why:
+    - Keep all versions deterministic and comparable (no false diffs due to order/dup).
+    - Make snapshots tolerant to upstream sources that might pass Enum objects.
+
+    Note:
+    - This helper is used for *immutable* snapshots (draft/published).
+      Working (autosave) is normalized in `save_working` separately.
+    """
+    payload = dict(raw or {})
+
+    # Defensive cast of participants to ints
+    pids = payload.get("participant_doctor_ids") or []
+    payload["participant_doctor_ids"] = [int(x) for x in pids]
+
+    # Assignments: coerce possible Enums to their .value and normalize
+    payload["assignments"] = normalize_assignments(cast(List[Dict[str, Any]], payload.get("assignments", []) or []))
+
+    # Meta: ensure labels unique & sorted; exceptions list
+    payload["meta"] = normalize_meta(cast(Dict[str, Any], payload.get("meta") or {"labels": []}))
+
+    return payload
+
+
 # --------------------------------- DTO builders --------------------------------
 def _draft_view(
     version_id: int, payload: Dict[str, Any], *, can_undo: bool, can_redo: bool, count: int
@@ -544,29 +576,59 @@ class SchedulingService:
     ) -> ScheduleWorkingAck:
         """
         Autosave the working buffer with optimistic concurrency (OCC).
+
         Scope:
             - Writes ONLY the mutable 'working' snapshot for {year, month}.
             - Does NOT create a checkpoint (history remains unchanged).
+
         OCC:
             - If 'if_match_lock_version' is provided and mismatches current lock,
-              raise ValueError("edit_conflict").
+            raise ValueError("edit_conflict").
+
         Edit window:
             - A past-period edit guard exists but is currently DISABLED for development.
-              To enable later, uncomment the _ensure_editable(...) call below.
-        Normalization:
-            - Deterministic normalization (sort & dedupe of assignments, labels cleanup)
-              will be enforced inside the service in the next step.
-            - Currently, inputs are persisted largely as-is to keep development simple.
+            To enable later, uncomment the _ensure_editable(...) call below.
 
+        Semantics (IMPORTANT):
+            - PUT /working MUST NOT change 'participant_doctor_ids'.
+            - 'participant_doctor_ids' are preserved from the CURRENT working row.
+            - The only supported way to change 'participant_doctor_ids' is via 'generate'
+            (snapshot of the participants pool).
+
+        Normalization (enforced here):
+            - Assignments are normalized (sort & dedupe by (day, shift_type, doctor_id)).
+            - Meta is normalized via 'normalize_meta' (labels unique & sorted; exceptions list).
+            - Deterministic shape avoids "false diffs" and keeps snapshots stable.
+
+        Returns:
+            - ScheduleWorkingAck with updated_at and new lock_version.
+
+        Raises:
+            - ValueError("edit_conflict") when OCC precondition fails.
         """
         # _ensure_editable(year, month)  # Enable later to block edits on past periods
 
-        payload = {
-            "participant_doctor_ids": (meta or {}).get("participant_doctor_ids", []),
-            "assignments": [a if isinstance(a, dict) else a.model_dump() for a in assignments],
-            "meta": meta or {"labels": []},
-        }
         with SessionLocal() as session:
+            # Load current working to preserve participant_doctor_ids
+            w = _get_or_init_working(session, year, month)
+            current_payload = dict(w.payload or {})
+            current_participants = list(current_payload.get("participant_doctor_ids", []))
+
+            # Normalize inputs
+            norm_assignments: List[Dict[str, Any]] = normalize_assignments(
+                [a if isinstance(a, dict) else a.model_dump(mode="json") for a in (assignments or [])]
+            )
+
+            norm_meta = normalize_meta(meta or {"labels": []})
+
+            # Build the new working snapshot WITHOUT touching participant_doctor_ids
+            payload = {
+                "participant_doctor_ids": current_participants,
+                "assignments": norm_assignments,
+                "meta": norm_meta,
+            }
+
+            # OCC write (will raise ValueError("edit_conflict") on mismatch)
             updated_at_dt, lv = _update_working(
                 session,
                 year,
@@ -597,11 +659,13 @@ class SchedulingService:
         year, month = int(req.year), int(req.month)
         # _ensure_editable(year, month)  # Enable later to block edits on past periods
         with SessionLocal() as session:
-            payload = {
-                "participant_doctor_ids": req.participant_doctor_ids or [],
-                "assignments": [],
-                "meta": {"labels": ["as_generated"], "exceptions": []},
-            }
+            payload = _normalize_snapshot_payload(
+                {
+                    "participant_doctor_ids": req.participant_doctor_ids or [],
+                    "assignments": [],  # generated seed has no assignments yet
+                    "meta": {"labels": ["as_generated"], "exceptions": []},
+                }
+            )
             _get_or_init_working(session, year, month)
             _update_working(
                 session, year, month, payload=payload, if_match_lock_version=None, updated_by_user_id=user_id
@@ -679,6 +743,8 @@ class SchedulingService:
         with SessionLocal() as session:
             w = _get_or_init_working(session, year, month)
             payload = dict(w.payload or {"participant_doctor_ids": [], "assignments": [], "meta": {"labels": []}})
+
+            payload = _normalize_snapshot_payload(payload)
 
             vid = _insert_version(
                 session,
@@ -903,7 +969,10 @@ class SchedulingService:
         with SessionLocal() as session:
             w = _get_or_init_working(session, year, month)
             payload = dict(w.payload or {"participant_doctor_ids": [], "assignments": [], "meta": {"labels": []}})
-            meta = dict(payload.get("meta") or {"labels": []})
+            # normalize both assignments and meta
+            # Normalize entire snapshot in one place (handles enums, sorting, dedup, labels)
+            payload = _normalize_snapshot_payload(payload)
+            meta = cast(Dict[str, Any], payload["meta"])  # keep a typed alias for edits below
 
             # Evaluate hard-rule violations via dedicated helper
             hard_violations = _hard_rule_violations(payload)
@@ -931,7 +1000,7 @@ class SchedulingService:
                             }
                         )
                     meta["exceptions"] = ex_list
-                    payload["meta"] = meta
+                    payload["meta"] = normalize_meta(meta)
 
             vid = _insert_version(
                 session,

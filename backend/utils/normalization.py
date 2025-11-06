@@ -30,11 +30,39 @@ def normalize_assignments(assignments: Iterable[Dict[str, Any]]) -> List[Dict[st
     seen: set[Tuple[int, str, int]] = set()
     out: List[Dict[str, Any]] = []
 
+    def _as_value_shift(x: Any) -> str:
+        # Accept Enum/str; prefer Enum.value if present.
+        if hasattr(x, "value"):
+            return str(getattr(x, "value"))
+        return str(x)
+
     # Stable sort ensures consistent serialization (useful for exports and testing).
-    for a in sorted(assignments, key=lambda x: (x["day"], x["shift_type"], x["doctor_id"])):
-        key = (int(a["day"]), str(a["shift_type"]), int(a["doctor_id"]))
+    items: List[Dict[str, Any]] = []
+    for a in assignments or []:
+        day = int(a["day"])
+        doctor_id = int(a["doctor_id"])
+        shift = _as_value_shift(a["shift_type"])  # "on_call" | "on_duty"
+        items.append({"day": day, "shift_type": shift, "doctor_id": doctor_id})
+
+    for a in sorted(items, key=lambda x: (x["day"], x["shift_type"], x["doctor_id"])):
+        key = (a["day"], a["shift_type"], a["doctor_id"])
         if key not in seen:
             seen.add(key)
-            # Rebuild dict to guarantee correct types and field names.
             out.append({"day": key[0], "shift_type": key[1], "doctor_id": key[2]})
     return out
+
+
+def normalize_meta(meta: Dict[str, Any] | None) -> Dict[str, Any]:
+    """
+    Normalize meta dict:
+    - Ensure "labels" is a list of unique, sorted strings.
+    - Ensure "exceptions" is a list (keep as-is if already a list).
+    """
+    m = dict(meta or {})
+    labels = m.get("labels") or []
+    # strings only, unique + sorted
+    labels = [str(x) for x in labels]
+    m["labels"] = sorted(set(labels))
+    if not isinstance(m.get("exceptions"), list):
+        m["exceptions"] = []
+    return m
