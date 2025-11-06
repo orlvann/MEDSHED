@@ -45,7 +45,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Dict, List, Literal, Optional
 
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
 from backend.db.session import SessionLocal
@@ -74,6 +74,11 @@ from backend.models.schemas.schedule import (
     ScheduleWorkingRead,
 )
 from backend.utils import get_period_status, now_utc
+
+# Retention policy (FIFO): tune here
+# Change these to keep more/fewer historical snapshots.
+RETAIN_LAST_DRAFTS = 5
+RETAIN_LAST_PUBLISHED = 5
 
 
 # -------------------------- period edit-window helper --------------------------
@@ -325,22 +330,83 @@ def _published_neighbors(session: Session, year: int, month: int, current_id: in
     return (older is not None, newer is not None)
 
 
-def _prune_published(session: Session, year: int, month: int, *, keep_last: int = 0) -> None:
+def _prune_drafts(session: Session, year: int, month: int, *, keep_last: int = 5) -> None:
     """
-    Prune old published versions to enforce retention policy.
-
-    MVP behavior:
-    - No-op by default (keep_last=0 means 'do not prune').
-    - Wire-in point so we can later:
-        * sort published versions by id (ascending),
-        * delete everything except the newest N,
-        * cascade/remove diagnostics as needed.
-
-    Notes:
-    - Implementing actual pruning depends on agreed retention policy and
-      foreign key constraints (e.g., diagnostics referencing versions).
+    Retain only the newest `keep` draft versions for {year, month}.
+    - Delete oldest overflow versions (and their diagnostics).
+    - If pointer points to a deleted version, move it to the newest remaining; or None if none left.
+    Implementation notes:
+    - Order by increasing `id` (creation order).
+    - Delete diagnostics first to satisfy FK constraints if present.
     """
-    return
+    if keep_last <= 0:
+        return
+
+    # Collect all draft ids ascending (oldest first)
+    ids = session.scalars(
+        select(ScheduleVersion.id)
+        .where(
+            ScheduleVersion.year == year,
+            ScheduleVersion.month == month,
+            ScheduleVersion.kind == "draft",
+        )
+        .order_by(ScheduleVersion.id.asc())
+    ).all()
+
+    overflow = max(0, len(ids) - keep_last)
+    if overflow <= 0:
+        return
+
+    to_delete = ids[:overflow]
+    remaining = ids[overflow:]
+
+    # Delete diagnostics for to-be-deleted versions
+    if to_delete:
+        session.execute(delete(ScheduleDiagnostics).where(ScheduleDiagnostics.version_id.in_(to_delete)))
+        session.execute(delete(ScheduleVersion).where(ScheduleVersion.id.in_(to_delete)))
+
+    # Fix pointer if needed
+    ptr = _ensure_pointer(session, year, month)
+    if ptr.current_draft_version_id and int(ptr.current_draft_version_id) in to_delete:
+        ptr.current_draft_version_id = remaining[-1] if remaining else None
+        session.add(ptr)
+
+
+def _prune_published(session: Session, year: int, month: int, *, keep_last: int = 5) -> None:
+    """
+    Retain only the newest `keep` published versions for {year, month}.
+    - Delete oldest overflow versions (and their diagnostics).
+    - If pointer points to a deleted version, move it to the newest remaining; or None if none left.
+    Implementation notes mirror _prune_drafts.
+    """
+    if keep_last <= 0:
+        return
+
+    ids = session.scalars(
+        select(ScheduleVersion.id)
+        .where(
+            ScheduleVersion.year == year,
+            ScheduleVersion.month == month,
+            ScheduleVersion.kind == "published",
+        )
+        .order_by(ScheduleVersion.id.asc())
+    ).all()
+
+    overflow = max(0, len(ids) - keep_last)
+    if overflow <= 0:
+        return
+
+    to_delete = ids[:overflow]
+    remaining = ids[overflow:]
+
+    if to_delete:
+        session.execute(delete(ScheduleDiagnostics).where(ScheduleDiagnostics.version_id.in_(to_delete)))
+        session.execute(delete(ScheduleVersion).where(ScheduleVersion.id.in_(to_delete)))
+
+    ptr = _ensure_pointer(session, year, month)
+    if ptr.current_published_version_id and int(ptr.current_published_version_id) in to_delete:
+        ptr.current_published_version_id = remaining[-1] if remaining else None
+        session.add(ptr)
 
 
 def _compute_or_upsert_diagnostics(session: Session, version_id: int, payload: Dict[str, Any]) -> DiagnosticsRead:
@@ -548,6 +614,8 @@ class SchedulingService:
             ptr.current_draft_version_id = vid
             session.add(ptr)
 
+            _prune_drafts(session, year, month, keep_last=RETAIN_LAST_DRAFTS)
+
             diag = _compute_or_upsert_diagnostics(session, vid, payload)
             working = _read_working_read(session, year, month)
 
@@ -598,6 +666,8 @@ class SchedulingService:
             ptr = _ensure_pointer(session, year, month)
             ptr.current_draft_version_id = vid
             session.add(ptr)
+
+            _prune_drafts(session, year, month, keep_last=RETAIN_LAST_DRAFTS)
 
             diag = _compute_or_upsert_diagnostics(session, vid, payload)
 
@@ -836,7 +906,9 @@ class SchedulingService:
             ptr.current_published_version_id = vid
             session.add(ptr)
 
-            _prune_published(session, year, month)  # no-op for now; retention policy to be defined
+            _prune_published(
+                session, year, month, keep_last=RETAIN_LAST_PUBLISHED
+            )  # no-op for now; retention policy to be defined
 
             audit = {"published_at": now_utc(), "published_by_user_id": user_id, "note": note or "Finalize"}
 
