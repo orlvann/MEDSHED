@@ -26,12 +26,44 @@ export const AdminLogin = () => {
     setLoading(true);
 
     try {
-      await login({ email, password });
+      const user = await login({ email, password });
+
+      // Check if the user has admin role
+      if (user.role !== "admin") {
+        setError("Access denied. Admin credentials required.");
+        setLoading(false);
+        return;
+      }
+
       navigate("/admin");
     } catch (err: any) {
-      setError(
-        err.response?.data?.detail || "Invalid credentials. Please try again."
-      );
+      // Parse error message
+      let errorMsg = "Invalid credentials. Please try again.";
+
+      if (err.response?.data) {
+        const data = err.response.data;
+        if (typeof data === "string") {
+          errorMsg = data;
+        } else if (data.detail) {
+          if (typeof data.detail === "string") {
+            errorMsg = data.detail;
+          } else if (data.detail.detail) {
+            errorMsg = data.detail.detail;
+          } else if (data.detail.code) {
+            // Map error codes to user-friendly messages
+            const errorMessages: { [key: string]: string } = {
+              invalid_credentials: "Invalid email or password",
+              inactive_user: "Your account is inactive. Contact administrator.",
+              invalid_token: "Session expired. Please login again.",
+            };
+            errorMsg = errorMessages[data.detail.code] || data.detail.code;
+          }
+        }
+      } else if (err.message) {
+        errorMsg = err.message;
+      }
+
+      setError(errorMsg);
     } finally {
       setLoading(false);
     }
@@ -83,14 +115,6 @@ export const AdminLogin = () => {
               {loading ? "Signing in..." : "Sign In as Admin"}
             </Button>
           </form>
-          <div className="mt-4 text-center text-sm text-muted-foreground">
-            <p>
-              Doctor?{" "}
-              <a href="/login/doctor" className="text-primary hover:underline">
-                Login here
-              </a>
-            </p>
-          </div>
         </CardContent>
       </Card>
     </div>

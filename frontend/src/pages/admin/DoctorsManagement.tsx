@@ -11,9 +11,26 @@ import {
   CardHeader,
   CardTitle,
 } from "../../components/ui/card";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "../../components/ui/alert-dialog";
 import { doctorsApi } from "../../services/api";
 import type { Doctor, DoctorCreate, DoctorRole } from "../../types";
-import { ArrowLeft, Plus, Pencil, Trash2, Search } from "lucide-react";
+import {
+  ArrowLeft,
+  Plus,
+  Pencil,
+  Trash2,
+  Search,
+  AlertTriangle,
+} from "lucide-react";
 
 export const DoctorsManagement = () => {
   const navigate = useNavigate();
@@ -41,6 +58,10 @@ export const DoctorsManagement = () => {
     is_head: false,
     email: null,
   });
+
+  // Delete confirmation state
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
+  const [doctorToDelete, setDoctorToDelete] = useState<Doctor | null>(null);
 
   // Fetch doctors
   const fetchDoctors = async () => {
@@ -87,20 +108,25 @@ export const DoctorsManagement = () => {
     }
   };
 
-  // Handle delete
-  const handleDelete = async (doctor: Doctor) => {
-    if (
-      !confirm(
-        `Are you sure you want to delete ${doctor.first_name} ${doctor.last_name}?`
-      )
-    ) {
-      return;
-    }
+  // Open delete confirmation dialog
+  const openDeleteDialog = (doctor: Doctor) => {
+    setDoctorToDelete(doctor);
+    setDeleteDialogOpen(true);
+  };
+
+  // Handle delete confirmation
+  const confirmDelete = async () => {
+    if (!doctorToDelete) return;
+
     try {
-      await doctorsApi.delete(doctor.id);
+      await doctorsApi.delete(doctorToDelete.id);
+      setDeleteDialogOpen(false);
+      setDoctorToDelete(null);
       fetchDoctors();
     } catch (err: any) {
-      alert(err.response?.data?.detail || "Failed to delete doctor");
+      setError(err.response?.data?.detail || "Failed to delete doctor");
+      setDeleteDialogOpen(false);
+      setDoctorToDelete(null);
     }
   };
 
@@ -283,7 +309,7 @@ export const DoctorsManagement = () => {
                           <Button
                             variant="ghost"
                             size="sm"
-                            onClick={() => handleDelete(doctor)}
+                            onClick={() => openDeleteDialog(doctor)}
                           >
                             <Trash2 className="h-4 w-4 text-red-600" />
                           </Button>
@@ -449,6 +475,38 @@ export const DoctorsManagement = () => {
             </Card>
           </div>
         )}
+
+        {/* Delete Confirmation Dialog */}
+        <AlertDialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <div className="flex items-center space-x-2">
+                <AlertTriangle className="h-5 w-5 text-red-600" />
+                <AlertDialogTitle>Are you sure?</AlertDialogTitle>
+              </div>
+              <AlertDialogDescription>
+                {doctorToDelete && (
+                  <>
+                    This will permanently delete{" "}
+                    <strong>
+                      {doctorToDelete.first_name} {doctorToDelete.last_name}
+                    </strong>
+                    . This action cannot be undone.
+                  </>
+                )}
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel>Cancel</AlertDialogCancel>
+              <AlertDialogAction
+                onClick={confirmDelete}
+                className="bg-red-600 hover:bg-red-700"
+              >
+                Delete
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
       </main>
     </div>
   );

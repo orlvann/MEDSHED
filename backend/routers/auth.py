@@ -89,12 +89,12 @@ def login(payload: LoginRequest = Body(...), db: Session = Depends(get_db)):
     except auth_service.InvalidCredentialsError as e:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail=make_error(e.code, e.detail),
+            detail=make_error(e.code, detail=e.detail),
         )
     except auth_service.InactiveUserError as e:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail=make_error(e.code, e.detail),
+            detail=make_error(e.code, detail=e.detail),
         )
 
 

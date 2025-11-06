@@ -91,15 +91,17 @@ DONE:
 2. `Frontend`: project scaffold initialized.
 3. `Frontend`: authentication for Doctors and Admin.
 4. `Frontend`: basic Doctors Management panel (UI skeleton).
+5. `Backend`: Doctors CRUD (create/read/update/delete) with validation and error handling.
+6. `Frontend`: enforced role-based access:
+   Admin panel accessible only to Admin.
+   Doctors attempting to access admin panel receive a proper deny/redirect.
+7. `Frontend`: verified login/logout flows, “unauthorized / insufficient permissions” states, and error messages.
+8. `Frontend`: the admin panel in line with mockups.
 
 TODO:
 
-1. `Backend`: Doctors CRUD (create/read/update/delete) with validation and error handling.
-2. `Frontend`: enforce role-based access:
-   Admin panel accessible only to Admin.
-   Doctors attempting to access admin panel receive a proper deny/redirect.
-3. `Frontend`: verify login/logout flows, “unauthorized / insufficient permissions” states, and error messages.
-4. `Frontend`: bring the admin panel in line with mockups (navigation, tables, forms, loading/empty/error states).
+1. `Frontend`: Dashboard.
+2. `Frontend/Backend`: User registration.
 
 Next Steps:
 

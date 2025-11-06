@@ -11,7 +11,7 @@ import type { User, LoginRequest } from "../types";
 interface AuthContextType {
   user: User | null;
   loading: boolean;
-  login: (credentials: LoginRequest) => Promise<void>;
+  login: (credentials: LoginRequest) => Promise<User>;
   logout: () => void;
   isAuthenticated: boolean;
 }
@@ -54,7 +54,7 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
     initAuth();
   }, []);
 
-  const login = async (credentials: LoginRequest) => {
+  const login = async (credentials: LoginRequest): Promise<User> => {
     try {
       const response = await authApi.login(credentials);
       localStorage.setItem("access_token", response.access_token);
@@ -63,6 +63,7 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
       const userData = await authApi.me();
       setUser(userData);
       localStorage.setItem("user", JSON.stringify(userData));
+      return userData;
     } catch (error) {
       throw error;
     }

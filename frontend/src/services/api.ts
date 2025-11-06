@@ -39,10 +39,15 @@ api.interceptors.response.use(
   (response) => response,
   (error: AxiosError<ErrorPayload>) => {
     if (error.response?.status === 401) {
-      // Unauthorized - clear token and redirect to login
-      localStorage.removeItem("access_token");
-      localStorage.removeItem("user");
-      window.location.href = "/login/admin";
+      // Check if this is a login attempt - don't redirect in that case
+      const isLoginRequest = error.config?.url?.includes("/api/v1/auth/login");
+
+      if (!isLoginRequest) {
+        // Unauthorized - clear token and redirect to login (only for non-login requests)
+        localStorage.removeItem("access_token");
+        localStorage.removeItem("user");
+        window.location.href = "/login/admin";
+      }
     }
     return Promise.reject(error);
   }

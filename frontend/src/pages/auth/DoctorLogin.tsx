@@ -26,12 +26,49 @@ export const DoctorLogin = () => {
     setLoading(true);
 
     try {
-      await login({ email, password });
-      navigate("/doctor");
+      const user = await login({ email, password });
+
+      // Doctors can login, admins can also access doctor panel
+      if (user.role !== "doctor" && user.role !== "admin") {
+        setError("Access denied. Invalid credentials.");
+        setLoading(false);
+        return;
+      }
+
+      // Redirect based on role
+      if (user.role === "admin") {
+        navigate("/admin");
+      } else {
+        navigate("/doctor");
+      }
     } catch (err: any) {
-      setError(
-        err.response?.data?.detail || "Invalid credentials. Please try again."
-      );
+      // Parse error message
+      let errorMsg = "Invalid credentials. Please try again.";
+
+      if (err.response?.data) {
+        const data = err.response.data;
+        if (typeof data === "string") {
+          errorMsg = data;
+        } else if (data.detail) {
+          if (typeof data.detail === "string") {
+            errorMsg = data.detail;
+          } else if (data.detail.detail) {
+            errorMsg = data.detail.detail;
+          } else if (data.detail.code) {
+            // Map error codes to user-friendly messages
+            const errorMessages: { [key: string]: string } = {
+              invalid_credentials: "Invalid email or password",
+              inactive_user: "Your account is inactive. Contact administrator.",
+              invalid_token: "Session expired. Please login again.",
+            };
+            errorMsg = errorMessages[data.detail.code] || data.detail.code;
+          }
+        }
+      } else if (err.message) {
+        errorMsg = err.message;
+      }
+
+      setError(errorMsg);
     } finally {
       setLoading(false);
     }
@@ -83,14 +120,6 @@ export const DoctorLogin = () => {
               {loading ? "Signing in..." : "Sign In as Doctor"}
             </Button>
           </form>
-          <div className="mt-4 text-center text-sm text-muted-foreground">
-            <p>
-              Admin?{" "}
-              <a href="/login/admin" className="text-primary hover:underline">
-                Login here
-              </a>
-            </p>
-          </div>
         </CardContent>
       </Card>
     </div>
