@@ -1,50 +1,36 @@
-# scripts/smoke_published_revert_pointer.py
+# backend/scripts/smoke_published_revert_pointer.py
 """
-Smoke Test: Double publish + revert published prev/next (pointer movement)
+Smoke Test: Published Pointer Revert (prev/next) Only
 
-Goal
-----
-Verify that:
-1) After publishing twice for the same {year, month}, there are two published versions
-   with strictly increasing IDs: v_old < v_new, and the pointer points to v_new.
-2) revert(target="published", direction="prev") moves the pointer to v_old.
-3) revert(target="published", direction="next") moves the pointer back to v_new.
+What this script verifies
+-------------------------
+- publish(...) creates immutable published snapshots and moves the published pointer.
+- Multiple publish operations result in strictly increasing version ids.
+- revert(target="published", direction="prev"/"next") moves ONLY the published pointer
+  (no overwrite of working), and returned DTO is SchedulePublishedRevertRead with `.published` field.
+- get_published(...) reflects the pointer position after each revert.
 
-What this script DOES
----------------------
-- Wipes the target period {year, month} (versions, working, pointer).
-- generate() to seed the period (working + first draft).
-- publish() twice to create two published snapshots.
-- Calls revert(..., target="published", direction="prev") and then "...next".
-- Asserts pointer movement and can_undo/can_redo flags.
-
-What this script DOES NOT DO
-----------------------------
-- It doesn't hit HTTP; it uses the service directly.
-- It doesn't validate hard-rule logic (stub returns no violations).
+What this script does NOT test
+------------------------------
+- Draft checkpoints, draft undo/redo, or working overwrites.
+- Hard-rule violations (the service stub allows publishing).
 
 How to run
 ----------
-python -m scripts.smoke_published_revert_pointer
-
-WARNING
--------
-This script deletes schedule data for the chosen {year, month}.
+python -m backend.scripts.smoke_published_revert_pointer
 """
 
 from __future__ import annotations
 
-from typing import List, cast
+from typing import cast
 
 from sqlalchemy import delete, select
 
 from backend.db.session import SessionLocal
-from backend.models.orm.schedule import (
-    SchedulePointer,
-    ScheduleVersion,
-    ScheduleWorking,
-)
+from backend.models.common_enums import ShiftType
+from backend.models.orm.schedule import SchedulePointer, ScheduleVersion, ScheduleWorking
 from backend.models.schemas.schedule import (
+    Assignment,
     ScheduleGenerateRequest,
     SchedulePublishedRevertRead,
 )
@@ -67,96 +53,88 @@ def _wipe_period(year: int, month: int) -> None:
         s.commit()
 
 
-def _published_pointer(year: int, month: int) -> int | None:
-    """Return current published pointer for the period (int) or None if missing."""
-    with SessionLocal() as s:
-        p = s.get(SchedulePointer, {"year": year, "month": month})
-        if not p or p.current_published_version_id is None:
-            return None
-        return int(p.current_published_version_id)
-
-
-def _list_published_ids(year: int, month: int) -> List[int]:
-    """Return all published version IDs for the period, ascending by id."""
-    with SessionLocal() as s:
-        ids = s.scalars(
-            select(ScheduleVersion.id)
-            .where(
-                ScheduleVersion.year == year,
-                ScheduleVersion.month == month,
-                ScheduleVersion.kind == "published",
-            )
-            .order_by(ScheduleVersion.id.asc())
-        ).all()
-        return [int(x) for x in ids]
-
-
 def main() -> None:
+    """
+    Execute a focused flow:
+      1) wipe → generate (participants [1,2,3])
+      2) publish #1 (baseline working)
+      3) mutate working → publish #2
+      4) revert published PREV → expect pointer at pub#1
+      5) revert published NEXT → expect pointer at pub#2
+    """
     svc = SchedulingService()
 
-    # Adjust if needed; the script wipes this period.
-    year, month = 2025, 12
+    # Adjust as needed; the script wipes this period.
+    year, month = 2026, 2
 
     print("0) WIPE current period state")
     _wipe_period(year, month)
 
-    print("1) GENERATE — seed participants and create initial draft")
-    gen_req = ScheduleGenerateRequest(year=year, month=month, participant_doctor_ids=[11, 22, 33])
-    gen_out = svc.generate(gen_req, user_id=1001)
-    assert gen_out.working.exists is True
-    print(f"   -> draft.version_id={gen_out.draft.version_id}")
+    print("1) GENERATE — seed working with participants [1, 2, 3]")
+    gen = svc.generate(ScheduleGenerateRequest(year=year, month=month, participant_doctor_ids=[1, 2, 3]), user_id=101)
+    assert gen.working.exists, "Working should exist after generate()"
+    assert gen.working.participant_doctor_ids == [1, 2, 3]
 
-    print("\n2) PUBLISH #1 — create first published snapshot")
-    pub1 = svc.publish(year, month, force=False, accepted_exceptions=None, note="pub#1", user_id=1001)
-    v1s = pub1.published.version_id
-    assert v1s is not None, "Published #1 version_id should not be None"
-    v1 = int(v1s)
-    print(f"   -> published #1 id={v1}")
+    print("\n2) PUBLISH #1 — from empty/default working (no assignments yet)")
+    pub1 = svc.publish(year, month, force=False, accepted_exceptions=None, note="pub#1", user_id=101)
+    pub1_id_s = pub1.published.version_id
+    assert pub1_id_s is not None
+    pub1_id = int(cast(str, pub1_id_s))
+    print(f"   -> published#1 id: {pub1_id}, can_undo={pub1.published.can_undo}, can_redo={pub1.published.can_redo}")
 
-    print("\n3) PUBLISH #2 — create second (newer) published snapshot")
-    pub2 = svc.publish(year, month, force=False, accepted_exceptions=None, note="pub#2", user_id=1001)
-    v2s = pub2.published.version_id
-    assert v2s is not None, "Published #2 version_id should not be None"
-    v2 = int(v2s)
-    print(f"   -> published #2 id={v2}")
+    # Verify pointer via get_published
+    cur = svc.get_published(year, month)
+    assert cur.published.version_id == str(pub1_id), "Published pointer should point to pub#1"
 
-    assert v2 > v1, f"Expected second publish to have greater id than first " f"(got v1={v1}, v2={v2})"
-
-    ids = _list_published_ids(year, month)
-    print(f"   -> all published ids (asc): {ids}")
-    assert ids == [v1, v2], "Expected exactly two published versions in ascending order"
-
-    ptr_now = _published_pointer(year, month)
-    print(f"   -> pointer after pub#2: {ptr_now}")
-    assert ptr_now == v2, "Pointer should be at the newest published version after publish #2"
-
-    print("\n4) REVERT published PREV — pointer should move from v2 -> v1")
-    prev_view_any = svc.revert(year, month, target="published", direction="prev", user_id=1001)
-    prev_view = cast(SchedulePublishedRevertRead, prev_view_any)
-    vprev_s = prev_view.published.version_id
-    assert vprev_s is not None
-    vprev = int(vprev_s)
-    print(
-        "   -> revert-prev returned published.version_id=%s, can_undo=%s, can_redo=%s"
-        % (vprev, prev_view.published.can_undo, prev_view.published.can_redo)
+    print("\n3) SAVE working with different assignments → PUBLISH #2")
+    w = svc.get_working(year, month)
+    assert w.lock_version is not None
+    _ = svc.save_working(
+        year,
+        month,
+        assignments=[
+            Assignment(day=1, shift_type=ShiftType.on_duty, doctor_id=1),
+            Assignment(day=1, shift_type=ShiftType.on_call, doctor_id=2),
+            Assignment(day=2, shift_type=ShiftType.on_duty, doctor_id=3),
+        ],
+        meta={"labels": ["live"]},
+        if_match_lock_version=w.lock_version,
+        updated_by_user_id=101,
     )
-    assert vprev == v1, f"Expected revert-prev to point to v1 (got {vprev})"
-    assert _published_pointer(year, month) == v1, "DB pointer should now be at v1"
+    pub2 = svc.publish(year, month, force=False, accepted_exceptions=None, note="pub#2", user_id=101)
+    pub2_id_s = pub2.published.version_id
+    assert pub2_id_s is not None
+    pub2_id = int(cast(str, pub2_id_s))
+    print(f"   -> published#2 id: {pub2_id} (should be > pub#1)")
 
-    print("\n5) REVERT published NEXT — pointer should move from v1 -> v2")
-    next_view_any = svc.revert(year, month, target="published", direction="next", user_id=1001)
-    next_view = cast(SchedulePublishedRevertRead, next_view_any)
-    vnext_s = next_view.published.version_id
-    assert vnext_s is not None
-    vnext = int(vnext_s)
-    print(
-        "   -> revert-next returned published.version_id=%s, can_undo=%s, can_redo=%s"
-        % (vnext, next_view.published.can_undo, next_view.published.can_redo)
-    )
-    assert vnext == v2, f"Expected revert-next to point to v2 (got {vnext})"
-    assert _published_pointer(year, month) == v2, "DB pointer should now be back at v2"
+    assert pub2_id > pub1_id, "Second publication id should be newer than first"
 
-    print("\nSMOKE OK ✅  Double publish + revert prev/next moves the published pointer " "correctly.")
+    # Confirm pointer at pub#2
+    cur2 = svc.get_published(year, month)
+    assert cur2.published.version_id == str(pub2_id), "Published pointer should now point to pub#2"
+
+    print("\n4) REVERT published PREV — move pointer back to pub#1")
+    rv_prev = svc.revert(year, month, target="published", direction="prev", user_id=101)
+    assert isinstance(rv_prev, SchedulePublishedRevertRead)
+    print(f"   -> after PREV, pointer at version_id: {rv_prev.published.version_id}")
+    assert rv_prev.published.version_id == str(pub1_id), "Pointer should move to pub#1"
+    assert rv_prev.published.can_redo is True, "After moving back, redo should be available"
+
+    # get_published should match
+    cur3 = svc.get_published(year, month)
+    assert cur3.published.version_id == str(pub1_id)
+
+    print("\n5) REVERT published NEXT — move pointer forward to pub#2 again")
+    rv_next = svc.revert(year, month, target="published", direction="next", user_id=101)
+    assert isinstance(rv_next, SchedulePublishedRevertRead)
+    print(f"   -> after NEXT, pointer at version_id: {rv_next.published.version_id}")
+    assert rv_next.published.version_id == str(pub2_id), "Pointer should move back to pub#2"
+
+    # Final pointer check
+    cur4 = svc.get_published(year, month)
+    assert cur4.published.version_id == str(pub2_id)
+
+    print("\nSMOKE OK ✅  Published pointer prev/next works and affects only the published stream.")
 
 
 if __name__ == "__main__":

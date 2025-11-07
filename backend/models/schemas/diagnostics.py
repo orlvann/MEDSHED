@@ -57,7 +57,15 @@ class DiagnosticsSummary(BaseModel):
 
 
 def _make_diag_summary() -> "DiagnosticsSummary":
-    return DiagnosticsSummary()
+    # Provide explicit defaults to satisfy static type checker (Pylance),
+    # even though Pydantic would accept a no-arg constructor.
+    return DiagnosticsSummary(
+        penalty_total=0,
+        understaffed_days=0,
+        rest_violations=0,
+        fairness_index=1.0,
+        preference_fulfillment_pct=100.0,
+    )
 
 
 class DiagnosticsRead(BaseModel):
