@@ -41,32 +41,25 @@ from typing import cast
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Path, status
 
-from backend.models.common_enums import PeriodStatus
-from backend.models.schemas.diagnostics import DiagnosticsRead
 from backend.models.schemas.dto_common import make_error
 from backend.models.schemas.schedule import (
     MyAssignmentsRead,
     ScheduleCheckpointCreated,
     ScheduleCheckpointRequest,
-    ScheduleDraftView,
     ScheduleGenerateCreated,
     ScheduleGenerateRequest,
-    SchedulePayload,
     SchedulePublishCreated,
     SchedulePublishedRead,
     SchedulePublishedRevertRead,
-    SchedulePublishedView,
     SchedulePublishRequest,
     ScheduleRevertRead,
     SchedulesPeriodViewRead,
     ScheduleWorkingAck,
     ScheduleWorkingPut,
     ScheduleWorkingRead,
-    _ViewHint,
 )
 from backend.routers.deps import UserCtx, require_admin, require_doctor
 from backend.services import SchedulingService
-from backend.utils import ORG_TZ, get_period_status, now_utc
 
 router = APIRouter(prefix="/api/v1/schedules")
 svc = SchedulingService()
@@ -119,7 +112,7 @@ def generate_schedule(
     "/{year}/{month}",
     response_model=SchedulesPeriodViewRead,
     tags=["schedules:admin"],
-    summary="Period view (working + pointers + diagnostics) — MVP synthetic",
+    summary="Period view (working + pointers + diagnostics) — service-built",
 )
 def schedules_period_view(
     year: int = Path(..., ge=1900, le=2100),
@@ -127,67 +120,10 @@ def schedules_period_view(
     user: UserCtx = Depends(require_admin),
 ) -> SchedulesPeriodViewRead:
     """
-    Return a unified period view for Admin tab.
-    - When nothing exists yet: show a skeleton (exists=False, pointers empty).
-    - When working exists: show a synthetic draft + deterministic diagnostics (MVP).
+    Thin router: delegate composition to SchedulingService.get_period_view.
     """
     try:
-        working: ScheduleWorkingRead = svc.get_working(year, month)
-        period_status = PeriodStatus(get_period_status(year, month))
-        view_hint = _ViewHint(default_mode="draft", toggle_available=True)
-
-        if not working.exists:
-            # Empty skeleton
-            return SchedulesPeriodViewRead(
-                year=year,
-                month=month,
-                org_timezone=ORG_TZ,
-                period_status=period_status,
-                view=view_hint,
-                working=working,
-                draft=ScheduleDraftView(),
-                published=SchedulePublishedView(),
-                diagnostics=None,
-            )
-
-        # Synthetic draft view to preview shapes in MVP
-        draft_payload = SchedulePayload.model_validate(
-            {
-                "participant_doctor_ids": working.participant_doctor_ids,
-                "assignments": working.assignments,
-                "meta": working.meta,
-            }
-        )
-        diagnostics = DiagnosticsRead.model_validate(
-            {
-                "version_id": "schv_synthetic_draft",
-                "computed_at": now_utc(),
-                "summary": {
-                    "penalty_total": 0,
-                    "understaffed_days": 0,
-                    "rest_violations": 0,
-                    "fairness_index": 1.0,
-                    "preference_fulfillment_pct": 100.0,
-                },
-            }
-        )
-        return SchedulesPeriodViewRead(
-            year=year,
-            month=month,
-            org_timezone=ORG_TZ,
-            period_status=period_status,
-            view=view_hint,
-            working=working,
-            draft=ScheduleDraftView(
-                version_id="schv_synthetic_draft",
-                checkpoints_count=1,
-                can_undo=False,
-                can_redo=False,
-                payload=draft_payload,
-            ),
-            published=SchedulePublishedView(),  # no live data in MVP preview
-            diagnostics=diagnostics,
-        )
+        return svc.get_period_view(year, month)
     except ValueError as e:
         _raise(e)
         assert False

@@ -70,10 +70,12 @@ from backend.models.schemas.schedule import (
     SchedulePublishedRevertRead,
     SchedulePublishedView,
     ScheduleRevertRead,
+    SchedulesPeriodViewRead,
     ScheduleWorkingAck,
     ScheduleWorkingRead,
+    _ViewHint,
 )
-from backend.utils import get_period_status, normalize_assignments, normalize_meta, now_utc
+from backend.utils import ORG_TZ, get_period_status, normalize_assignments, normalize_meta, now_utc
 
 # Retention policy (FIFO): tune here
 # Change these to keep more/fewer historical snapshots.
@@ -1015,6 +1017,8 @@ class SchedulingService:
             ptr.current_published_version_id = vid
             session.add(ptr)
 
+            _compute_or_upsert_diagnostics(session, vid, payload)
+
             _prune_published(
                 session, year, month, keep_last=RETAIN_LAST_PUBLISHED
             )  # no-op for now; retention policy to be defined
@@ -1070,4 +1074,97 @@ class SchedulingService:
                     count=publications_total,  # lub max(... - 1, 0) — jeśli chcesz "poza headem"
                     audit={"published_at": ver.created_at},
                 ),
+            )
+
+    def get_period_view(self, year: int, month: int) -> SchedulesPeriodViewRead:
+        """
+        Build a unified Period View for Admin tab.
+
+        Policy:
+        - Skeleton when nothing exists.
+        - Always include 'working' if present.
+        - Include DRAFT view only when a draft pointer exists (no synthetic draft here).
+        - Include PUBLISHED view only when a published pointer exists.
+        - Include diagnostics only when we have a real draft version_id (pointer-based).
+
+        Router stays thin: it should just call this method and map errors.
+        """
+        with SessionLocal() as session:
+            period_status = PeriodStatus(get_period_status(year, month))
+            view_hint = _ViewHint(default_mode="draft", toggle_available=True)
+
+            # Working (explicit read; may return skeleton with exists=False)
+            working = _read_working_read(session, year, month)
+
+            # Pointers (may be None)
+            ptr = session.get(SchedulePointer, {"year": year, "month": month})
+
+            # Early skeleton: no working and no pointers at all
+            no_draft_ptr = not ptr or ptr.current_draft_version_id is None
+            no_pub_ptr = not ptr or ptr.current_published_version_id is None
+            if (not working.exists) and no_draft_ptr and no_pub_ptr:
+                return SchedulesPeriodViewRead(
+                    year=year,
+                    month=month,
+                    org_timezone=ORG_TZ,
+                    period_status=period_status,
+                    view=view_hint,
+                    working=working,
+                    draft=ScheduleDraftView(),  # empty
+                    published=SchedulePublishedView(),  # empty
+                    diagnostics=None,
+                )
+
+            # Build DRAFT (only if a real draft pointer exists)
+            draft_view = ScheduleDraftView()
+            diagnostics: DiagnosticsRead | None = None
+            if ptr and ptr.current_draft_version_id is not None:
+                did = int(ptr.current_draft_version_id)
+                ver = session.get(ScheduleVersion, did)
+                if ver is None:
+                    raise ValueError("not_found")
+
+                drafts_total = _drafts_total(session, year, month)
+                has_prev, has_next = _draft_neighbors(session, year, month, did)
+
+                draft_view = _draft_view(
+                    did,
+                    ver.payload,
+                    can_undo=has_prev,
+                    can_redo=has_next,
+                    count=drafts_total,
+                )
+                # Diagnostics only when draft pointer exists
+                diagnostics = _compute_or_upsert_diagnostics(session, did, ver.payload)
+
+            # Build PUBLISHED (only if published pointer exists)
+            published_view = SchedulePublishedView()
+            if ptr and ptr.current_published_version_id is not None:
+                pid = int(ptr.current_published_version_id)
+                verp = session.get(ScheduleVersion, pid)
+                if verp is None:
+                    raise ValueError("not_found")
+
+                pubs_total = _published_total(session, year, month)
+                has_prev_p, has_next_p = _published_neighbors(session, year, month, pid)
+
+                published_view = _published_view(
+                    pid,
+                    verp.payload,
+                    can_undo=has_prev_p,
+                    can_redo=has_next_p,
+                    count=pubs_total,
+                    audit={"published_at": verp.created_at},
+                )
+
+            return SchedulesPeriodViewRead(
+                year=year,
+                month=month,
+                org_timezone=ORG_TZ,
+                period_status=period_status,
+                view=view_hint,
+                working=working,
+                draft=draft_view,
+                published=published_view,
+                diagnostics=diagnostics,  # None when no draft pointer
             )
