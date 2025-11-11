@@ -1116,6 +1116,53 @@ class SchedulingService:
             )
 
     @_translate_sqla_errors
+    def get_diagnostics(self, year: int, month: int, *, target: Literal["draft", "published"]) -> DiagnosticsRead:
+        """
+        Return diagnostics for the current draft/published pointer of {year, month}.
+
+        Steps:
+        1) Load the pointer row for the period.
+        2) Resolve version_id for the selected target ("draft" or "published").
+        3) Compute or refresh cached diagnostics for that version (idempotent).
+        4) Return DiagnosticsRead DTO.
+
+        MVP behavior:
+        - Resolve {year, month, target} -> pointer -> version_id.
+        - If diagnostics cache is missing or stale, compute and upsert before returning.
+        - Summary KPIs only; 'details' remains None in MVP.
+
+        Post-MVP roadmap (keep comments concise in code; full text lives in docs/api-contract-v1.md):
+        - Strongly typed 'details' sections (coverage, preferences, fairness, partnering, visuals, suggestions).
+        - Optional endpoints:
+            GET  /api/v1/schedules/{y}/{m}/diagnostics/details?target=...
+            POST /api/v1/schedules/{y}/{m}/diagnostics/recompute?target=...
+        - Optional links to CSV/JSON exports for heavy data.
+        """
+        with SessionLocal() as session:
+            # Load or init pointer for the period
+            ptr = session.get(SchedulePointer, {"year": year, "month": month})
+            if not ptr:
+                # No pointer row at all -> no versions exist yet
+                raise ValueError("not_found")
+
+            # Resolve version_id from the selected stream
+            vid = ptr.current_draft_version_id if target == "draft" else ptr.current_published_version_id
+            if vid is None:
+                # Selected stream doesn't exist for this period
+                raise ValueError("not_found")
+
+            # Load the pointed version snapshot
+            ver = session.get(ScheduleVersion, int(vid))
+            if ver is None:
+                # Dangling pointer (DB inconsistency) — treat as not_found
+                raise ValueError("not_found")
+
+            # Compute or refresh diagnostics cache and return DTO
+            diag = _compute_or_upsert_diagnostics(session, int(vid), ver.payload)
+            session.commit()
+            return diag
+
+    @_translate_sqla_errors
     def get_period_view(self, year: int, month: int) -> SchedulesPeriodViewRead:
         """
         Build a unified Period View for Admin tab.
@@ -1126,23 +1173,30 @@ class SchedulingService:
         - Include DRAFT view only when a draft pointer exists (no synthetic draft here).
         - Include PUBLISHED view only when a published pointer exists.
         - Include diagnostics only when we have a real draft version_id (pointer-based).
-
-        Router stays thin: it should just call this method and map errors.
+        - Toggle logic:
+          * default_mode="published" if draft pointer is missing but published exists; else "draft".
+          * toggle_available=True only if both draft and published pointers exist.
         """
         with SessionLocal() as session:
             period_status = PeriodStatus(get_period_status(year, month))
-            view_hint = _ViewHint(default_mode="draft", toggle_available=True)
 
             # Working (explicit read; may return skeleton with exists=False)
             working = _read_working_read(session, year, month)
 
             # Pointers (may be None)
             ptr = session.get(SchedulePointer, {"year": year, "month": month})
+            has_draft_ptr = bool(ptr and ptr.current_draft_version_id is not None)
+            has_pub_ptr = bool(ptr and ptr.current_published_version_id is not None)
+
+            # View hint (toggle + default mode) computed from pointers:
+            # - default to "published" only when draft pointer is missing and published exists
+            # - toggle only when both streams exist
+            default_mode = "published" if (not has_draft_ptr and has_pub_ptr) else "draft"
+            toggle_available = bool(has_draft_ptr and has_pub_ptr)
+            view_hint = _ViewHint(default_mode=default_mode, toggle_available=toggle_available)
 
             # Early skeleton: no working and no pointers at all
-            no_draft_ptr = not ptr or ptr.current_draft_version_id is None
-            no_pub_ptr = not ptr or ptr.current_published_version_id is None
-            if (not working.exists) and no_draft_ptr and no_pub_ptr:
+            if (not working.exists) and not has_draft_ptr and not has_pub_ptr:
                 return SchedulesPeriodViewRead(
                     year=year,
                     month=month,
@@ -1158,8 +1212,8 @@ class SchedulingService:
             # Build DRAFT (only if a real draft pointer exists)
             draft_view = ScheduleDraftView()
             diagnostics: DiagnosticsRead | None = None
-            if ptr and ptr.current_draft_version_id is not None:
-                did = int(ptr.current_draft_version_id)
+            if has_draft_ptr:
+                did = int(ptr.current_draft_version_id)  # type: ignore[union-attr]
                 ver = session.get(ScheduleVersion, did)
                 if ver is None:
                     raise ValueError("not_found")
@@ -1174,13 +1228,14 @@ class SchedulingService:
                     can_redo=has_next,
                     count=drafts_total,
                 )
-                # Diagnostics only when draft pointer exists
+
+                # Diagnostics only when draft pointer exists (period view shows draft KPIs)
                 diagnostics = _compute_or_upsert_diagnostics(session, did, ver.payload)
 
             # Build PUBLISHED (only if published pointer exists)
             published_view = SchedulePublishedView()
-            if ptr and ptr.current_published_version_id is not None:
-                pid = int(ptr.current_published_version_id)
+            if has_pub_ptr:
+                pid = int(ptr.current_published_version_id)  # type: ignore[union-attr]
                 verp = session.get(ScheduleVersion, pid)
                 if verp is None:
                     raise ValueError("not_found")

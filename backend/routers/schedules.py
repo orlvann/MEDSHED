@@ -37,12 +37,13 @@
 
 from __future__ import annotations
 
-from typing import cast
+from typing import Literal, cast
 
-from fastapi import APIRouter, Body, Depends, HTTPException, Path, status
+from fastapi import APIRouter, Body, Depends, HTTPException, Path, Query, status
 
 from backend.models.schemas.dto_common import make_error
 from backend.models.schemas.schedule import (
+    DiagnosticsRead,
     MyAssignmentsRead,
     ScheduleCheckpointCreated,
     ScheduleCheckpointRequest,
@@ -107,6 +108,45 @@ def generate_schedule(
         assert False  # for type checker
 
 
+# --------------------------- ADMIN: diagnostics --------------------------
+@router.get(
+    "/{year}/{month}/diagnostics",
+    response_model=DiagnosticsRead,
+    summary="Diagnostics for draft or published (per pointer)",
+    operation_id="schedules_diagnostics_get",
+)
+def schedules_diagnostics(
+    user: UserCtx = Depends(require_admin),  # RBAC: admin only (dopasuj do swojej polityki)
+    year: int = Path(..., ge=1900, le=2100, description="Calendar year"),
+    month: int = Path(..., ge=1, le=12, description="Month 1..12"),
+    target: Literal["draft", "published"] = Query(..., description="Which pointer to use"),
+):
+    """
+    Thin router layer: call SchedulingService (source of truth for pointers).
+
+    MVP behavior:
+    - Resolve {year, month, target} → pointer → version_id.
+    - Compute or refresh cached diagnostics for that version (current MVP returns zeros).
+    - Return compact DiagnosticsRead (summary KPIs; 'details' is None in MVP).
+    """
+    svc = SchedulingService()
+    try:
+        return svc.get_diagnostics(year=year, month=month, target=target)
+    except ValueError as e:
+        # Map domain errors to HTTP
+        code = str(e)
+        if code in {"not_found"}:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=make_error("not_found", context={"year": year, "month": month, "target": target}),
+            )
+        # Fallback: 400 for unexpected domain codes (shouldn't happen in MVP)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=make_error(code or "bad_request"),
+        )
+
+
 # --------------------------- ADMIN: period view (MVP) --------------------------
 @router.get(
     "/{year}/{month}",
@@ -121,6 +161,7 @@ def schedules_period_view(
 ) -> SchedulesPeriodViewRead:
     """
     Thin router: delegate composition to SchedulingService.get_period_view.
+    Router no longer composes the view; it calls the service and maps errors.
     """
     try:
         return svc.get_period_view(year, month)
