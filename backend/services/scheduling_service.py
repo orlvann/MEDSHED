@@ -43,9 +43,13 @@ This module keeps routers thin. All domain rules live here.
 from __future__ import annotations
 
 from datetime import datetime
+from functools import wraps
 from typing import Any, Dict, List, Literal, Optional, cast
 
 from sqlalchemy import delete, func, select
+
+# SQLAlchemy exception classes for translation.
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from backend.db.session import SessionLocal
@@ -81,6 +85,32 @@ from backend.utils import ORG_TZ, get_period_status, normalize_assignments, norm
 # Change these to keep more/fewer historical snapshots.
 RETAIN_LAST_DRAFTS = 5
 RETAIN_LAST_PUBLISHED = 5
+
+
+def _translate_sqla_errors(func):
+    """
+    Decorator that converts raw SQLAlchemy exceptions into our domain ValueError codes.
+    Rules:
+      - IntegrityError -> ValueError("edit_conflict")
+      - Any other SQLAlchemyError -> ValueError("not_found")
+      - Domain ValueError passes through unchanged (we don't touch it).
+    """
+
+    @wraps(func)
+    def _wrapped(*args, **kwargs):
+        try:
+            return func(*args, **kwargs)
+        except ValueError:
+            # domain errors are already correct; let the router map them.
+            raise
+        except IntegrityError:
+            # treat integrity/unique/OCC-like DB issues as edit conflicts.
+            raise ValueError("edit_conflict")
+        except SQLAlchemyError:
+            # safe fallback for DB-layer problems that should not leak details.
+            raise ValueError("not_found")
+
+    return _wrapped
 
 
 # -------------------------- period edit-window helper --------------------------
@@ -559,6 +589,9 @@ class SchedulingService:
     """
 
     # ------------------------------ Working -----------------------------------
+    @_translate_sqla_errors
+    # Decorator: wraps this method and translates raw SQLAlchemy exceptions into our domain ValueError codes
+    # (e.g., "edit_conflict", "not_found"), so DB internals don’t leak past the service layer.
     def get_working(self, year: int, month: int) -> ScheduleWorkingRead:
         """
         Read the current working buffer or return a skeleton if it doesn't exist.
@@ -566,6 +599,7 @@ class SchedulingService:
         with SessionLocal() as session:
             return _read_working_read(session, year, month)
 
+    @_translate_sqla_errors
     def save_working(
         self,
         year: int,
@@ -643,6 +677,7 @@ class SchedulingService:
             return ScheduleWorkingAck(year=year, month=month, updated_at=updated_at_dt, lock_version=lv)
 
     # ------------------------------ Generate ----------------------------------
+    @_translate_sqla_errors
     def generate(self, req: ScheduleGenerateRequest, *, user_id: Optional[int]) -> ScheduleGenerateCreated:
         """
         Generate (MVP): seed working with meta + empty assignments and create first draft version.
@@ -725,6 +760,7 @@ class SchedulingService:
             )
 
     # ------------------------------ Checkpoint --------------------------------
+    @_translate_sqla_errors
     def checkpoint(
         self, year: int, month: int, *, note: Optional[str], user_id: Optional[int]
     ) -> ScheduleCheckpointCreated:
@@ -797,6 +833,7 @@ class SchedulingService:
             )
 
     # ------------------------------ Revert/Redo --------------------------------
+    @_translate_sqla_errors
     def revert(
         self,
         year: int,
@@ -951,6 +988,7 @@ class SchedulingService:
             )
 
     # -------------------------------- Publish ---------------------------------
+    @_translate_sqla_errors
     def publish(
         self,
         year: int,
@@ -1043,6 +1081,7 @@ class SchedulingService:
             )
 
     # ----------------------------- Read: Published -----------------------------
+    @_translate_sqla_errors
     def get_published(self, year: int, month: int) -> SchedulePublishedRead:
         """
         Read the current published snapshot (pointer-based).
@@ -1076,6 +1115,7 @@ class SchedulingService:
                 ),
             )
 
+    @_translate_sqla_errors
     def get_period_view(self, year: int, month: int) -> SchedulesPeriodViewRead:
         """
         Build a unified Period View for Admin tab.
