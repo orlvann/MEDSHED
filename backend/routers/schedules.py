@@ -37,13 +37,13 @@
 
 from __future__ import annotations
 
-from typing import Literal, cast
+from typing import Literal, Optional, cast
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Path, Query, status
 
+from backend.models.schemas.diagnostics import DiagnosticsRead
 from backend.models.schemas.dto_common import make_error
 from backend.models.schemas.schedule import (
-    DiagnosticsRead,
     MyAssignmentsRead,
     ScheduleCheckpointCreated,
     ScheduleCheckpointRequest,
@@ -112,6 +112,7 @@ def generate_schedule(
 @router.get(
     "/{year}/{month}/diagnostics",
     response_model=DiagnosticsRead,
+    tags=["schedules:admin"],
     summary="Diagnostics for draft or published (per pointer)",
     operation_id="schedules_diagnostics_get",
 )
@@ -129,22 +130,16 @@ def schedules_diagnostics(
     - Compute or refresh cached diagnostics for that version (current MVP returns zeros).
     - Return compact DiagnosticsRead (summary KPIs; 'details' is None in MVP).
     """
-    svc = SchedulingService()
     try:
         return svc.get_diagnostics(year=year, month=month, target=target)
     except ValueError as e:
-        # Map domain errors to HTTP
         code = str(e)
         if code in {"not_found"}:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=make_error("not_found", context={"year": year, "month": month, "target": target}),
             )
-        # Fallback: 400 for unexpected domain codes (shouldn't happen in MVP)
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=make_error(code or "bad_request"),
-        )
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=make_error(code or "bad_request"))
 
 
 # --------------------------- ADMIN: period view (MVP) --------------------------
@@ -374,6 +369,35 @@ def schedules_published_redo(
     except ValueError as e:
         _raise(e)
         assert False
+
+
+# --------------------------- EXPORT ----------------------------
+@router.get(
+    "/export",
+    tags=["schedules:export"],
+    summary="Unified export for admins & doctors (pointer-based, xlsx/pdf/ics)",
+    operation_id="schedules_export_get",
+)
+def schedules_export(
+    year: int = Query(..., ge=1900, le=2100, description="Calendar year"),
+    month: int = Query(..., ge=1, le=12, description="Month 1..12"),
+    mode: Literal["draft", "published"] = Query(..., description="Which stream to export"),
+    format: Literal["xlsx", "pdf", "ics"] = Query(..., description="Export format"),
+    doctor_id: Optional[int] = Query(None, ge=1, description="Required for ICS (admin may choose a doctor)"),
+    user: UserCtx = Depends(require_admin),  # TODO: unify with doctor path rules
+):
+    """
+    Export placeholder.
+
+    IMPORTANT:
+    - Keep the path relative ("/export") because router has the prefix "/api/v1/schedules".
+    - Tag "schedules:export" creates a separate visual section in Swagger.
+
+    TODO:
+    - Implement RBAC rules from API contract (doctors vs admins, ics rules).
+    - Stream file with correct headers.
+    """
+    raise HTTPException(status_code=status.HTTP_501_NOT_IMPLEMENTED, detail=make_error("not_implemented"))
 
 
 # --------------------------- DOCTOR: read published ----------------------------
