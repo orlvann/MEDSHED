@@ -36,12 +36,20 @@ class PeriodStatus(str, Enum):
     future = "future"
 
 
+class DeadlineStatus(str, Enum):
+    """Deadline state for monthly preference forms."""
+
+    open = "open"
+    locked = "locked"
+
+
 class RiskLevel(str, Enum):
     ok = "ok"
     alert = "alert"
     critical = "critical"
 
 
+# Optional (helps diagnostics payloads)
 class VersionKind(str, Enum):
     draft_checkpoint = "draft_checkpoint"
     published = "published"

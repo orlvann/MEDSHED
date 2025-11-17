@@ -150,7 +150,7 @@ class PreferenceDeadline(Base):
 
     year: Mapped[int] = mapped_column(Integer, nullable=False)
     month: Mapped[int] = mapped_column(Integer, nullable=False)
-    deadline_utc: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    deadline_utc: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     org_timezone: Mapped[str] = mapped_column(
         String(64), nullable=False, default="Europe/Warsaw", server_default="Europe/Warsaw"
     )

@@ -76,3 +76,12 @@ def require_doctor(user: UserCtx = Depends(get_current_user)) -> UserCtx:
             detail=make_error("forbidden"),
         )
     return user
+
+
+def require_user(user: UserCtx = Depends(get_current_user)) -> UserCtx:
+    """
+    Generic guard: any authenticated user (admin or doctor).
+
+    Used for read-only endpoints that are safe for both roles.
+    """
+    return user
