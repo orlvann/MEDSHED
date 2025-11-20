@@ -26,7 +26,7 @@ def upgrade() -> None:
         sa.Column("id", sa.Integer(), autoincrement=True, nullable=False),
         sa.Column("year", sa.Integer(), nullable=False),
         sa.Column("month", sa.Integer(), nullable=False),
-        sa.Column("deadline_utc", sa.DateTime(), nullable=False),
+        sa.Column("deadline_utc", sa.DateTime(timezone=True), nullable=False),
         sa.Column("org_timezone", sa.String(length=64), server_default="Europe/Warsaw", nullable=False),
         sa.CheckConstraint("month >= 1 AND month <= 12", name="ck_deadline_month_range"),
         sa.CheckConstraint("year >= 1900 AND year <= 2100", name="ck_deadline_year_range"),
@@ -35,7 +35,7 @@ def upgrade() -> None:
     )
     op.create_table(
         "preferences_versions",
-        sa.Column("version_id", sa.String(length=64), nullable=False),
+        sa.Column("id", sa.Integer(), autoincrement=True, nullable=False),
         sa.Column("doctor_id", sa.Integer(), nullable=False),
         sa.Column("year", sa.Integer(), nullable=False),
         sa.Column("month", sa.Integer(), nullable=False),
@@ -47,11 +47,12 @@ def upgrade() -> None:
         sa.Column("note", sa.Text(), nullable=True),
         sa.CheckConstraint("month >= 1 AND month <= 12", name="ck_versions_month_range"),
         sa.CheckConstraint("year >= 1900 AND year <= 2100", name="ck_versions_year_range"),
-        sa.PrimaryKeyConstraint("version_id"),
+        sa.PrimaryKeyConstraint("id"),
     )
     op.create_index(op.f("ix_preferences_versions_doctor_id"), "preferences_versions", ["doctor_id"], unique=False)
     op.create_index(op.f("ix_preferences_versions_month"), "preferences_versions", ["month"], unique=False)
     op.create_index(op.f("ix_preferences_versions_year"), "preferences_versions", ["year"], unique=False)
+
     op.create_table(
         "preferences_working",
         sa.Column("id", sa.Integer(), autoincrement=True, nullable=False),
