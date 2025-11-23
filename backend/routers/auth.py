@@ -21,15 +21,19 @@ Error contract:
 - Use dto_common.ErrorPayload {code, detail, context} (e.g., 401 invalid_credentials).
 """
 
-from fastapi import APIRouter, Body, status
+from fastapi import APIRouter, Body, Depends, HTTPException, status
+from sqlalchemy.orm import Session
 
+from backend.db.session import get_db
 from backend.models.schemas import (
     ErrorPayload,  # canonical error shape from common (code/detail/context)
     LoginRequest,
-    Role,
     TokenResponse,
     UserRead,
 )
+from backend.models.schemas.dto_common import make_error
+from backend.routers.deps import UserCtx, get_current_user
+from backend.services import auth_service
 
 router = APIRouter(tags=["auth"])
 
@@ -52,47 +56,82 @@ router = APIRouter(tags=["auth"])
                     }
                 }
             },
+        },
+        403: {
+            "model": ErrorPayload,
+            "description": "User account is inactive",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "code": "inactive_user",
+                        "detail": "User account is inactive",
+                        "context": None,
+                    }
+                }
+            },
         }
     },
 )
-def login(payload: LoginRequest = Body(...)):
+def login(payload: LoginRequest = Body(...), db: Session = Depends(get_db)):
     """
-    Stub: delegate to auth_service.login(payload) and return a TokenResponse.
-    On failure, raise HTTP 401 with ErrorPayload.
-
-    TODO (real impl):
-    - Verify password against stored hash.
-    - Check `users.is_active` (deny login when False).
-    - Issue JWT with proper claims (sub, role, exp, aud, etc.).
+    Authenticate user and issue JWT access token.
+    
+    Verifies:
+    - Email exists
+    - Password is correct
+    - User account is active
+    
+    Returns JWT token on success, raises 401/403 on failure.
     """
-    # Example success (stub)
-    return {
-        "access_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
-        "token_type": "bearer",  # matches TokenResponse definition
-        "role": Role.doctor,
-        "expires_in": 3600,
-    }
+    try:
+        token_response = auth_service.login(db, payload.email, payload.password)
+        return token_response
+    except auth_service.InvalidCredentialsError as e:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=make_error(e.code, detail=e.detail),
+        )
+    except auth_service.InactiveUserError as e:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=make_error(e.code, detail=e.detail),
+        )
 
 
 @router.get(
     "/api/v1/auth/me",
     response_model=UserRead,
-    summary="Get current user",
+    summary="Get current user info",
+    responses={
+        401: {
+            "model": ErrorPayload,
+            "description": "Invalid or expired token",
+        }
+    },
 )
-def me():
+def me(user: UserCtx = Depends(get_current_user), db: Session = Depends(get_db)):
     """
-    Stub: read current user from auth context (e.g., request.state.user)
-    and serialize to UserRead.
-
-    TODO (real impl):
-    - Populate from verified JWT / user lookup.
-    - Ensure timestamps are UTC (ISO 'Z').
+    Get information about the currently authenticated user.
+    
+    Requires valid JWT token in Authorization header.
+    Returns user information from the database.
     """
-    return {
-        "id": 1,
-        "email": "user@example.com",
-        "role": Role.doctor,
-        "is_active": True,
-        "created_at": None,
-        "updated_at": None,
-    }
+    # Fetch full user object from database
+    from backend.models.orm.user import User
+    
+    db_user = db.query(User).filter(User.id == user.user_id).first()
+    
+    if not db_user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=make_error("not_found", "User not found"),
+        )
+    
+    return UserRead(
+        id=db_user.id,
+        email=db_user.email,
+        role=db_user.role,
+        is_active=db_user.is_active,
+        created_at=db_user.created_at,
+        updated_at=db_user.updated_at,
+    )
