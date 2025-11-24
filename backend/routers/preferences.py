@@ -70,6 +70,42 @@ def _guard_doctor_preferences_locked(year: int, month: int, user: UserCtx) -> No
         )
 
 
+def _map_preference_error(exc: ValueError, *, year: int, month: int, doctor_id: int | None) -> None:
+    """
+    Map service-level ValueError codes from preference_service to HTTP errors.
+
+    Known codes:
+      - "cannot_undo" -> 409 Conflict
+      - "cannot_redo" -> 409 Conflict
+
+    We wrap them in our standard error shape via make_error().
+    """
+    code = str(exc)
+
+    if code == "cannot_undo":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=make_error(
+                "cannot_undo",
+                detail="no previous checkpoint to undo for this doctor and period",
+                context={"year": year, "month": month, "doctor_id": doctor_id},
+            ),
+        )
+
+    if code == "cannot_redo":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=make_error(
+                "cannot_redo",
+                detail="no next checkpoint to redo for this doctor and period",
+                context={"year": year, "month": month, "doctor_id": doctor_id},
+            ),
+        )
+
+    # Unknown ValueError — let it bubble up as 500 so we see it in logs.
+    raise exc
+
+
 # ------------------------------------------------------------------------------
 # Deadlines — shared read (admin + doctor) + admin upsert
 # ------------------------------------------------------------------------------
@@ -129,7 +165,7 @@ def preferences_summary(
     "/api/v1/preferences/{year}/{month}/me",
     response_model=PreferenceWorkingRead,
     tags=["preferences:doctor"],
-    summary="Read my preferences (working + hints)",
+    summary="Read my preferences (working copy + status/pointer hints)",
     operation_id="preferences_doctor_me_working_get",
 )
 def me_read_working(
@@ -166,7 +202,7 @@ def me_put_working(
     response_model=PreferenceCheckpointCreated,
     status_code=status.HTTP_201_CREATED,
     tags=["preferences:doctor"],
-    summary="Save (create checkpoint)",
+    summary="Save (create new checkpoint from my current working copy)",
     operation_id="preferences_doctor_me_checkpoint_post",
 )
 def me_create_checkpoint(
@@ -186,7 +222,7 @@ def me_create_checkpoint(
     "/api/v1/preferences/{year}/{month}/me/revert-last",
     response_model=PreferenceRevertRead,
     tags=["preferences:doctor"],
-    summary="UNDO one checkpoint",
+    summary="UNDO: move my form to previous checkpoint and overwrite working",
     operation_id="preferences_doctor_me_revert_last_post",
 )
 def me_revert_last(
@@ -198,14 +234,18 @@ def me_revert_last(
     _guard_doctor_preferences_locked(year, month, user)
 
     doctor_id = user.user_id
-    return revert_last(year=year, month=month, doctor_id=doctor_id, actor=user)
+    try:
+        # Service may raise ValueError("cannot_undo").
+        return revert_last(year=year, month=month, doctor_id=doctor_id, actor=user)
+    except ValueError as exc:
+        _map_preference_error(exc, year=year, month=month, doctor_id=doctor_id)
 
 
 @router.post(
     "/api/v1/preferences/{year}/{month}/me/revert-next",
     response_model=PreferenceRevertRead,
     tags=["preferences:doctor"],
-    summary="REDO one checkpoint",
+    summary="REDO: move my form to next checkpoint and overwrite working",
     operation_id="preferences_doctor_me_revert_next_post",
 )
 def me_revert_next(
@@ -217,7 +257,11 @@ def me_revert_next(
     _guard_doctor_preferences_locked(year, month, user)
 
     doctor_id = user.user_id
-    return revert_next(year=year, month=month, doctor_id=doctor_id, actor=user)
+    try:
+        # Service may raise ValueError("cannot_redo").
+        return revert_next(year=year, month=month, doctor_id=doctor_id, actor=user)
+    except ValueError as exc:
+        _map_preference_error(exc, year=year, month=month, doctor_id=doctor_id)
 
 
 # ------------------------------------------------------------------------------
@@ -227,7 +271,7 @@ def me_revert_next(
     "/api/v1/preferences/{year}/{month}/{doctor_id}",
     response_model=PreferenceWorkingRead,
     tags=["preferences:admin"],
-    summary="Read current form (working + hints)",
+    summary="Read doctor form for period (working copy + status/pointer hints",
     operation_id="preferences_admin_working_get",
 )
 def admin_read_working(
@@ -243,7 +287,7 @@ def admin_read_working(
     "/api/v1/preferences/{year}/{month}/{doctor_id}/working",
     response_model=PreferenceAutosaveAck,
     tags=["preferences:admin"],
-    summary="Autosave working (no checkpoint)",
+    summary="Autosave doctor form into working copy only (no checkpoint)",
     operation_id="preferences_admin_working_put",
 )
 def admin_put_working(
@@ -262,7 +306,7 @@ def admin_put_working(
     response_model=PreferenceCheckpointCreated,
     status_code=status.HTTP_201_CREATED,
     tags=["preferences:admin"],
-    summary="Save (create checkpoint)",
+    summary="Save - create new checkpoint for this doctor and period from working copy",
     operation_id="preferences_admin_checkpoint_post",
 )
 def admin_create_checkpoint(
@@ -281,7 +325,7 @@ def admin_create_checkpoint(
     "/api/v1/preferences/{year}/{month}/{doctor_id}/revert-last",
     response_model=PreferenceRevertRead,
     tags=["preferences:admin"],
-    summary="UNDO one checkpoint",
+    summary="UNDO: move doctor form to previous checkpoint and overwrite working",
     operation_id="preferences_admin_revert_last_post",
 )
 def admin_revert_last(
@@ -291,14 +335,19 @@ def admin_revert_last(
     doctor_id: int = Path(..., ge=1),
 ):
     _guard_period_closed(year, month)
-    return revert_last(year=year, month=month, doctor_id=doctor_id, actor=user)
+
+    try:
+        # Service may raise ValueError("cannot_undo").
+        return revert_last(year=year, month=month, doctor_id=doctor_id, actor=user)
+    except ValueError as exc:
+        _map_preference_error(exc, year=year, month=month, doctor_id=doctor_id)
 
 
 @router.post(
     "/api/v1/preferences/{year}/{month}/{doctor_id}/revert-next",
     response_model=PreferenceRevertRead,
     tags=["preferences:admin"],
-    summary="REDO one checkpoint",
+    summary="REDO: move doctor form to next checkpoint and overwrite working",
     operation_id="preferences_admin_revert_next_post",
 )
 def admin_revert_next(
@@ -308,4 +357,9 @@ def admin_revert_next(
     doctor_id: int = Path(..., ge=1),
 ):
     _guard_period_closed(year, month)
-    return revert_next(year=year, month=month, doctor_id=doctor_id, actor=user)
+
+    try:
+        # Service may raise ValueError("cannot_redo").
+        return revert_next(year=year, month=month, doctor_id=doctor_id, actor=user)
+    except ValueError as exc:
+        _map_preference_error(exc, year=year, month=month, doctor_id=doctor_id)

@@ -16,6 +16,7 @@ Policy & assumptions:
 
 from __future__ import annotations
 
+from calendar import monthrange
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -68,3 +69,14 @@ def is_period_closed(year: int, month: int) -> bool:
     - Use this guard in write endpoints to raise 403 'period_closed'.
     """
     return get_period_status(year, month) == "past"
+
+
+def days_in_month(year: int, month: int) -> int:
+    """
+    Return the number of days in the given month for the given year.
+
+    Uses Python's calendar.monthrange, so leap years (e.g. February 29th)
+    are handled correctly.
+    """
+    # monthrange returns (weekday_of_first_day, days_in_month)
+    return monthrange(year, month)[1]

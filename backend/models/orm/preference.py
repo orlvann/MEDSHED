@@ -121,7 +121,7 @@ class PreferencePointer(Base):
     month: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
 
     # FK do int PK w preferences_versions.id
-    current_checkpoint_id: Mapped[Optional[int]] = mapped_column(
+    current_version_id: Mapped[Optional[int]] = mapped_column(
         Integer, ForeignKey("preferences_versions.id"), nullable=True
     )
 
