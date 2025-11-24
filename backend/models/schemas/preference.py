@@ -197,7 +197,6 @@ class PreferencesSummaryRead(BaseModel):
     month: MonthInt
     submitted: List[int] = []
     missing: List[int] = []
-    last_update_at: datetime
 
 
 class PreferencesDeadlineRead(BaseModel):

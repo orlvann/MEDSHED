@@ -33,6 +33,7 @@ def upgrade() -> None:
         sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint("year", "month", name="uq_deadline_period"),
     )
+
     op.create_table(
         "preferences_versions",
         sa.Column("id", sa.Integer(), autoincrement=True, nullable=False),
@@ -91,15 +92,15 @@ def upgrade() -> None:
         sa.Column("doctor_id", sa.Integer(), nullable=False),
         sa.Column("year", sa.Integer(), nullable=False),
         sa.Column("month", sa.Integer(), nullable=False),
-        sa.Column("current_checkpoint_id", sa.String(length=64), nullable=True),
+        sa.Column("current_version_id", sa.Integer(), nullable=True),
         sa.Column("submitted_at", sa.DateTime(), nullable=True),
         sa.Column("submitted_by_user_id", sa.Integer(), nullable=True),
         sa.Column("submitted_by_role", sa.String(length=16), nullable=True),
         sa.CheckConstraint("month >= 1 AND month <= 12", name="ck_pointer_month_range"),
         sa.CheckConstraint("year >= 1900 AND year <= 2100", name="ck_pointer_year_range"),
         sa.ForeignKeyConstraint(
-            ["current_checkpoint_id"],
-            ["preferences_versions.version_id"],
+            ["current_version_id"],
+            ["preferences_versions.id"],
         ),
         sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint("doctor_id", "year", "month", name="uq_pointer_doctor_period"),
