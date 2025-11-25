@@ -23,12 +23,20 @@ export const ProtectedRoute: React.FC<ProtectedRouteProps> = ({
 
   if (!user) {
     // Not authenticated, redirect to login
-    return <Navigate to="/login/admin" replace />;
+    return <Navigate to="/login" replace />;
   }
 
-  if (requiredRole && user.role !== requiredRole) {
-    // User doesn't have required role
-    return <Navigate to="/unauthorized" replace />;
+  if (requiredRole) {
+    // Allow doctor_admin to access doctor routes
+    if (
+      requiredRole === "doctor" &&
+      (user.role === "doctor" || user.role === "doctor_admin")
+    ) {
+      // Access granted
+    } else if (user.role !== requiredRole) {
+      // User doesn't have required role
+      return <Navigate to="/unauthorized" replace />;
+    }
   }
 
   return <>{children}</>;

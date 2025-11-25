@@ -1,23 +1,29 @@
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { AuthProvider } from "./contexts/AuthContext";
 import { ProtectedRoute } from "./components/shared/ProtectedRoute";
-import { AdminLogin } from "./pages/auth/AdminLogin";
-import { DoctorLogin } from "./pages/auth/DoctorLogin";
+import { Login } from "./pages/auth/Login";
+import { SetPassword } from "./pages/auth/SetPassword";
+import { DoctorRegistration } from "./pages/auth/DoctorRegistration";
+import { ForgotPassword } from "./pages/auth/ForgotPassword";
 import { AdminHome } from "./pages/admin/AdminHome";
 import { DoctorsManagement } from "./pages/admin/DoctorsManagement";
+import { AdminUsersManagement } from "./pages/admin/AdminUsersManagement";
+import { PendingDoctors } from "./pages/admin/PendingDoctors";
 import { Unauthorized } from "./pages/Unauthorized";
 
 function App() {
   return (
     <AuthProvider>
-      <BrowserRouter>
+      <BrowserRouter future={{ v7_startTransition: true }}>
         <Routes>
-          {/* Redirect root to doctor login (admin login is hidden) */}
-          <Route path="/" element={<Navigate to="/login/doctor" replace />} />
+          {/* Redirect root to unified login */}
+          <Route path="/" element={<Navigate to="/login" replace />} />
 
           {/* Auth routes */}
-          <Route path="/login/admin" element={<AdminLogin />} />
-          <Route path="/login/doctor" element={<DoctorLogin />} />
+          <Route path="/login" element={<Login />} />
+          <Route path="/set-password" element={<SetPassword />} />
+          <Route path="/forgot-password" element={<ForgotPassword />} />
+          <Route path="/register" element={<DoctorRegistration />} />
 
           {/* Unauthorized page */}
           <Route path="/unauthorized" element={<Unauthorized />} />
@@ -36,6 +42,22 @@ function App() {
             element={
               <ProtectedRoute requiredRole="admin">
                 <DoctorsManagement />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/admin/users"
+            element={
+              <ProtectedRoute requiredRole="admin">
+                <AdminUsersManagement />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/admin/pending-doctors"
+            element={
+              <ProtectedRoute requiredRole="admin">
+                <PendingDoctors />
               </ProtectedRoute>
             }
           />

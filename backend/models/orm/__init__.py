@@ -15,6 +15,7 @@ Usage examples:
 
 # Core entities
 from .doctor import Doctor  # noqa: F401
+from .password_reset_token import PasswordResetToken  # noqa: F401
 
 # Preferences domain
 from .preference import (  # noqa: F401
@@ -37,6 +38,7 @@ __all__ = [
     # core
     "User",
     "Doctor",
+    "PasswordResetToken",
     # preferences
     "PreferenceWorking",
     "PreferenceVersion",

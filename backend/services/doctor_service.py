@@ -65,8 +65,13 @@ def _get_db() -> Session:
     return SessionLocal()
 
 
-def _doctor_to_dto(doctor: Doctor) -> DoctorRead:
-    """Convert ORM Doctor to DTO DoctorRead."""
+def _doctor_to_dto(doctor: Doctor, db: Session) -> DoctorRead:
+    """Convert ORM Doctor to DTO DoctorRead with linked user information."""
+    from backend.models.orm.user import User
+    
+    # Find linked user account
+    linked_user = db.query(User).filter(User.doctor_id == doctor.id).first()
+    
     return DoctorRead(
         id=doctor.id,
         first_name=doctor.first_name,
@@ -77,6 +82,8 @@ def _doctor_to_dto(doctor: Doctor) -> DoctorRead:
         email=doctor.email,
         created_at=doctor.created_at,
         updated_at=doctor.updated_at,
+        user_is_active=linked_user.is_active if linked_user else None,
+        user_role=linked_user.role if linked_user else None,
     )
 
 
@@ -90,10 +97,15 @@ def list_doctors(
     role: Optional[DoctorRole],
     search: Optional[str],
     is_active: Literal["true", "false", "all"],
+    user_role: Optional[str] = None,
+    user_is_active: Optional[str] = None,
+    is_head: Optional[str] = None,
 ) -> DoctorList:
     """
     List doctors with filters and pagination.
     """
+    from backend.models.orm.user import User
+    
     db = _get_db()
     try:
         query = db.query(Doctor)
@@ -107,6 +119,32 @@ def list_doctors(
             query = query.filter(Doctor.is_active == True)
         elif is_active == "false":
             query = query.filter(Doctor.is_active == False)
+        
+        # Filter by is_head (handle both boolean and SQLite integer representation)
+        if is_head == "true":
+            query = query.filter((Doctor.is_head == True) | (Doctor.is_head == 1))
+        elif is_head == "false":
+            query = query.filter((Doctor.is_head == False) | (Doctor.is_head == 0))
+        
+        # Filter by user_role (requires join with users table)
+        if user_role and user_role != "all":
+            query = query.join(User, User.doctor_id == Doctor.id).filter(User.role == user_role)
+        
+        # Filter by user_is_active (requires join with users table if not already joined)
+        if user_is_active and user_is_active != "all":
+            # Check if we already joined
+            if user_role and user_role != "all":
+                # Already joined, just add filter
+                if user_is_active == "true":
+                    query = query.filter(User.is_active == True)
+                elif user_is_active == "false":
+                    query = query.filter(User.is_active == False)
+            else:
+                # Need to join
+                if user_is_active == "true":
+                    query = query.join(User, User.doctor_id == Doctor.id).filter(User.is_active == True)
+                elif user_is_active == "false":
+                    query = query.join(User, User.doctor_id == Doctor.id).filter(User.is_active == False)
         
         # Filter by search (name or email)
         if search:
@@ -125,7 +163,7 @@ def list_doctors(
         doctors = query.order_by(Doctor.id).offset(offset).limit(size).all()
         
         # Map to DTOs
-        items = [_doctor_to_dto(doc) for doc in doctors]
+        items = [_doctor_to_dto(doc, db) for doc in doctors]
         
         return DoctorList(page=page, size=size, total=total, items=items)
     finally:
@@ -148,7 +186,7 @@ def get_doctor(*, doctor_id: int) -> DoctorRead:
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=make_error("not_found", detail="Doctor not found", context={"doctor_id": doctor_id}),
             )
-        return _doctor_to_dto(doctor)
+        return _doctor_to_dto(doctor, db)
     finally:
         db.close()
 
@@ -158,23 +196,56 @@ def get_doctor(*, doctor_id: int) -> DoctorRead:
 
 def create_doctor(*, payload: DoctorCreate) -> DoctorRead:
     """
-    Create a new doctor.
-    Validates email uniqueness (if provided).
+    Create a new doctor with auto-provisioned user account.
+    
+    Steps:
+    1. Validate email uniqueness across doctors and users tables
+    2. Create Doctor record
+    3. Create User record with random password and is_active=False
+    4. Generate password reset token
+    5. Send password setup email
+    6. Return DoctorRead with user info
     """
+    from backend.models.orm.user import User
+    from backend.services import email_service, token_service
+    from backend.utils.security import generate_random_password, hash_password
+    
     db = _get_db()
     try:
-        # Check email uniqueness if provided
-        if payload.email:
-            existing = db.query(Doctor).filter(Doctor.email == payload.email).first()
-            if existing:
-                raise HTTPException(
-                    status_code=status.HTTP_409_CONFLICT,
-                    detail=make_error(
-                        "duplicate_email",
-                        detail="Email already in use",
-                        context={"email": payload.email},
-                    ),
-                )
+        # Check email uniqueness in doctors table
+        existing_doctor = db.query(Doctor).filter(Doctor.email == payload.email).first()
+        if existing_doctor:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=make_error(
+                    "duplicate_email",
+                    detail="Email already in use by another doctor",
+                    context={"email": payload.email},
+                ),
+            )
+        
+        # Check email uniqueness in users table
+        existing_user = db.query(User).filter(User.email == payload.email).first()
+        if existing_user:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=make_error(
+                    "duplicate_email",
+                    detail="Email already in use by another user",
+                    context={"email": payload.email},
+                ),
+            )
+        
+        # Validate user_role (must be doctor or doctor_admin)
+        if payload.user_role not in ["doctor", "doctor_admin"]:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=make_error(
+                    "invalid_user_role",
+                    detail="User role must be 'doctor' or 'doctor_admin'",
+                    context={"user_role": payload.user_role},
+                ),
+            )
         
         # Create new doctor
         doctor = Doctor(
@@ -190,7 +261,36 @@ def create_doctor(*, payload: DoctorCreate) -> DoctorRead:
         db.commit()
         db.refresh(doctor)
         
-        return _doctor_to_dto(doctor)
+        # Create user account
+        random_password = generate_random_password()
+        user = User(
+            email=payload.email,
+            role=payload.user_role,
+            password_hash=hash_password(random_password),
+            is_active=False,  # Will be activated when password is set
+            doctor_id=doctor.id,
+        )
+        
+        db.add(user)
+        db.commit()
+        db.refresh(user)
+        
+        # Generate password reset token
+        token = token_service.create_password_reset_token(user_id=user.id, expires_hours=48)
+        
+        # Send password setup email
+        try:
+            email_service.send_password_setup_email(
+                email=payload.email,
+                token=token,
+                first_name=payload.first_name,
+                last_name=payload.last_name,
+            )
+        except Exception as e:
+            # Log but don't fail - email is not critical for account creation
+            print(f"Warning: Failed to send password setup email: {e}")
+        
+        return _doctor_to_dto(doctor, db)
     except IntegrityError as e:
         db.rollback()
         raise HTTPException(
@@ -216,8 +316,18 @@ def create_doctor(*, payload: DoctorCreate) -> DoctorRead:
 def put_doctor(*, doctor_id: int, payload: DoctorPut) -> DoctorRead:
     """
     Full replace (PUT) of an existing doctor.
-    Validates email uniqueness if changed.
+    Updates doctor record and linked user account if applicable.
+    
+    Handles:
+    - Email changes (validates uniqueness, updates user.email)
+    - user_role changes (updates user.role)
+    - user_is_active changes (updates user.is_active)
+    - Creates user if email provided but no user exists
     """
+    from backend.models.orm.user import User
+    from backend.services import email_service, token_service
+    from backend.utils.security import generate_random_password, hash_password
+    
     db = _get_db()
     try:
         # Check if doctor exists
@@ -228,23 +338,42 @@ def put_doctor(*, doctor_id: int, payload: DoctorPut) -> DoctorRead:
                 detail=make_error("not_found", detail="Doctor not found", context={"doctor_id": doctor_id}),
             )
         
+        # Find linked user
+        linked_user = db.query(User).filter(User.doctor_id == doctor_id).first()
+        
         # Check email uniqueness if email is being changed
         if payload.email and payload.email != doctor.email:
-            existing = db.query(Doctor).filter(
+            # Check in doctors table
+            existing_doctor = db.query(Doctor).filter(
                 Doctor.email == payload.email,
                 Doctor.id != doctor_id
             ).first()
-            if existing:
+            if existing_doctor:
                 raise HTTPException(
                     status_code=status.HTTP_409_CONFLICT,
                     detail=make_error(
                         "duplicate_email",
-                        detail="Email already in use",
+                        detail="Email already in use by another doctor",
+                        context={"email": payload.email},
+                    ),
+                )
+            
+            # Check in users table (excluding linked user)
+            existing_user = db.query(User).filter(
+                User.email == payload.email,
+                User.id != (linked_user.id if linked_user else -1)
+            ).first()
+            if existing_user:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=make_error(
+                        "duplicate_email",
+                        detail="Email already in use by another user",
                         context={"email": payload.email},
                     ),
                 )
         
-        # Update all fields
+        # Update doctor fields
         doctor.first_name = payload.first_name
         doctor.last_name = payload.last_name
         doctor.role = payload.role
@@ -252,10 +381,59 @@ def put_doctor(*, doctor_id: int, payload: DoctorPut) -> DoctorRead:
         doctor.is_head = payload.is_head
         doctor.email = payload.email
         
+        # Handle user account updates
+        if linked_user:
+            # Update existing user
+            if payload.email:
+                linked_user.email = payload.email
+            if payload.user_role:
+                if payload.user_role not in ["doctor", "doctor_admin"]:
+                    raise HTTPException(
+                        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                        detail=make_error(
+                            "invalid_user_role",
+                            detail="User role must be 'doctor' or 'doctor_admin'",
+                            context={"user_role": payload.user_role},
+                        ),
+                    )
+                linked_user.role = payload.user_role
+            if payload.user_is_active is not None:
+                linked_user.is_active = payload.user_is_active
+        elif payload.email:
+            # No user exists but email provided - create user
+            user_role = payload.user_role if payload.user_role else "doctor"
+            if user_role not in ["doctor", "doctor_admin"]:
+                user_role = "doctor"
+            
+            random_password = generate_random_password()
+            new_user = User(
+                email=payload.email,
+                role=user_role,
+                password_hash=hash_password(random_password),
+                is_active=False,
+                doctor_id=doctor.id,
+            )
+            
+            db.add(new_user)
+            db.commit()
+            db.refresh(new_user)
+            
+            # Generate token and send email
+            token = token_service.create_password_reset_token(user_id=new_user.id, expires_hours=48)
+            try:
+                email_service.send_password_setup_email(
+                    email=payload.email,
+                    token=token,
+                    first_name=payload.first_name,
+                    last_name=payload.last_name,
+                )
+            except Exception as e:
+                print(f"Warning: Failed to send password setup email: {e}")
+        
         db.commit()
         db.refresh(doctor)
         
-        return _doctor_to_dto(doctor)
+        return _doctor_to_dto(doctor, db)
     except IntegrityError as e:
         db.rollback()
         raise HTTPException(
@@ -280,9 +458,11 @@ def put_doctor(*, doctor_id: int, payload: DoctorPut) -> DoctorRead:
 
 def delete_doctor(*, doctor_id: int) -> None:
     """
-    Delete a doctor.
+    Delete a doctor and their linked user account.
     Raises 404 if not found.
     """
+    from backend.models.orm.user import User
+    
     db = _get_db()
     try:
         doctor = db.query(Doctor).filter(Doctor.id == doctor_id).first()
@@ -292,6 +472,12 @@ def delete_doctor(*, doctor_id: int) -> None:
                 detail=make_error("not_found", detail="Doctor not found", context={"doctor_id": doctor_id}),
             )
         
+        # Delete linked user account if exists
+        linked_user = db.query(User).filter(User.doctor_id == doctor_id).first()
+        if linked_user:
+            db.delete(linked_user)
+        
+        # Delete doctor
         db.delete(doctor)
         db.commit()
     except HTTPException:

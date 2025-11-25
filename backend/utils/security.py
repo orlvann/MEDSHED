@@ -130,3 +130,51 @@ def generate_temp_password(length: int = 12) -> str:
     alphabet = string.ascii_letters + string.digits
     password = ''.join(secrets.choice(alphabet) for _ in range(length))
     return password
+
+
+def generate_random_password(length: int = 16) -> str:
+    """
+    Generate a cryptographically secure random password.
+    Used for initial user account creation when admin creates a doctor.
+    
+    Args:
+        length: Length of the password (default: 16, minimum recommended)
+        
+    Returns:
+        A random password with letters, digits, and special characters
+        
+    Note:
+        This password is never shown to the user - they receive a password
+        reset token via email to set their own password.
+    """
+    import secrets
+    import string
+    
+    # Include special characters for stronger password
+    alphabet = string.ascii_letters + string.digits + "!@#$%^&*"
+    password = ''.join(secrets.choice(alphabet) for _ in range(length))
+    return password
+
+
+def generate_secure_token(num_bytes: int = 48) -> str:
+    """
+    Generate a cryptographically secure URL-safe token.
+    Used for password reset tokens.
+    
+    Args:
+        num_bytes: Number of random bytes to use (default: 48, produces ~64 chars)
+        
+    Returns:
+        URL-safe base64-encoded random token string (64+ characters)
+        
+    Example:
+        token = generate_secure_token()  # Returns: "xF3k9Lm2nQ8pR7wV..."
+        
+    Security:
+        - Uses secrets module (cryptographically secure)
+        - URL-safe (can be used in links)
+        - Long enough to prevent brute force (2^384 possibilities for 48 bytes)
+    """
+    import secrets
+    
+    return secrets.token_urlsafe(num_bytes)

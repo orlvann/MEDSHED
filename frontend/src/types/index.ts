@@ -2,7 +2,7 @@
  * TypeScript types matching the backend API contract
  */
 
-export type Role = "admin" | "doctor";
+export type Role = "admin" | "doctor" | "doctor_admin";
 
 export type DoctorRole = "specialist" | "resident";
 
@@ -35,6 +35,8 @@ export interface Doctor {
   email: string | null;
   created_at: string;
   updated_at: string;
+  user_is_active?: boolean | null;
+  user_role?: Role | null;
 }
 
 export interface DoctorCreate {
@@ -43,7 +45,8 @@ export interface DoctorCreate {
   role: DoctorRole;
   is_active: boolean;
   is_head: boolean;
-  email?: string | null;
+  email: string; // Required
+  user_role: Role; // Required: "doctor" or "doctor_admin"
 }
 
 export interface DoctorPut {
@@ -53,6 +56,8 @@ export interface DoctorPut {
   is_active: boolean;
   is_head: boolean;
   email?: string | null;
+  user_role?: Role | null;
+  user_is_active?: boolean | null;
 }
 
 export interface DoctorList {
@@ -66,4 +71,43 @@ export interface ErrorPayload {
   detail: string;
   code: string;
   context?: Record<string, any>;
+}
+
+// Set Password types
+export interface SetPasswordRequest {
+  token: string;
+  new_password: string;
+}
+
+export interface SetPasswordResponse {
+  message: string;
+}
+
+// Admin Users types
+export interface AdminUser {
+  id: number;
+  email: string;
+  role: Role;
+  is_active: boolean;
+  doctor_id: number | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AdminUserCreate {
+  email: string;
+  doctor_id?: number | null;
+}
+
+export interface AdminUserUpdate {
+  email?: string | null;
+  is_active?: boolean | null;
+  doctor_id?: number | null;
+}
+
+export interface AdminUserList {
+  page: number;
+  size: number;
+  total: number;
+  items: AdminUser[];
 }

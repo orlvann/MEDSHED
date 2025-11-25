@@ -8,6 +8,12 @@ import type {
   DoctorPut,
   DoctorList,
   ErrorPayload,
+  SetPasswordRequest,
+  SetPasswordResponse,
+  AdminUser,
+  AdminUserCreate,
+  AdminUserUpdate,
+  AdminUserList,
 } from "../types";
 
 // Base API URL - can be overridden by environment variable
@@ -46,7 +52,7 @@ api.interceptors.response.use(
         // Unauthorized - clear token and redirect to login (only for non-login requests)
         localStorage.removeItem("access_token");
         localStorage.removeItem("user");
-        window.location.href = "/login/admin";
+        window.location.href = "/login";
       }
     }
     return Promise.reject(error);
@@ -65,6 +71,16 @@ export const authApi = {
 
   me: async (): Promise<User> => {
     const response = await api.get<User>("/api/v1/auth/me");
+    return response.data;
+  },
+
+  setPassword: async (
+    data: SetPasswordRequest
+  ): Promise<SetPasswordResponse> => {
+    const response = await api.post<SetPasswordResponse>(
+      "/api/v1/auth/set-password",
+      data
+    );
     return response.data;
   },
 };
@@ -99,6 +115,42 @@ export const doctorsApi = {
 
   delete: async (id: number): Promise<void> => {
     await api.delete(`/api/v1/doctors/${id}`);
+  },
+};
+
+// Admin Users API
+export const adminUsersApi = {
+  list: async (params: {
+    page?: number;
+    size?: number;
+    search?: string;
+  }): Promise<AdminUserList> => {
+    const response = await api.get<AdminUserList>("/api/v1/admin/users", {
+      params,
+    });
+    return response.data;
+  },
+
+  get: async (id: number): Promise<AdminUser> => {
+    const response = await api.get<AdminUser>(`/api/v1/admin/users/${id}`);
+    return response.data;
+  },
+
+  create: async (user: AdminUserCreate): Promise<AdminUser> => {
+    const response = await api.post<AdminUser>("/api/v1/admin/users", user);
+    return response.data;
+  },
+
+  update: async (id: number, user: AdminUserUpdate): Promise<AdminUser> => {
+    const response = await api.put<AdminUser>(
+      `/api/v1/admin/users/${id}`,
+      user
+    );
+    return response.data;
+  },
+
+  delete: async (id: number): Promise<void> => {
+    await api.delete(`/api/v1/admin/users/${id}`);
   },
 };
 

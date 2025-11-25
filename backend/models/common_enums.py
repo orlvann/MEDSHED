@@ -8,6 +8,7 @@ from enum import Enum
 class Role(str, Enum):
     admin = "admin"
     doctor = "doctor"
+    doctor_admin = "doctor_admin"
 
 
 class DoctorRole(str, Enum):

@@ -15,18 +15,18 @@ export const Unauthorized = () => {
   const { user, logout } = useAuth();
 
   const handleGoBack = () => {
-    if (user?.role === "doctor") {
+    if (user?.role === "doctor" || user?.role === "doctor_admin") {
       navigate("/doctor");
     } else if (user?.role === "admin") {
       navigate("/admin");
     } else {
-      navigate("/login/admin");
+      navigate("/login");
     }
   };
 
   const handleLogout = () => {
     logout();
-    navigate("/login/admin");
+    navigate("/login");
   };
 
   return (

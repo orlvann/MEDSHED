@@ -30,7 +30,12 @@ import {
   Trash2,
   Search,
   AlertTriangle,
+  UserPlus,
 } from "lucide-react";
+import axios from "axios";
+
+const API_BASE_URL =
+  import.meta.env.VITE_API_BASE_URL || "http://127.0.0.1:8000";
 
 export const DoctorsManagement = () => {
   const navigate = useNavigate();
@@ -46,6 +51,9 @@ export const DoctorsManagement = () => {
   const [activeFilter, setActiveFilter] = useState<"true" | "false" | "all">(
     "all"
   );
+  const [userRoleFilter, setUserRoleFilter] = useState<string>("all");
+  const [userActiveFilter, setUserActiveFilter] = useState<string>("all");
+  const [isHeadFilter, setIsHeadFilter] = useState<string>("all");
 
   // Modal state
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -56,12 +64,16 @@ export const DoctorsManagement = () => {
     role: "resident",
     is_active: true,
     is_head: false,
-    email: null,
+    email: "",
+    user_role: "doctor",
   });
 
   // Delete confirmation state
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [doctorToDelete, setDoctorToDelete] = useState<Doctor | null>(null);
+
+  // Pending doctors count
+  const [pendingCount, setPendingCount] = useState(0);
 
   // Fetch doctors
   const fetchDoctors = async () => {
@@ -73,6 +85,9 @@ export const DoctorsManagement = () => {
         ...(search && { search }),
         ...(roleFilter !== "all" && { role: roleFilter }),
         is_active: activeFilter,
+        ...(userRoleFilter !== "all" && { user_role: userRoleFilter }),
+        ...(userActiveFilter !== "all" && { user_is_active: userActiveFilter }),
+        ...(isHeadFilter !== "all" && { is_head: isHeadFilter }),
       };
       const response = await doctorsApi.list(params);
       setDoctors(response.items);
@@ -88,7 +103,38 @@ export const DoctorsManagement = () => {
 
   useEffect(() => {
     fetchDoctors();
-  }, [page, search, roleFilter, activeFilter]);
+  }, [
+    page,
+    search,
+    roleFilter,
+    activeFilter,
+    userRoleFilter,
+    userActiveFilter,
+    isHeadFilter,
+  ]);
+
+  // Load pending doctors count
+  useEffect(() => {
+    const loadPendingCount = async () => {
+      try {
+        const token = localStorage.getItem("access_token");
+        const response = await axios.get(
+          `${API_BASE_URL}/api/v1/admin/pending-doctors/count`,
+          {
+            headers: { Authorization: `Bearer ${token}` },
+          }
+        );
+        setPendingCount(response.data.count);
+      } catch (err) {
+        console.error("Failed to load pending count:", err);
+      }
+    };
+
+    loadPendingCount();
+    // Refresh count every 30 seconds
+    const interval = setInterval(loadPendingCount, 30000);
+    return () => clearInterval(interval);
+  }, []);
 
   // Handle create/update
   const handleSubmit = async (e: React.FormEvent) => {
@@ -104,7 +150,15 @@ export const DoctorsManagement = () => {
       resetForm();
       fetchDoctors();
     } catch (err: any) {
-      alert(err.response?.data?.detail || "Failed to save doctor");
+      let errorMsg = "Failed to save doctor";
+      if (err.response?.data?.detail) {
+        if (typeof err.response.data.detail === "string") {
+          errorMsg = err.response.data.detail;
+        } else if (err.response.data.detail.detail) {
+          errorMsg = err.response.data.detail.detail;
+        }
+      }
+      alert(errorMsg);
     }
   };
 
@@ -143,8 +197,11 @@ export const DoctorsManagement = () => {
       role: doctor.role,
       is_active: doctor.is_active,
       is_head: doctor.is_head,
-      email: doctor.email,
-    });
+      email: doctor.email || "",
+      user_role: doctor.user_role || "doctor",
+      user_is_active:
+        doctor.user_is_active !== undefined ? doctor.user_is_active : true,
+    } as any);
     setEditingDoctor(doctor);
     setIsModalOpen(true);
   };
@@ -156,7 +213,8 @@ export const DoctorsManagement = () => {
       role: "resident",
       is_active: true,
       is_head: false,
-      email: null,
+      email: "",
+      user_role: "doctor",
     });
   };
 
@@ -176,16 +234,31 @@ export const DoctorsManagement = () => {
             </Button>
             <h2 className="text-3xl font-bold">Manage Doctors</h2>
           </div>
-          <Button onClick={openCreateModal}>
-            <Plus className="h-4 w-4 mr-2" />
-            Add Doctor
-          </Button>
+          <div className="flex items-center space-x-3">
+            <Button
+              variant="outline"
+              onClick={() => navigate("/admin/pending-doctors")}
+              className="relative"
+            >
+              <UserPlus className="h-4 w-4 mr-2" />
+              Pending Registrations
+              {pendingCount > 0 && (
+                <span className="absolute -top-2 -right-2 bg-red-600 text-white text-xs font-bold rounded-full h-6 w-6 flex items-center justify-center">
+                  {pendingCount}
+                </span>
+              )}
+            </Button>
+            <Button onClick={openCreateModal}>
+              <Plus className="h-4 w-4 mr-2" />
+              Add Doctor
+            </Button>
+          </div>
         </div>
 
         {/* Filters */}
         <Card className="mb-6">
           <CardContent className="pt-6">
-            <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
               <div>
                 <Label htmlFor="search">Search</Label>
                 <div className="relative">
@@ -200,7 +273,7 @@ export const DoctorsManagement = () => {
                 </div>
               </div>
               <div>
-                <Label htmlFor="role">Role</Label>
+                <Label htmlFor="role">Doctor Role</Label>
                 <select
                   id="role"
                   value={roleFilter}
@@ -213,7 +286,7 @@ export const DoctorsManagement = () => {
                 </select>
               </div>
               <div>
-                <Label htmlFor="active">Status</Label>
+                <Label htmlFor="active">Scheduling Status</Label>
                 <select
                   id="active"
                   value={activeFilter}
@@ -223,6 +296,47 @@ export const DoctorsManagement = () => {
                   <option value="all">All</option>
                   <option value="true">Active</option>
                   <option value="false">Inactive</option>
+                </select>
+              </div>
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <div>
+                <Label htmlFor="userRole">User Role</Label>
+                <select
+                  id="userRole"
+                  value={userRoleFilter}
+                  onChange={(e) => setUserRoleFilter(e.target.value)}
+                  className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                >
+                  <option value="all">All User Roles</option>
+                  <option value="doctor">Doctor</option>
+                  <option value="doctor_admin">Doctor Admin</option>
+                </select>
+              </div>
+              <div>
+                <Label htmlFor="userActive">Login Status</Label>
+                <select
+                  id="userActive"
+                  value={userActiveFilter}
+                  onChange={(e) => setUserActiveFilter(e.target.value)}
+                  className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                >
+                  <option value="all">All</option>
+                  <option value="true">Can Login</option>
+                  <option value="false">Cannot Login</option>
+                </select>
+              </div>
+              <div>
+                <Label htmlFor="isHead">Head of Department</Label>
+                <select
+                  id="isHead"
+                  value={isHeadFilter}
+                  onChange={(e) => setIsHeadFilter(e.target.value)}
+                  className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                >
+                  <option value="all">All</option>
+                  <option value="true">Yes</option>
+                  <option value="false">No</option>
                 </select>
               </div>
             </div>
@@ -253,9 +367,11 @@ export const DoctorsManagement = () => {
                     <tr className="border-b">
                       <th className="text-left py-3 px-4">ID</th>
                       <th className="text-left py-3 px-4">Name</th>
-                      <th className="text-left py-3 px-4">Role</th>
+                      <th className="text-left py-3 px-4">Doctor Role</th>
+                      <th className="text-left py-3 px-4">User Role</th>
                       <th className="text-left py-3 px-4">Email</th>
-                      <th className="text-left py-3 px-4">Status</th>
+                      <th className="text-left py-3 px-4">Scheduling</th>
+                      <th className="text-left py-3 px-4">Login</th>
                       <th className="text-left py-3 px-4">Head</th>
                       <th className="text-right py-3 px-4">Actions</th>
                     </tr>
@@ -281,6 +397,25 @@ export const DoctorsManagement = () => {
                             {doctor.role}
                           </span>
                         </td>
+                        <td className="py-3 px-4">
+                          {doctor.user_role ? (
+                            <span
+                              className={`px-2 py-1 text-xs rounded ${
+                                doctor.user_role === "admin"
+                                  ? "bg-purple-100 text-purple-700"
+                                  : doctor.user_role === "doctor_admin"
+                                  ? "bg-orange-100 text-orange-700"
+                                  : "bg-blue-100 text-blue-700"
+                              }`}
+                            >
+                              {doctor.user_role === "doctor_admin"
+                                ? "doc-admin"
+                                : doctor.user_role}
+                            </span>
+                          ) : (
+                            "-"
+                          )}
+                        </td>
                         <td className="py-3 px-4 text-sm text-muted-foreground">
                           {doctor.email || "-"}
                         </td>
@@ -291,9 +426,29 @@ export const DoctorsManagement = () => {
                                 ? "bg-green-100 text-green-700"
                                 : "bg-gray-100 text-gray-700"
                             }`}
+                            title="Active in scheduling algorithm"
                           >
-                            {doctor.is_active ? "Active" : "Inactive"}
+                            {doctor.is_active ? "Yes" : "No"}
                           </span>
+                        </td>
+                        <td className="py-3 px-4">
+                          {doctor.user_is_active !== null &&
+                          doctor.user_is_active !== undefined ? (
+                            <span
+                              className={`px-2 py-1 text-xs rounded ${
+                                doctor.user_is_active
+                                  ? "bg-green-100 text-green-700"
+                                  : "bg-red-100 text-red-700"
+                              }`}
+                              title="Can login to system"
+                            >
+                              {doctor.user_is_active ? "Yes" : "No"}
+                            </span>
+                          ) : (
+                            <span className="text-xs text-muted-foreground">
+                              -
+                            </span>
+                          )}
                         </td>
                         <td className="py-3 px-4">
                           {doctor.is_head ? "✓" : "-"}
@@ -391,7 +546,7 @@ export const DoctorsManagement = () => {
                   </div>
 
                   <div>
-                    <Label htmlFor="email">Email</Label>
+                    <Label htmlFor="email">Email *</Label>
                     <Input
                       id="email"
                       type="email"
@@ -399,14 +554,15 @@ export const DoctorsManagement = () => {
                       onChange={(e) =>
                         setFormData({
                           ...formData,
-                          email: e.target.value || null,
+                          email: e.target.value,
                         })
                       }
+                      required
                     />
                   </div>
 
                   <div>
-                    <Label htmlFor="role">Role *</Label>
+                    <Label htmlFor="role">Doctor Role *</Label>
                     <select
                       id="role"
                       value={formData.role}
@@ -424,20 +580,81 @@ export const DoctorsManagement = () => {
                     </select>
                   </div>
 
-                  <div className="flex items-center space-x-2">
-                    <input
-                      type="checkbox"
-                      id="is_active"
-                      checked={formData.is_active}
+                  <div>
+                    <Label htmlFor="user_role">User Role *</Label>
+                    <select
+                      id="user_role"
+                      value={(formData as any).user_role || "doctor"}
                       onChange={(e) =>
                         setFormData({
                           ...formData,
-                          is_active: e.target.checked,
-                        })
+                          user_role: e.target.value as any,
+                        } as any)
                       }
-                      className="h-4 w-4"
-                    />
-                    <Label htmlFor="is_active">Active</Label>
+                      className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                      required={!editingDoctor}
+                    >
+                      <option value="doctor">Doctor</option>
+                      <option value="doctor_admin">Doctor Admin</option>
+                    </select>
+                    <p className="text-xs text-muted-foreground mt-1">
+                      Doctor: can view schedules. Doctor Admin: can also manage
+                      preferences.
+                    </p>
+                  </div>
+
+                  <div className="space-y-2 border-t pt-3">
+                    <Label className="text-sm font-semibold">
+                      Status Settings
+                    </Label>
+                    <div className="flex items-center space-x-2">
+                      <input
+                        type="checkbox"
+                        id="is_active"
+                        checked={formData.is_active}
+                        onChange={(e) =>
+                          setFormData({
+                            ...formData,
+                            is_active: e.target.checked,
+                          })
+                        }
+                        className="h-4 w-4"
+                      />
+                      <Label htmlFor="is_active" className="font-normal">
+                        Active in Scheduling
+                      </Label>
+                    </div>
+                    <p className="text-xs text-muted-foreground ml-6">
+                      Include this doctor in the scheduling algorithm
+                    </p>
+
+                    {editingDoctor && (
+                      <>
+                        <div className="flex items-center space-x-2">
+                          <input
+                            type="checkbox"
+                            id="user_is_active"
+                            checked={(formData as any).user_is_active !== false}
+                            onChange={(e) =>
+                              setFormData({
+                                ...formData,
+                                user_is_active: e.target.checked,
+                              } as any)
+                            }
+                            className="h-4 w-4"
+                          />
+                          <Label
+                            htmlFor="user_is_active"
+                            className="font-normal"
+                          >
+                            Can Login
+                          </Label>
+                        </div>
+                        <p className="text-xs text-muted-foreground ml-6">
+                          Allow this user to log in to the system
+                        </p>
+                      </>
+                    )}
                   </div>
 
                   <div className="flex items-center space-x-2">

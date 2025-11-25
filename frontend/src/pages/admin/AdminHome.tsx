@@ -18,6 +18,10 @@ import {
   ClipboardCheck,
 } from "lucide-react";
 import { doctorsApi } from "../../services/api";
+import axios from "axios";
+
+const API_BASE_URL =
+  import.meta.env.VITE_API_BASE_URL || "http://127.0.0.1:8000";
 
 const StatCard = ({
   icon: Icon,
@@ -56,17 +60,24 @@ const NavigationCard = ({
   icon: Icon,
   onClick,
   iconColor = "text-primary",
+  badge,
 }: {
   title: string;
   description: string;
   icon: any;
   onClick: () => void;
   iconColor?: string;
+  badge?: number;
 }) => (
   <Card
-    className="cursor-pointer hover:shadow-lg transition-all duration-200 border-2 hover:border-primary group"
+    className="cursor-pointer hover:shadow-lg transition-all duration-200 border-2 hover:border-primary group relative"
     onClick={onClick}
   >
+    {badge !== undefined && badge > 0 && (
+      <span className="absolute -top-2 -right-2 bg-red-600 text-white text-xs font-bold rounded-full h-6 w-6 flex items-center justify-center z-10">
+        {badge}
+      </span>
+    )}
     <CardHeader>
       <div className="flex items-center space-x-3">
         <div
@@ -90,6 +101,7 @@ export const AdminHome = () => {
     schedulesSubmitted: 0,
     totalSchedules: 0,
   });
+  const [pendingCount, setPendingCount] = useState(0);
   const [currentTime, setCurrentTime] = useState(new Date());
 
   // Update clock every second
@@ -121,6 +133,29 @@ export const AdminHome = () => {
       }
     };
     loadStats();
+  }, []);
+
+  // Load pending doctors count and poll every 30 seconds
+  useEffect(() => {
+    const loadPendingCount = async () => {
+      try {
+        const token = localStorage.getItem("access_token");
+        const response = await axios.get(
+          `${API_BASE_URL}/api/v1/admin/pending-doctors/count`,
+          {
+            headers: { Authorization: `Bearer ${token}` },
+          }
+        );
+        setPendingCount(response.data.count);
+      } catch (err) {
+        console.error("Failed to load pending count:", err);
+      }
+    };
+
+    loadPendingCount();
+    const interval = setInterval(loadPendingCount, 30000); // Poll every 30 seconds
+
+    return () => clearInterval(interval);
   }, []);
 
   const formatTime = (date: Date) => {
@@ -210,13 +245,21 @@ export const AdminHome = () => {
             icon={Users}
             onClick={() => navigate("/admin/doctors")}
             iconColor="text-blue-600"
+            badge={pendingCount}
+          />
+          <NavigationCard
+            title="Manage Admin Users"
+            description="Manage users with admin role"
+            icon={Users}
+            onClick={() => navigate("/admin/users")}
+            iconColor="text-purple-600"
           />
           <NavigationCard
             title="Manage Preferences"
             description="Review and manage doctor preferences"
             icon={Settings}
             onClick={() => navigate("/admin/preferences")}
-            iconColor="text-purple-600"
+            iconColor="text-indigo-600"
           />
           <NavigationCard
             title="Generate Schedules"

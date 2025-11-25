@@ -28,14 +28,27 @@ from backend.db.session import get_db
 from backend.models.schemas import (
     ErrorPayload,  # canonical error shape from common (code/detail/context)
     LoginRequest,
+    SetPasswordRequest,
+    SetPasswordResponse,
     TokenResponse,
     UserRead,
 )
+from pydantic import BaseModel, EmailStr
 from backend.models.schemas.dto_common import make_error
 from backend.routers.deps import UserCtx, get_current_user
 from backend.services import auth_service
 
 router = APIRouter(tags=["auth"])
+
+
+class ForgotPasswordRequest(BaseModel):
+    """Request schema for forgot password endpoint"""
+    email: EmailStr
+
+
+class ForgotPasswordResponse(BaseModel):
+    """Response schema for forgot password endpoint"""
+    message: str
 
 
 @router.post(
@@ -95,6 +108,152 @@ def login(payload: LoginRequest = Body(...), db: Session = Depends(get_db)):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail=make_error(e.code, detail=e.detail),
+        )
+
+
+@router.post(
+    "/api/v1/auth/set-password",
+    response_model=SetPasswordResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Set password using reset token",
+    responses={
+        400: {
+            "model": ErrorPayload,
+            "description": "Invalid or expired token",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "code": "invalid_token",
+                        "detail": "Invalid or expired password reset token",
+                        "context": None,
+                    }
+                }
+            },
+        },
+        422: {
+            "model": ErrorPayload,
+            "description": "Weak password",
+        }
+    },
+)
+def set_password(payload: SetPasswordRequest = Body(...), db: Session = Depends(get_db)):
+    """
+    Set or reset password using a token received via email.
+    
+    This endpoint is used when:
+    - A new user receives a password setup email
+    - A user requests a password reset
+    
+    The token is validated, the password is updated, and the user account is activated.
+    The token is consumed (deleted) after use, making it one-time only.
+    
+    Validation:
+    - Token must be valid and not expired (48 hours)
+    - Password must be at least 8 characters
+    """
+    from backend.models.orm.user import User
+    from backend.services import token_service
+    from backend.utils.security import hash_password
+    
+    try:
+        # Validate and consume token (one-time use) - use same DB session
+        user_id = token_service.consume_token(token=payload.token, db=db)
+        
+        # Get user
+        user = db.query(User).filter(User.id == user_id).first()
+        if not user:
+            db.rollback()
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=make_error("not_found", "User not found"),
+            )
+        
+        # Update password and activate account
+        user.password_hash = hash_password(payload.new_password)
+        user.is_active = True
+        
+        db.commit()
+        
+        return SetPasswordResponse(message="Password set successfully")
+        
+    except HTTPException:
+        # Re-raise HTTP exceptions from token_service
+        db.rollback()
+        raise
+    except Exception as e:
+        db.rollback()
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=make_error(
+                "internal_error",
+                detail="Failed to set password",
+                context={"error": str(e)},
+            ),
+        )
+
+
+@router.post(
+    "/api/v1/auth/forgot-password",
+    response_model=ForgotPasswordResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Request password reset email",
+    responses={
+        200: {
+            "model": ForgotPasswordResponse,
+            "description": "Success response (returned even if email doesn't exist for security)",
+        }
+    },
+)
+def forgot_password(payload: ForgotPasswordRequest = Body(...), db: Session = Depends(get_db)):
+    """
+    Request a password reset email.
+    
+    This endpoint:
+    - Checks if the user exists
+    - Generates a password reset token
+    - Sends a password reset email
+    - Always returns 200 OK (even if email doesn't exist, for security)
+    
+    The user will receive an email with a link to set a new password.
+    The link uses the same /set-password endpoint as initial password setup.
+    """
+    from backend.models.orm.user import User
+    from backend.services import token_service, email_service
+    
+    try:
+        # Look up user by email
+        user = db.query(User).filter(User.email == payload.email).first()
+        
+        # If user exists, generate token and send email
+        if user:
+            # Generate password reset token
+            token = token_service.create_password_reset_token(user_id=user.id)
+            
+            # Send password reset email
+            try:
+                email_service.send_password_reset_email(
+                    to_email=user.email,
+                    token=token,
+                )
+            except Exception as e:
+                # Log error but don't expose to user
+                import traceback
+                traceback.print_exc()
+                # Still return success to prevent email enumeration
+        
+        # Always return success message (security: don't reveal if email exists)
+        return ForgotPasswordResponse(
+            message="If an account exists with this email, you will receive password reset instructions."
+        )
+        
+    except Exception as e:
+        # Log error but return success to prevent information leakage
+        import traceback
+        traceback.print_exc()
+        return ForgotPasswordResponse(
+            message="If an account exists with this email, you will receive password reset instructions."
         )
 
 
