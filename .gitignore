@@ -73,3 +73,6 @@ Desktop.ini
 # === Database artifacts ===
 backend/db/*.db
 dump_full.sql
+
+# === Sensitive data for db seed ===
+data/preferences_raw_private/
