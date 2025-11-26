@@ -1,3 +1,4 @@
+# backend/services/diagnostics_service.py
 """
 Diagnostics Service — analyze and summarize schedules.
 

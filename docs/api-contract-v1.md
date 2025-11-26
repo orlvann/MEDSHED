@@ -693,6 +693,34 @@ GET /api/v1/schedules/{year}/{month}
 If the period has no data, the endpoint returns **`200`** with an empty skeleton:
 `working.exists=false`, `draft.version_id=null`, `published.version_id=null`.
 
+### Diagnostics (Schedules)
+
+**GET** `/api/v1/schedules/{year}/{month}/diagnostics?target=draft|published`  
+Returns diagnostics (KPIs) for the schedule version currently pointed by the selected stream.
+
+- **200** → `DiagnosticsRead`
+- **404** → when the selected pointer has no version for the period (or dangling pointer)
+
+**MVP behavior**
+- Backend resolves `{year,month,target}` → pointer → `version_id`.
+- If the diagnostics cache is missing or stale, it recomputes and persists a compact summary, then returns it.
+- `details` field is optional and may be `null` in MVP.
+
+**POST-MVP roadmap**
+1) Enrich `details` with strongly-typed sections:
+   - coverage (under/overstaffed days, rest-rule flags, hotspots),
+   - preferences (fulfilled/unfulfilled, per-doctor stats),
+   - fairness (avg duties per role, distribution),
+   - partnering (preferred pairs respected/missed),
+   - visuals (daily cost heatmap, violations timeline),
+   - suggestions (auto-fixes with estimated impact).
+
+2) Additional endpoints:
+   - `GET /api/v1/schedules/{y}/{m}/diagnostics/details?target=...` (lazy-load heavy details)
+   - `POST /api/v1/schedules/{y}/{m}/diagnostics/recompute?target=...` (force refresh cache)
+
+3) Streaming/exports:
+   - Optional links in `details` to CSV/JSON dumps or plots where relevant.
 
 **Working — read & autosave (optional optimistic locking)**
 
@@ -1020,9 +1048,12 @@ POST /api/v1/schedules/{year}/{month}/revert-next-published
 ```http
 GET /api/v1/schedules/{year}/{month}/diagnostics?target=draft|published
 ```
-
+- Returns DiagnosticsRead for the version currently pointed by the given target.
 * `target=draft` → uses the **draft** pointer’s `version_id`.
 * `target=published` → uses the **published** pointer’s `version_id`.
+- 200: DiagnosticsRead
+- 404: when the selected pointer doesn't exist (no version for that stream)
+
 
 **Response (200)**
 
