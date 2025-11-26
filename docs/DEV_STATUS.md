@@ -1,6 +1,3 @@
-Looks solid! I fixed a few typos, tightened wording, and made formatting consistent. Ready to paste:
-
----
 
 # Dev current milestones
 
@@ -52,6 +49,43 @@ make db-show
 * [x] **Diagnostics** — per `version_id` (draft/published) as in MVP
 * [x] **Availability** — admin overview/day heatmap stub (shapes fixed for FE)
 * [x] **Schemas (Pydantic DTOs)** — mapped 1:1 to the contract; Swagger renders correctly
+
+### Preferences – current status (working + checkpoints + deadlines)
+
+* All doctor/admin endpoints under `/api/v1/preferences/*` are backed by ORM and real DB tables:
+  * `preferences_working` — autosave buffer per `{doctor_id, year, month}`,
+  * `preferences_versions` — immutable checkpoints with JSON payload,
+  * `preferences_pointers` — current checkpoint per `{doctor_id, year, month}`,
+  * `preferences_deadlines` — per-period deadline configuration.
+* Full lifecycle is implemented:
+  * Doctor/admin **read working** (with status + pointer hints),
+  * **Autosave** (working only, no history changes),
+  * **Checkpoint** creation (new version + pointer move + pruning to last 5 versions),
+  * **UNDO / REDO** (`revert-last`, `revert-next`) based on ordered version IDs,
+  * **Summary** for admins (`submitted` vs `missing` for all active doctors),
+  * **Deadline read/put** + doctor-lock helper (`is_doctor_locked_for_period`).
+
+#### Manual smoke tests for preferences (Swagger/Postman)
+
+Minimal scenarios verified manually:
+
+1. **Doctor – working + checkpoint + UNDO/REDO**
+   * `PUT  /api/v1/preferences/{year}/{month}/me/working`
+   * `POST /api/v1/preferences/{year}/{month}/me/checkpoint`
+   * `POST /api/v1/preferences/{year}/{month}/me/revert-last`
+   * `POST /api/v1/preferences/{year}/{month}/me/revert-next`
+
+2. **Admin – inspect/edit doctor form**
+   * `GET  /api/v1/preferences/{year}/{month}/{doctor_id}`
+   * `PUT  /api/v1/preferences/{year}/{month}/{doctor_id}/working`
+   * `POST /api/v1/preferences/{year}/{month}/{doctor_id}/checkpoint`
+   * `POST /api/v1/preferences/{year}/{month}/{doctor_id}/revert-last`
+   * `POST /api/v1/preferences/{year}/{month}/{doctor_id}/revert-next`
+
+3. **Admin – summary + deadlines**
+   * `GET  /api/v1/preferences/summary?year=&month=` → `submitted` / `missing` for active doctors,
+   * `GET  /api/v1/preferences/deadlines/{year}/{month}`,
+   * `PUT  /api/v1/preferences/deadlines/{year}/{month}` → configure or update deadline.
 
 **Quick API test**
 

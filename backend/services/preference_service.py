@@ -20,14 +20,16 @@ Data model guidance:
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Optional
+from typing import Optional, cast
 from zoneinfo import ZoneInfo
 
 from backend.db.session import SessionLocal
 from backend.models.common_enums import DeadlineStatus, PeriodStatus, PreferenceStatus
+from backend.models.orm.doctor import Doctor
 from backend.models.orm.preference import (
     PreferenceDeadline,
     PreferencePointer,
+    PreferenceVersion,
     PreferenceWorking,
 )
 from backend.models.schemas import (
@@ -42,6 +44,275 @@ from backend.models.schemas import (
 )
 from backend.routers.deps import UserCtx
 from backend.utils.timez import ORG_TZ, get_period_status, now_utc
+
+# How many checkpoints we keep per (doctor_id, year, month).
+MAX_PREFERENCE_VERSIONS_PER_PERIOD = 5
+
+SYSTEM_USER_ID = 0  # technical user id for system-generated checkpoints
+
+
+# ---------------------------------------------------------------------------
+# Internal helpers for working + versions + pointer
+# ---------------------------------------------------------------------------
+
+
+def _ensure_working_row(
+    session,
+    *,
+    year: int,
+    month: int,
+    doctor_id: int,
+) -> PreferenceWorking:
+    """
+    Helper: get or create PreferenceWorking row for (doctor_id, year, month).
+
+    If the row does not exist, create one with default "allow all" settings.
+    """
+    row = session.query(PreferenceWorking).filter_by(year=year, month=month, doctor_id=doctor_id).one_or_none()
+    if row is None:
+        row = PreferenceWorking(
+            doctor_id=doctor_id,
+            year=year,
+            month=month,
+        )
+        session.add(row)
+        session.flush()  # ensure row.id is populated
+    return row
+
+
+def _ensure_pointer(
+    session,
+    *,
+    year: int,
+    month: int,
+    doctor_id: int,
+) -> PreferencePointer:
+    """
+    Helper: get or create PreferencePointer row for (doctor_id, year, month).
+    """
+    pointer = session.query(PreferencePointer).filter_by(year=year, month=month, doctor_id=doctor_id).one_or_none()
+    if pointer is None:
+        pointer = PreferencePointer(
+            doctor_id=doctor_id,
+            year=year,
+            month=month,
+        )
+        session.add(pointer)
+        session.flush()
+    return pointer
+
+
+def _editable_payload_from_working(row: PreferenceWorking) -> dict:
+    """
+    Helper: build JSON payload (dict) from PreferenceWorking editable fields.
+
+    This structure will be stored in PreferenceVersion.payload and later
+    used to rebuild DTOs and overwrite working row on revert.
+    """
+    return {
+        "unavailable_duty_days": row.unavailable_duty_days or [],
+        "unavailable_oncall_days": row.unavailable_oncall_days or [],
+        "preferred_duty_days": row.preferred_duty_days or [],
+        "preferred_oncall_days": row.preferred_oncall_days or [],
+        "min_duties_weekdays": row.min_duties_weekdays,
+        "max_duties_weekdays": row.max_duties_weekdays,
+        "min_duties_weekends": row.min_duties_weekends,
+        "max_duties_weekends": row.max_duties_weekends,
+        "min_oncall_weekdays": row.min_oncall_weekdays,
+        "max_oncall_weekdays": row.max_oncall_weekdays,
+        "min_oncall_weekends": row.min_oncall_weekends,
+        "max_oncall_weekends": row.max_oncall_weekends,
+        "weekend_back_to_back_allowed": row.weekend_back_to_back_allowed,
+        "preferred_partners": row.preferred_partners or [],
+        "comments": row.comments,
+    }
+
+
+def _apply_payload_to_working(
+    row: PreferenceWorking,
+    payload: dict,
+    *,
+    actor: UserCtx,
+    now: datetime,
+) -> None:
+    """
+    Helper: copy editable fields + audit info from payload into working row.
+
+    Used when:
+    - autosave changes values,
+    - we create a checkpoint (to refresh audit),
+    - we revert to another version.
+    """
+    row.unavailable_duty_days = payload.get("unavailable_duty_days", [])
+    row.unavailable_oncall_days = payload.get("unavailable_oncall_days", [])
+    row.preferred_duty_days = payload.get("preferred_duty_days", [])
+    row.preferred_oncall_days = payload.get("preferred_oncall_days", [])
+
+    row.min_duties_weekdays = payload.get("min_duties_weekdays", 0)
+    row.max_duties_weekdays = payload.get("max_duties_weekdays")
+    row.min_duties_weekends = payload.get("min_duties_weekends", 0)
+    row.max_duties_weekends = payload.get("max_duties_weekends")
+
+    row.min_oncall_weekdays = payload.get("min_oncall_weekdays", 0)
+    row.max_oncall_weekdays = payload.get("max_oncall_weekdays")
+    row.min_oncall_weekends = payload.get("min_oncall_weekends", 0)
+    row.max_oncall_weekends = payload.get("max_oncall_weekends")
+
+    row.weekend_back_to_back_allowed = payload.get("weekend_back_to_back_allowed", True)
+    row.preferred_partners = payload.get("preferred_partners", [])
+    row.comments = payload.get("comments")
+
+    # Audit fields
+    row.last_saved_at = now
+    row.last_saved_by_user_id = actor.user_id
+    row.last_saved_by_role = actor.role
+
+    # Optimistic lock token (optional, but nice for UI later).
+    # For now we simply increment on any write.
+    row.lock_version = (row.lock_version or 0) + 1
+
+
+def _prune_old_versions(
+    session,
+    *,
+    year: int,
+    month: int,
+    doctor_id: int,
+) -> None:
+    """
+    Helper: keep at most MAX_PREFERENCE_VERSIONS_PER_PERIOD versions for this doctor+period.
+
+    Policy:
+    - Sort by id ASC (oldest first).
+    - Delete oldest rows if count exceeds MAX_PREFERENCE_VERSIONS_PER_PERIOD.
+    """
+    versions = (
+        session.query(PreferenceVersion)
+        .filter_by(year=year, month=month, doctor_id=doctor_id)
+        .order_by(PreferenceVersion.id.asc())
+        .all()
+    )
+
+    if len(versions) <= MAX_PREFERENCE_VERSIONS_PER_PERIOD:
+        return
+
+    to_delete = len(versions) - MAX_PREFERENCE_VERSIONS_PER_PERIOD
+    for v in versions[:to_delete]:
+        session.delete(v)
+
+
+def ensure_latest_checkpoints_for_period(*, year: int, month: int) -> None:
+    """
+    Shared helper for monthly preferences.
+
+    Intended to be called by other services (availability, solver)
+    before they read preference data.
+
+    It works only on the preferences tables:
+    - preferences_working       (editable buffer)
+    - preferences_versions      (immutable checkpoints)
+    - preferences_pointers      (current checkpoint per doctor+period)
+
+    For each *active* doctor in {year, month} it ensures that there is a
+    checkpoint that reflects the newest working snapshot.
+
+    Rules per active doctor:
+    - If there is NO working row or working.last_saved_at is NULL:
+        -> do nothing (doctor stays "missing").
+    - If there is working but NO pointer/current_version:
+        -> create a new checkpoint from working and set pointer to it.
+    - If working.last_saved_at is NEWER than the current checkpoint.created_at:
+        -> create a new checkpoint from working and move pointer to it.
+
+    System-generated checkpoints are marked as:
+        created_by_role      = "system"
+        created_by_user_id   = SYSTEM_USER_ID
+        submitted_by_role    = "system"
+        submitted_by_user_id = None
+    """
+    now = now_utc()
+
+    with SessionLocal() as session:
+        # 1) All active doctors (pool used for preferences and availability).
+        active_doctors = session.query(Doctor).filter_by(is_active=True).all()
+
+        for doctor in active_doctors:
+            doctor_id = doctor.id
+
+            # 2) Current working snapshot for this doctor+period (may be None).
+            working: Optional[PreferenceWorking] = (
+                session.query(PreferenceWorking).filter_by(doctor_id=doctor_id, year=year, month=month).one_or_none()
+            )
+
+            # If doctor never touched this month (no working / no timestamp) -> skip.
+            if working is None or working.last_saved_at is None:
+                continue
+
+            # 3) Pointer for this doctor+period (may be None).
+            pointer: Optional[PreferencePointer] = (
+                session.query(PreferencePointer).filter_by(doctor_id=doctor_id, year=year, month=month).one_or_none()
+            )
+
+            current_version: Optional[PreferenceVersion] = None
+            if pointer is not None and pointer.current_version_id is not None:
+                # Pointer knows about a current checkpoint.
+                current_version = session.get(PreferenceVersion, pointer.current_version_id)
+
+            # 4) Decide whether we need a new checkpoint from working.
+            #    - No current_version -> we must create one.
+            #    - Working newer than current_version.created_at -> we must update.
+            if current_version is None:
+                needs_new_checkpoint = True
+            else:
+                needs_new_checkpoint = working.last_saved_at > current_version.created_at
+
+            if not needs_new_checkpoint:
+                continue
+
+            # 5) Build payload snapshot from working row.
+            payload = _editable_payload_from_working(working)
+
+            # 6) Create new version (checkpoint) from working.
+            version = PreferenceVersion(
+                doctor_id=doctor_id,
+                year=year,
+                month=month,
+                kind="checkpoint",
+                payload=payload,
+                created_at=now,
+                created_by_user_id=SYSTEM_USER_ID,  # system action, no human user
+                created_by_role="system",  # mark as system-generated
+                note=None,
+            )
+            session.add(version)
+            session.flush()  # to populate version.id
+            version_id_int = int(version.id)
+
+            # 7) Ensure pointer exists and point it to the new version.
+            if pointer is None:
+                pointer = PreferencePointer(
+                    doctor_id=doctor_id,
+                    year=year,
+                    month=month,
+                )
+                session.add(pointer)
+
+            pointer.current_version_id = version_id_int
+            pointer.submitted_at = now
+            pointer.submitted_by_user_id = None  # system action
+            pointer.submitted_by_role = "system"  # system action
+
+            # 8) Keep history bounded per doctor+period.
+            _prune_old_versions(
+                session,
+                year=year,
+                month=month,
+                doctor_id=doctor_id,
+            )
+
+        # 9) Persist all updates at once.
+        session.commit()
+
 
 # ------------------------------------------------------------------------------
 # Read / Summary
@@ -74,7 +345,7 @@ def get_working(*, year: int, month: int, doctor_id: int, actor: UserCtx) -> Pre
         )
 
     # 3) Derive status from pointer: submitted if there is a checkpoint.
-    if pointer and pointer.current_checkpoint_id:
+    if pointer and pointer.current_version_id:
         pref_status = PreferenceStatus.submitted
     else:
         pref_status = PreferenceStatus.missing
@@ -122,7 +393,8 @@ def get_working(*, year: int, month: int, doctor_id: int, actor: UserCtx) -> Pre
 
     # 5) Pointer hints (may be None if no checkpoint).
     if pointer is not None:
-        version_id = pointer.current_checkpoint_id
+        # Pointer stores int id; DTO expects Optional[str]
+        version_id = str(pointer.current_version_id) if pointer.current_version_id is not None else None
         submitted_at = pointer.submitted_at
         submitted_by_role = pointer.submitted_by_role
         submitted_by_user_id = pointer.submitted_by_user_id
@@ -132,8 +404,10 @@ def get_working(*, year: int, month: int, doctor_id: int, actor: UserCtx) -> Pre
         submitted_by_role = None
         submitted_by_user_id = None
 
-    # 6) For now, UNDO/REDO flags are always False.
-    #    Later we will compute them from PreferenceVersion history.
+    # 6) UNDO/REDO flags for this view:
+    #    We do not inspect history here; the UI can rely on flags returned
+    #    from checkpoint/undo/redo endpoints instead.
+
     can_undo = False
     can_redo = False
 
@@ -173,16 +447,34 @@ def read_summary(*, year: int, month: int, actor: UserCtx) -> PreferencesSummary
     """
     Aggregated summary view for admin: which doctors submitted preferences vs missing.
 
-    TODO:
-    - Aggregate from PreferencePointer (current_checkpoint_id IS NULL / NOT NULL).
-    - Set last_update_at based on max(created_at) from PreferenceVersion for this period.
+    Semantics:
+    - We consider only active doctors from the Doctors table (is_active = True).
+    - "submitted"  -> active doctors that have a current checkpoint
+                      (PreferencePointer.current_version_id IS NOT NULL).
+    - "missing"    -> active doctors that do NOT have a current checkpoint yet.
     """
+    with SessionLocal() as session:
+        # 1) Base set: all active doctors.
+        active_doctors = session.query(Doctor).filter_by(is_active=True).all()
+        active_ids = {d.id for d in active_doctors}
+
+        # 2) All pointers for this period (per doctor+period).
+        pointers = session.query(PreferencePointer).filter_by(year=year, month=month).all()
+
+        # 3) Submitted: active doctors with current_version_id not NULL.
+        submitted_ids_set = {
+            p.doctor_id for p in pointers if p.current_version_id is not None and p.doctor_id in active_ids
+        }
+        submitted_ids = sorted(submitted_ids_set)
+
+        # 4) Missing: active doctors that do not have a checkpoint yet.
+        missing_ids = sorted(d_id for d_id in active_ids if d_id not in submitted_ids_set)
+
     return PreferencesSummaryRead(
         year=year,
         month=month,
-        submitted=[42, 7, 9],
-        missing=[11, 13, 21],
-        last_update_at=now_utc(),
+        submitted=submitted_ids,
+        missing=missing_ids,
     )
 
 
@@ -264,17 +556,18 @@ def save_working_autosave(
             session.query(PreferencePointer).filter_by(doctor_id=doctor_id, year=year, month=month).one_or_none()
         )
 
-        if pointer and pointer.current_checkpoint_id:
+        if pointer and pointer.current_version_id:
             pref_status = PreferenceStatus.submitted
-            version_id = pointer.current_checkpoint_id
-            # UNDO/REDO flags pozostawiamy na razie False – dopniemy przy wersjach.
-            can_undo = False
-            can_redo = False
+            # Pointer has int id; DTO wants Optional[str]
+            version_id = str(pointer.current_version_id)
         else:
             pref_status = PreferenceStatus.missing
             version_id = None
-            can_undo = False
-            can_redo = False
+
+        # Autosave does not compute history-based flags; the UI should refresh
+        # can_undo/can_redo from checkpoint/undo/redo responses.
+        can_undo = False
+        can_redo = False
 
     return PreferenceAutosaveAck(
         doctor_id=doctor_id,
@@ -293,40 +586,103 @@ def create_checkpoint(*, year: int, month: int, doctor_id: int, actor: UserCtx) 
     """
     Create a new immutable checkpoint for the current working state.
 
-    TODO:
-    - Read PreferenceWorking for (doctor_id, year, month).
-    - Insert new PreferenceVersion with JSON payload snapshot.
-    - Move PreferencePointer.current_checkpoint_id to the new version.
-    - Prune history (keep last N versions).
+    Steps:
+    1) Ensure working row exists for (doctor_id, year, month).
+    2) Build JSON payload from working editable fields.
+    3) Insert new PreferenceVersion with this payload (INT PK id).
+    4) Move PreferencePointer.current_version_id to the new version.id.
+    5) Prune history to keep at most MAX_PREFERENCE_VERSIONS_PER_PERIOD versions.
+    6) Return DTO with payload + submit metadata + can_undo/can_redo flags.
     """
     now = now_utc()
+
+    with SessionLocal() as session:
+        # 1) Ensure working row exists (default "allow all" if missing).
+        working = _ensure_working_row(
+            session,
+            year=year,
+            month=month,
+            doctor_id=doctor_id,
+        )
+
+        # 2) Build payload snapshot from working row.
+        payload = _editable_payload_from_working(working)
+
+        # 3) Insert new version; PK is auto-increment INT.
+        version = PreferenceVersion(
+            doctor_id=doctor_id,
+            year=year,
+            month=month,
+            kind="checkpoint",
+            payload=payload,
+            created_at=now,
+            created_by_user_id=actor.user_id,
+            created_by_role=actor.role,
+            note=None,
+        )
+        session.add(version)
+        session.flush()  # ensure version.id is populated
+        version_id_int = int(version.id)
+
+        # 4) Ensure pointer row exists and move it to the new version.
+        pointer = _ensure_pointer(
+            session,
+            year=year,
+            month=month,
+            doctor_id=doctor_id,
+        )
+        pointer.current_version_id = version_id_int
+        pointer.submitted_at = now
+        pointer.submitted_by_user_id = actor.user_id
+        pointer.submitted_by_role = actor.role
+
+        # 5) Update working audit + lock_version to reflect this save action.
+        _apply_payload_to_working(working, payload, actor=actor, now=now)
+
+        # 6) Prune older versions beyond the configured limit.
+        _prune_old_versions(
+            session,
+            year=year,
+            month=month,
+            doctor_id=doctor_id,
+        )
+
+        # 7) Compute can_undo / can_redo flags based on all versions (after prune).
+        versions = (
+            session.query(PreferenceVersion)
+            .filter_by(year=year, month=month, doctor_id=doctor_id)
+            .order_by(PreferenceVersion.created_at.asc())
+            .all()
+        )
+        version_ids = [int(v.id) for v in versions]
+
+        try:
+            idx = version_ids.index(version_id_int)
+        except ValueError:
+            # Defensive fallback: treat as last index
+            idx = len(version_ids) - 1
+
+        can_undo = idx > 0
+        can_redo = idx < len(version_ids) - 1
+
+        # Commit all DB changes.
+        session.commit()
+
+    # 8) Build response DTO from payload + metadata.
     return PreferenceCheckpointCreated(
         doctor_id=doctor_id,
         year=year,
         month=month,
-        unavailable_duty_days=[7, 14],
-        unavailable_oncall_days=[8],
-        preferred_duty_days=[10, 11],
-        preferred_oncall_days=[12],
-        min_duties_weekdays=2,
-        max_duties_weekdays=6,
-        min_duties_weekends=1,
-        max_duties_weekends=2,
-        min_oncall_weekdays=2,
-        max_oncall_weekdays=4,
-        min_oncall_weekends=0,
-        max_oncall_weekends=2,
-        weekend_back_to_back_allowed=False,
-        preferred_partners=[7],
-        comments="avoid Mondays",
         status=PreferenceStatus.submitted,
-        version_id="prefv_2026_02_doctor11_0001",
+        # DTO keeps string id; DB keeps INT id → cast here:
+        version_id=str(version_id_int),
         submitted_at=now,
         submitted_by_user_id=actor.user_id,
         submitted_by_role=actor.role,
-        can_undo=True,
-        can_redo=False,
+        can_undo=can_undo,
+        can_redo=can_redo,
         processed_at=now,
+        **payload,
     )
 
 
@@ -334,78 +690,198 @@ def revert_last(*, year: int, month: int, doctor_id: int, actor: UserCtx) -> Pre
     """
     UNDO: move pointer to previous checkpoint and update working snapshot.
 
-    TODO:
-    - Find previous PreferenceVersion for this doctor/period.
-    - Move PreferencePointer.current_checkpoint_id backward.
+    Behavior:
+    - Find previous PreferenceVersion.id for this doctor+period.
+    - Move PreferencePointer.current_version_id to that id.
     - Overwrite PreferenceWorking with the payload from that version.
+    - Recompute can_undo / can_redo flags based on all versions for this doctor+period.
     """
     now = now_utc()
-    return PreferenceRevertRead(
-        doctor_id=doctor_id,
-        year=year,
-        month=month,
-        unavailable_duty_days=[7, 14],
-        unavailable_oncall_days=[8],
-        preferred_duty_days=[10, 11],
-        preferred_oncall_days=[12],
-        min_duties_weekdays=2,
-        max_duties_weekdays=6,
-        min_duties_weekends=1,
-        max_duties_weekends=2,
-        min_oncall_weekdays=2,
-        max_oncall_weekdays=4,
-        min_oncall_weekends=0,
-        max_oncall_weekends=2,
-        weekend_back_to_back_allowed=False,
-        preferred_partners=[7],
-        comments="avoid Mondays",
-        reverted_at=now,
-        version_id="prefv_2026_02_doctor11_0000",
-        current_created_by_role=actor.role,
-        current_created_by_user_id=actor.user_id,
-        current_created_at=now,
-        can_undo=True,
-        can_redo=True,
-    )
+
+    with SessionLocal() as session:
+        # 1) Load pointer for this doctor+period
+        pointer: Optional[PreferencePointer] = (
+            session.query(PreferencePointer).filter_by(year=year, month=month, doctor_id=doctor_id).one_or_none()
+        )
+
+        # No pointer or no current version → cannot undo
+        if pointer is None or pointer.current_version_id is None:
+            raise ValueError("cannot_undo")
+
+        current_id = pointer.current_version_id
+
+        # 2) Find previous version id (strictly smaller id, same doctor+period)
+        prev_version: Optional[PreferenceVersion] = (
+            session.query(PreferenceVersion)
+            .filter(
+                PreferenceVersion.doctor_id == doctor_id,
+                PreferenceVersion.year == year,
+                PreferenceVersion.month == month,
+                PreferenceVersion.id < current_id,
+            )
+            .order_by(PreferenceVersion.id.desc())
+            .first()
+        )
+
+        if prev_version is None:
+            # There is no older checkpoint to move to
+            raise ValueError("cannot_undo")
+
+        # 3) Move pointer to previous version
+        pointer.current_version_id = prev_version.id
+        session.add(pointer)
+
+        # 4) Ensure working row exists and overwrite it with payload from the selected version
+        working = _ensure_working_row(
+            session,
+            year=year,
+            month=month,
+            doctor_id=doctor_id,
+        )
+        _apply_payload_to_working(working, prev_version.payload, actor=actor, now=now)
+
+        # 5) Recompute can_undo / can_redo flags based on all versions for this doctor+period
+        versions = (
+            session.query(PreferenceVersion)
+            .filter_by(year=year, month=month, doctor_id=doctor_id)
+            .order_by(PreferenceVersion.id.asc())
+            .all()
+        )
+        # All checkpoint IDs as plain ints
+        version_ids = [int(v.id) for v in versions]
+
+        # We know pointer.current_version_id is not None (guard at the top),
+        # but the type is Optional[int], so we help the type checker.
+        current_version_id_int = cast(int, pointer.current_version_id)
+
+        try:
+            idx = version_ids.index(current_version_id_int)
+        except ValueError:
+            # Fallback: treat current as last index if something is inconsistent
+            idx = len(version_ids) - 1
+
+        # Flags for UI: there is something before / after this checkpoint
+        can_undo = idx > 0
+        can_redo = idx < len(version_ids) - 1
+
+        # 6) Persist changes
+        session.commit()
+
+        # 7) Build DTO from selected version
+        return PreferenceRevertRead(
+            doctor_id=doctor_id,
+            year=year,
+            month=month,
+            # editable fields come directly from payload JSON
+            **prev_version.payload,
+            # metadata
+            reverted_at=now,
+            version_id=str(prev_version.id),
+            current_created_by_role=prev_version.created_by_role,
+            current_created_by_user_id=prev_version.created_by_user_id,
+            current_created_at=prev_version.created_at,
+            can_undo=can_undo,
+            can_redo=can_redo,
+        )
 
 
 def revert_next(*, year: int, month: int, doctor_id: int, actor: UserCtx) -> PreferenceRevertRead:
     """
     REDO: move pointer to next checkpoint and update working snapshot.
 
-    TODO:
-    - Find next PreferenceVersion for this doctor/period.
-    - Move PreferencePointer.current_checkpoint_id forward.
+    Behavior:
+    - Find next PreferenceVersion.id for this doctor+period.
+    - Move PreferencePointer.current_version_id to that id.
     - Overwrite PreferenceWorking with the payload from that version.
+    - Recompute can_undo / can_redo flags based on all versions for this doctor+period.
     """
     now = now_utc()
-    return PreferenceRevertRead(
-        doctor_id=doctor_id,
-        year=year,
-        month=month,
-        unavailable_duty_days=[7, 14],
-        unavailable_oncall_days=[8],
-        preferred_duty_days=[10, 11],
-        preferred_oncall_days=[12],
-        min_duties_weekdays=2,
-        max_duties_weekdays=6,
-        min_duties_weekends=1,
-        max_duties_weekends=2,
-        min_oncall_weekdays=2,
-        max_oncall_weekdays=4,
-        min_oncall_weekends=0,
-        max_oncall_weekends=2,
-        weekend_back_to_back_allowed=False,
-        preferred_partners=[7],
-        comments="avoid Mondays",
-        reverted_at=now,
-        version_id="prefv_2026_02_doctor11_0001",
-        current_created_by_role=actor.role,
-        current_created_by_user_id=actor.user_id,
-        current_created_at=now,
-        can_undo=True,
-        can_redo=False,
-    )
+
+    with SessionLocal() as session:
+        # 1) Load pointer for this doctor+period
+        pointer: Optional[PreferencePointer] = (
+            session.query(PreferencePointer).filter_by(year=year, month=month, doctor_id=doctor_id).one_or_none()
+        )
+
+        # No pointer or no current version → cannot redo
+        if pointer is None or pointer.current_version_id is None:
+            raise ValueError("cannot_redo")
+
+        current_id = pointer.current_version_id
+
+        # 2) Find next version id (strictly greater id, same doctor+period)
+        next_version: Optional[PreferenceVersion] = (
+            session.query(PreferenceVersion)
+            .filter(
+                PreferenceVersion.doctor_id == doctor_id,
+                PreferenceVersion.year == year,
+                PreferenceVersion.month == month,
+                PreferenceVersion.id > current_id,
+            )
+            .order_by(PreferenceVersion.id.asc())
+            .first()
+        )
+
+        if next_version is None:
+            # There is no newer checkpoint to move to
+            raise ValueError("cannot_redo")
+
+        # 3) Move pointer to next version
+        pointer.current_version_id = next_version.id
+        session.add(pointer)
+
+        # 4) Ensure working row exists and overwrite it with payload from the selected version
+        working = _ensure_working_row(
+            session,
+            year=year,
+            month=month,
+            doctor_id=doctor_id,
+        )
+        _apply_payload_to_working(working, next_version.payload, actor=actor, now=now)
+
+        # 5) Recompute can_undo / can_redo flags based on all versions for this doctor+period
+        versions = (
+            session.query(PreferenceVersion)
+            .filter_by(year=year, month=month, doctor_id=doctor_id)
+            .order_by(PreferenceVersion.id.asc())
+            .all()
+        )
+        # All checkpoint IDs as plain ints
+        version_ids = [int(v.id) for v in versions]
+
+        # We know pointer.current_version_id is not None (guard at the top),
+        # but the type is Optional[int], so we help the type checker.
+        current_version_id_int = cast(int, pointer.current_version_id)
+
+        try:
+            idx = version_ids.index(current_version_id_int)
+        except ValueError:
+            # Fallback: treat current as last index if something is inconsistent
+            idx = len(version_ids) - 1
+
+        # Flags for UI: there is something before / after this checkpoint
+        can_undo = idx > 0
+        can_redo = idx < len(version_ids) - 1
+
+        # 6) Persist changes
+        session.commit()
+
+        # 7) Build DTO from selected version
+        return PreferenceRevertRead(
+            doctor_id=doctor_id,
+            year=year,
+            month=month,
+            # editable fields come directly from payload JSON
+            **next_version.payload,
+            # metadata
+            reverted_at=now,
+            version_id=str(next_version.id),
+            current_created_by_role=next_version.created_by_role,
+            current_created_by_user_id=next_version.created_by_user_id,
+            current_created_at=next_version.created_at,
+            can_undo=can_undo,
+            can_redo=can_redo,
+        )
 
 
 # ------------------------------------------------------------------------------

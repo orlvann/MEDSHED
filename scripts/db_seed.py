@@ -9,6 +9,19 @@ What it does:
 - Idempotent: running multiple times won't duplicate rows.
 
 NOTE: Password hashing here is DEV-ONLY (sha256). For prod use passlib[bcrypt].
+
+Notes for the future (Users/Doctors team):
+- FINAL design should enforce 1:1 link: every Doctor must have a User account
+  created automatically (auto-provision).
+- This seed still keeps one Doctor (Piotr) without a User ON PURPOSE, only for
+  early dev/testing.
+- Once the auto-provision flow is implemented, please:
+    * remove the "doctor without user" case from this seed, or
+    * update it so that Piotr also gets a User.
+
+This script:
+- does NOT create any preferences or schedules,
+- is safe to run multiple times (idempotent enough for local dev).
 """
 
 from __future__ import annotations

@@ -9,12 +9,10 @@ from backend.models.schemas.availability import (
 )
 from backend.routers.deps import UserCtx, require_admin
 from backend.services.availability_service import (
-    compute_day_drilldown_stub,
-    compute_overview_stub,
+    get_day_availability,
+    get_month_availability,
 )
-from backend.utils import ORG_TZ, get_period_status
 
-# Public router exported by this module (FastAPI picks this up in app.py)
 router = APIRouter(prefix="/api/v1/availability", tags=["availability"])
 
 
@@ -23,16 +21,20 @@ router = APIRouter(prefix="/api/v1/availability", tags=["availability"])
     response_model=AvailabilityOverviewRead,
     summary="Monthly availability overview (admin pre-flight coverage)",
     operation_id="availability_overview",
-    dependencies=[Depends(require_admin)],
 )
 def availability_overview(
     year: int = Query(..., ge=1900, le=2100),
     month: int = Query(..., ge=1, le=12),
     user: UserCtx = Depends(require_admin),
 ):
-    """Return a deterministic month overview (MVP stub)."""
-    period_status = get_period_status(year, month)
-    return compute_overview_stub(year=year, month=month, org_tz=ORG_TZ, period_status=period_status)
+    """
+    Admin-only: show availability per day (counts + risk) before running the solver.
+
+    Uses real doctors + preferences data:
+    - only active doctors are counted,
+    - missing preferences = fully available (but still visible as 'missing' in summary).
+    """
+    return get_month_availability(year=year, month=month, actor=user)
 
 
 @router.get(
@@ -40,7 +42,6 @@ def availability_overview(
     response_model=AvailabilityDayRead,
     summary="Day drill-down of availability (admin pre-flight coverage)",
     operation_id="availability_day_drilldown",
-    dependencies=[Depends(require_admin)],
 )
 def availability_day_drilldown(
     year: int = Path(..., ge=1900, le=2100),
@@ -48,9 +49,11 @@ def availability_day_drilldown(
     day: int = Path(..., ge=1, le=31),
     user: UserCtx = Depends(require_admin),
 ):
-    """Return per-day drill-down; 404 if day is out of range (MVP stub)."""
-    period_status = get_period_status(year, month)
-    data = compute_day_drilldown_stub(year=year, month=month, day=day, org_tz=ORG_TZ, period_status=period_status)
+    """
+    Admin-only: show which doctors are available on a specific day,
+    split into duty/on-call and resident/specialist lists.
+    """
+    data = get_day_availability(year=year, month=month, day=day, actor=user)
     if data is None:
-        raise HTTPException(status_code=404, detail="not_found")
+        raise HTTPException(status_code=404, detail="day_out_of_range")
     return data
