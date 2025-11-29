@@ -20,9 +20,16 @@ from backend.models.orm.user import User
 
 
 def print_doctors(db: Session) -> None:
+    # Show doctors with role, email and flags is_active / is_head.
     print("== Doctors ==")
     for d in db.execute(select(Doctor).order_by(Doctor.id)).scalars():
-        print(f"#{d.id} {d.first_name} {d.last_name} " f"role={d.role.value} email={d.email}")
+        print(
+            f"#{d.id} {d.first_name} {d.last_name} "
+            f"role={d.role.value} "
+            f"email={d.email} "
+            f"active={d.is_active} "
+            f"head={d.is_head}"
+        )
 
 
 def print_users(db: Session) -> None:
@@ -72,7 +79,7 @@ def print_preferences_pointers(db: Session) -> None:
     ).scalars():
         print(
             f"doc#{row.doctor_id} {row.year:04d}-{row.month:02d} "
-            f"current_checkpoint_id={row.current_checkpoint_id} "
+            f"current_checkpoint_id={row.current_version_id} "
             f"submitted_at={row.submitted_at} by={row.submitted_by_role}"
         )
 
@@ -81,7 +88,7 @@ def print_preferences_versions(db: Session) -> None:
     print("\n== Preferences: Versions ==")
     for row in db.execute(select(PreferenceVersion).order_by(PreferenceVersion.created_at)).scalars():
         print(
-            f"{row.version_id} -> doc#{row.doctor_id} "
+            f"{row.id} -> doc#{row.doctor_id} "
             f"{row.year:04d}-{row.month:02d} created_at={row.created_at} "
             f"by={row.created_by_role}"
         )
