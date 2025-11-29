@@ -189,13 +189,6 @@ if origins:
 
 ## Configuration
 
-
-### 2) Uprość sekcję „Configuration”
-Zastąp całą obecną sekcję „Configuration” tym krótkim wariantem:
-
-```md
-## Configuration
-
 No local config is required for dev: Alembic and the app fall back to SQLite at `backend/db/sqlite.db`.
 If you want to use another DB (e.g., Postgres), set:
 
