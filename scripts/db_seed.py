@@ -8,7 +8,6 @@ What it does:
     * doctor:   doctor@hospital.org  / doctor123  (linked 1:1 to Doctor(Anna))
 - Idempotent: running multiple times won't duplicate rows.
 
-NOTE: Uses proper bcrypt password hashing via backend.utils.security.
 """
 
 from __future__ import annotations

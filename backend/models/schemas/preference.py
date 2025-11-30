@@ -5,6 +5,7 @@ from typing import List, Optional
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 from backend.models.common_enums import (
+    DeadlineStatus,  # "open" | "locked"
     PeriodStatus,  # "past" | "current" | "future"
     PreferenceStatus,  # "missing" | "submitted"
 )
@@ -196,14 +197,26 @@ class PreferencesSummaryRead(BaseModel):
     month: MonthInt
     submitted: List[int] = []
     missing: List[int] = []
-    last_update_at: datetime
 
 
 class PreferencesDeadlineRead(BaseModel):
+    """
+    Deadline configuration for a period.
+
+    Used by:
+    - GET /api/v1/preferences/deadlines/{year}/{month}
+
+    Semantics:
+    - deadline is None  -> no deadline configured for this period yet.
+    - status:
+        * "open"   -> edits allowed (subject to period history rules),
+        * "locked" -> doctors cannot edit; admin still can.
+    """
+
     year: YearInt
     month: MonthInt
-    deadline: datetime
-    status: str  # "open" | "locked"
+    deadline: Optional[datetime]
+    status: DeadlineStatus  # "open" | "locked"
     org_timezone: str
 
 

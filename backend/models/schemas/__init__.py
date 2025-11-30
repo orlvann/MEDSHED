@@ -31,7 +31,6 @@ from .availability import (
     AvailabilityDayRead,
     AvailabilityDaySummary,
     AvailabilityOverviewRead,
-    AvailabilityRiskLevel,
 )
 
 # Diagnostics
@@ -155,5 +154,4 @@ __all__ = [
     "ScheduleExportQuery",
     # Availability
     "AvailabilityDaySummary",
-    "AvailabilityRiskLevel",
 ]

@@ -82,8 +82,8 @@ class PreferenceVersion(Base):
 
     __tablename__ = "preferences_versions"
 
-    # String PK (ULID/UUID). We'll generate in service layer; for now keep TEXT.
-    version_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    # Integer PK (autoincrement), creation order == id order.
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
 
     doctor_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
     year: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
@@ -117,11 +117,12 @@ class PreferencePointer(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
 
     doctor_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
-    year: Mapped[int] = mapped_column(Integer, nullable=False)
-    month: Mapped[int] = mapped_column(Integer, nullable=False)
+    year: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    month: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
 
-    current_checkpoint_id: Mapped[Optional[str]] = mapped_column(
-        String(64), ForeignKey("preferences_versions.version_id"), nullable=True
+    # FK do int PK w preferences_versions.id
+    current_version_id: Mapped[Optional[int]] = mapped_column(
+        Integer, ForeignKey("preferences_versions.id"), nullable=True
     )
 
     submitted_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
@@ -133,9 +134,6 @@ class PreferencePointer(Base):
         CheckConstraint("month >= 1 AND month <= 12", name="ck_pointer_month_range"),
         CheckConstraint("year >= 1900 AND year <= 2100", name="ck_pointer_year_range"),
     )
-
-    # Optional relation if you want ORM navigation (not required now):
-    # current_version = relationship("PreferenceVersion", foreign_keys=[current_checkpoint_id])
 
 
 # --- PREFERENCES_DEADLINES ---------------------------------------------------
@@ -150,7 +148,8 @@ class PreferenceDeadline(Base):
 
     year: Mapped[int] = mapped_column(Integer, nullable=False)
     month: Mapped[int] = mapped_column(Integer, nullable=False)
-    deadline_utc: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    # timezone-aware UTC timestamp
+    deadline_utc: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     org_timezone: Mapped[str] = mapped_column(
         String(64), nullable=False, default="Europe/Warsaw", server_default="Europe/Warsaw"
     )
