@@ -11,8 +11,10 @@
 #   make db-dump              # SQL to RECREATE STRUCTURE (DDL only) — use to rebuild an empty DB
 #   make db-dump-full         # SQL to RECREATE STRUCTURE + DATA (DDL + INSERTs) → writes dump_full.sql
 #   make db-seed              # insert sample data into local DB
+#   make db-seed-real         # seed anonymized real doctors + deadlines + preferences from Excel
 #   make db-reset             # drop local SQLite file and re-apply head
 #   make db-meta              # show tables registered in SQLAlchemy Base.metadata (quick import test)
+#   make db-shell             # open interactive SQLite shell on local DB (type '.exit' or Ctrl+D to quit)
 #
 # Summary:
 #   db-check      = quick inspection of what’s in the DB now (human-readable; no files)
@@ -22,10 +24,11 @@
 # Notes:
 # - Commands assume repo root as CWD.
 # - PYTHONPATH is set to repo root so absolute imports like `backend.*` work.
+# - In `db-shell`, exit sqlite3 with `.exit` command or Ctrl+D.
 
 .DEFAULT_GOAL := help
 
-.PHONY: help app db-upgrade db-revision db-check db-check-one db-check-like db-seed db-reset db-show db-dump db-dump-full db-meta
+.PHONY: help app db-upgrade db-revision db-check db-check-one db-check-like db-seed db-seed-real db-reset db-show db-dump db-dump-full db-meta db-shell
 
 help: ## Show this help.
 	@printf "\nAvailable commands:\n\n"
@@ -53,6 +56,11 @@ db-check-like: ## Inspect tables by LIKE pattern, usage: make db-check-like p=do
 db-seed: ## Insert sample data into local DB (uses scripts/db_seed.py).
 	PYTHONPATH=. python scripts/db_seed.py
 
+db-seed-real: ## Seed anonymized real doctors, deadlines and preferences from Excel.
+	PYTHONPATH=. python -m scripts.db_seed_doctors_anon
+	PYTHONPATH=. python -m scripts.db_seed_pref_deadlines_real
+	PYTHONPATH=. python -m scripts.db_seed_pref_real
+
 db-reset: ## Remove local SQLite DB and re-create schema from head.
 	rm -f backend/db/sqlite.db
 	alembic -c backend/alembic.ini upgrade head
@@ -68,3 +76,6 @@ db-dump-full: ## Write full SQL dump (DDL + data) to dump_full.sql.
 
 db-meta: ## Show tables registered in SQLAlchemy Base.metadata (quick import test).
 	PYTHONPATH=. python -c "from backend.db.session import Base; from backend.models.orm import doctor, user, preference; print(sorted(Base.metadata.tables.keys()))"
+
+db-shell: ## Open interactive SQLite shell on local DB.
+	sqlite3 backend/db/sqlite.db

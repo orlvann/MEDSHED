@@ -1,42 +1,57 @@
+# scripts/db_seed_pref_real.py
 """
-Seed helper: real preferences from Excel files (DRY-RUN first).
+Seed real monthly preferences from Excel files.
 
-Current behaviour:
-- Scan data/preferences_excel for *.xlsx files.
-- Parse year, month and doctor alias from file names: YYYY_MM_alias.xlsx
-- Map alias -> Doctor row in the DB.
-- Shift years: 2023->2025, 2024->2026, 2025->2027.
-- Print what *would* be inserted for each (doctor, year, month).
+Flow:
+- For each Excel file (e.g. 2023_02_devon.xlsx):
+  - Parse year, month and alias from the filename.
+  - Map alias -> (first_name, last_name) and find doctor_id in DB.
+  - Read duty/on-call preferences from Excel:
+        CHCĘ / CHCE      -> preferred_*_days
+        NIE MOGĘ / MOGE  -> unavailable_*_days
+        MOGĘ / ""        -> implicitly available (not stored).
+  - Read an optional comment from the bottom of the sheet (row starting with 'KOMENTARZ').
+  - Upsert PreferenceWorking for (doctor_id, year, month).
+  - Create a PreferenceVersion snapshot with JSON payload.
+  - Create/update PreferencePointer to point at this version.
 
-Next step (TODO):
-- After we agree on payload structure and ORM columns in Preference*
-  models, add real inserts into:
-  - PreferenceWorking / PreferenceVersion / PreferencePointer.
+Important:
+- Run AFTER seeding doctors (so doctors table is already filled).
+- Excel structure is assumed as on the screenshot:
+  A: day number (1..31)
+  B: day of week (text, ignored here)
+  C: "Dyżur" with values like "MOGĘ", "NIE MOGĘ", "CHCĘ"
+  D: "Poddyżur" (on-call) with similar values.
+  Last row(s): a comment, e.g. "KOMENTARZ: 4? ;) 3 środy i coś, ferie w pierwszym tygodniu".
 """
 
 from __future__ import annotations
 
-import argparse
-from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
+from openpyxl import load_workbook
 from sqlalchemy import select
-from sqlalchemy.orm import Session
 
 from backend.db.session import SessionLocal
 from backend.models.orm.doctor import Doctor
+from backend.models.orm.preference import (
+    PreferencePointer,
+    PreferenceVersion,
+    PreferenceWorking,
+)
 
-# Year remapping policy: how we "time-shift" the real data.
-YEAR_MAP: Dict[int, int] = {
-    2023: 2025,
-    2024: 2026,
-    2025: 2027,
-}
+# ---------------------------------------------------------------------------
+# Configuration
+# ---------------------------------------------------------------------------
 
+# Directory with Excel files. Adjust if your path is different.
+EXCEL_DIR = Path("data/preferences_excel")
 
-# Map doctor alias used in Excel file names -> (first_name, last_name)
-# Example file name: 2025_02_devon.xlsx  -> alias "devon" -> Brad Devon.
+# Map from alias used in filenames -> (first_name, last_name) in DB.
+# Example filename: 2023_02_devon.xlsx  -> alias = "devon".
+# IMPORTANT: keys MUST be lowercase, because we .lower() the alias from filename.
 ALIAS_TO_NAME: Dict[str, Tuple[str, str]] = {
     "devon": ("Brad", "Devon"),
     "grizzly": ("Rick", "Grizzly"),
@@ -45,164 +60,464 @@ ALIAS_TO_NAME: Dict[str, Tuple[str, str]] = {
     "kolton": ("Jake", "Kolton"),
     "lukewood": ("Ralph", "Lukewood"),
     "router": ("Mark", "Router"),
-    "skipperP": ("Paul", "Skipper"),
-    "skipperW": ("William", "Skipper"),
+    "skipperp": ("Paul", "Skipper"),
+    "skipperw": ("William", "Skipper"),
     "streeter": ("Anna", "Streeter"),
     "sussman": ("Paul", "Sussman"),
     "tacker": ("Alice", "Tacker"),
+    # Add more if needed.
 }
 
 
-@dataclass
-class PrefFile:
-    """Single Excel file with mapped DB doctor and shifted year/month."""
+def map_year_for_seed(raw_year: int) -> int:
+    """Map original Excel year to target demo year.
 
-    path: Path
-    doctor_id: int
-    doctor_name: str  # for logging only
-    orig_year: int
-    orig_month: int
-    target_year: int
-    target_month: int
+    Excel files use years 2023–2025.
+    In DB we want them shifted by +2 years:
+      2023 -> 2025
+      2024 -> 2026
+      2025 -> 2027
 
-
-def load_doctor_ids(db: Session) -> Dict[str, int]:
+    If some unexpected year appears, we fail fast.
     """
-    Build mapping alias -> doctor_id using ALIAS_TO_NAME and the Doctors table.
+    mapping = {
+        2023: 2025,
+        2024: 2026,
+        2025: 2027,
+    }
+    if raw_year not in mapping:
+        raise ValueError(f"Unsupported source year {raw_year} in Excel file – expected 2023–2025.")
+    return mapping[raw_year]
 
-    Key idea:
-    - We never store alias in DB, so we map alias -> (first_name, last_name)
-      and then look up the Doctor row by name.
+
+# ---------------------------------------------------------------------------
+# Helpers for parsing and Excel reading
+# ---------------------------------------------------------------------------
+
+
+def parse_year_month_alias(path: Path) -> Tuple[int, int, str]:
     """
-    alias_to_id: Dict[str, int] = {}
-
-    for alias, (first_name, last_name) in ALIAS_TO_NAME.items():
-        stmt = select(Doctor).where(
-            Doctor.first_name == first_name,
-            Doctor.last_name == last_name,
-        )
-        doctor = db.execute(stmt).scalars().first()
-        if doctor is None:
-            raise RuntimeError(
-                f"Doctor not found for alias='{alias}' "
-                f"({first_name} {last_name}). Did you run db_seed_doctors_anon?"
-            )
-        alias_to_id[alias] = doctor.id
-
-    return alias_to_id
-
-
-def parse_filename(path: Path) -> Tuple[int, int, str]:
-    """
-    Parse file name of the form 'YYYY_MM_alias.xlsx'.
+    Extract year, month, alias from filename like '2023_02_devon.xlsx'.
 
     Returns:
-        (year, month, alias)
-
-    Raises:
-        ValueError if the pattern does not match.
+        (year, month, alias_lower)
     """
-    stem = path.stem  # e.g. "2025_02_devon"
-    parts = stem.split("_", 2)
-    if len(parts) != 3:
-        raise ValueError(f"Unexpected file name format: {path.name!r}")
+    name = path.stem  # e.g. "2023_02_devon"
+    parts = name.split("_")
+    if len(parts) < 3:
+        raise ValueError(f"Filename {path.name!r} does not match 'YYYY_MM_alias.xlsx' pattern")
 
-    year_str, month_str, alias = parts
+    year_str, month_str, alias = parts[0], parts[1], "_".join(parts[2:])
     year = int(year_str)
     month = int(month_str)
-    return year, month, alias
+    return year, month, alias.lower()
 
 
-def collect_pref_files(db: Session, root_dir: Path) -> List[PrefFile]:
+def normalize_str(value: Any) -> str:
     """
-    Scan root_dir for *.xlsx and build PrefFile objects for each.
+    Convert Excel cell value to UPPERCASE string without leading/trailing spaces.
 
-    - Skip files whose year is not in YEAR_MAP.
+    This is used to normalize text like " ChcĘ " -> "CHCĘ".
     """
-    alias_to_id = load_doctor_ids(db)
-    results: List[PrefFile] = []
+    if value is None:
+        return ""
+    return str(value).strip().upper()
 
-    for path in sorted(root_dir.glob("*.xlsx")):
-        try:
-            orig_year, orig_month, alias = parse_filename(path)
-        except ValueError as exc:  # bad file name format
-            print(f"[WARN] Skipping {path.name}: {exc}")
-            continue
 
-        if orig_year not in YEAR_MAP:
-            print(f"[WARN] Skipping {path.name}: year {orig_year} not in YEAR_MAP")
-            continue
+def to_int_day(value: Any) -> Optional[int]:
+    """
+    Convert Excel cell value from column A to an integer day (1..31).
 
-        if alias not in alias_to_id:
-            print(f"[WARN] Skipping {path.name}: unknown alias {alias!r}")
-            continue
+    We handle a few common cases:
+    - int (e.g. 1)
+    - float (e.g. 1.0)
+    - string digits (e.g. "1")
+    If it cannot be converted to a valid day, return None.
+    """
+    if value is None:
+        return None
 
-        target_year = YEAR_MAP[orig_year]
-        target_month = orig_month
+    # If it's already int, just return it.
+    if isinstance(value, int):
+        return value
 
-        doctor_id = alias_to_id[alias]
-        first_name, last_name = ALIAS_TO_NAME[alias]
-        doctor_name = f"{first_name} {last_name}"
+    # If it's a float like 1.0, we try to cast if it's "integer-like".
+    if isinstance(value, float):
+        if value.is_integer():
+            return int(value)
+        return None
 
-        results.append(
-            PrefFile(
-                path=path,
-                doctor_id=doctor_id,
-                doctor_name=doctor_name,
-                orig_year=orig_year,
-                orig_month=orig_month,
-                target_year=target_year,
-                target_month=target_month,
-            )
+    # If it's a string with digits, try to parse.
+    if isinstance(value, str):
+        stripped = value.strip()
+        if stripped.isdigit():
+            return int(stripped)
+
+    # Any other type is not supported as a day.
+    return None
+
+
+def is_preferred(value_norm: str) -> bool:
+    """
+    Return True if normalized cell value means "preferred" (CHCĘ/CHCE).
+    """
+    # We accept both CHCĘ and CHCE, so we just check the prefix.
+    return value_norm.startswith("CHC")
+
+
+def is_unavailable(value_norm: str) -> bool:
+    """
+    Return True if normalized cell value means "unavailable" (NIE MOGĘ/MOGE).
+    """
+    # We accept both NIE MOGĘ and NIE MOGE.
+    return value_norm.startswith("NIE MOG")
+
+
+def load_day_lists_from_excel(
+    path: Path,
+) -> Tuple[List[int], List[int], List[int], List[int], Optional[str]]:
+    """
+    Read Excel file and return four lists of day numbers (1..31)
+    plus an optional comment.
+
+    Returns:
+        (
+            preferred_duty_days,
+            unavailable_duty_days,
+            preferred_oncall_days,
+            unavailable_oncall_days,
+            comment,  # full text of the comment row or None
         )
 
-    return results
+    Rules:
+    - Column C ("Dyżur"):
+        CHCĘ / CHCE          -> preferred_duty_days
+        NIE MOGĘ / NIE MOGE  -> unavailable_duty_days
+        MOGĘ / ""            -> ignored (means "normally available")
+    - Column D ("Poddyżur" / on-call):
+        CHCĘ / CHCE          -> preferred_oncall_days
+        NIE MOGĘ / NIE MOGE  -> unavailable_oncall_days
+        MOGĘ / ""            -> ignored
+    - Comment:
+        We scan from the bottom upwards and look for a cell in column B or A
+        whose text starts with "KOMENTARZ". The whole cell content is stored.
+    """
+    wb = load_workbook(path, data_only=True)
+    ws = wb.active
+    assert ws is not None, "Workbook has no active worksheet"
+
+    preferred_duty_days: List[int] = []
+    unavailable_duty_days: List[int] = []
+    preferred_oncall_days: List[int] = []
+    unavailable_oncall_days: List[int] = []
+    comment: Optional[str] = None
+
+    # First pass: read rows with days (1..31)
+    for row_idx in range(2, ws.max_row + 1):
+        raw_day = ws[f"A{row_idx}"].value
+        day = to_int_day(raw_day)
+        if day is None:
+            # Skip rows that do not have a valid day number.
+            continue
+
+        duty_value = normalize_str(ws[f"C{row_idx}"].value)
+        oncall_value = normalize_str(ws[f"D{row_idx}"].value)
+
+        # Duty column (C)
+        if is_preferred(duty_value):
+            preferred_duty_days.append(day)
+        elif is_unavailable(duty_value):
+            unavailable_duty_days.append(day)
+        # "MOGĘ" and "" are treated as neutral -> not stored.
+
+        # On-call column (D)
+        if is_preferred(oncall_value):
+            preferred_oncall_days.append(day)
+        elif is_unavailable(oncall_value):
+            unavailable_oncall_days.append(day)
+        # "MOGĘ" and "" again mean "available" -> not stored.
+
+    # Second pass: look for an explicit comment row from the bottom.
+    # We only accept rows where the text starts with 'KOMENTARZ'.
+    for row_idx in range(ws.max_row, 1, -1):
+        # We try column B first (more likely for text), then A.
+        raw = ws[f"B{row_idx}"].value or ws[f"A{row_idx}"].value
+        if raw is None:
+            # Empty cell → skip
+            continue
+
+        text = str(raw).strip()
+        if not text:
+            # Only spaces → skip
+            continue
+
+        upper = text.upper()
+        if not upper.startswith("KOMENTARZ"):
+            # Not a comment marker (e.g. 'piątek') → skip
+            continue
+
+        # Strip the 'KOMENTARZ' word and an optional ':' that follows.
+        rest = text[len("KOMENTARZ") :].lstrip()
+        if rest.startswith(":"):
+            rest = rest[1:].lstrip()
+
+        # If there is no text after the marker → treat as no comment.
+        comment = rest or None
+        break
+
+    return (
+        preferred_duty_days,
+        unavailable_duty_days,
+        preferred_oncall_days,
+        unavailable_oncall_days,
+        comment,
+    )
 
 
-def dry_run_print(files: List[PrefFile]) -> None:
-    """Print a human-readable summary of what would be seeded."""
-    print("== Planned preference imports (DRY RUN) ==")
-    for f in files:
-        print(
-            f"{f.path.name}: "
-            f"doctor #{f.doctor_id} ({f.doctor_name}) "
-            f"{f.orig_year:04d}-{f.orig_month:02d} "
-            f"-> target {f.target_year:04d}-{f.target_month:02d}"
+# ---------------------------------------------------------------------------
+# DB helpers
+# ---------------------------------------------------------------------------
+
+
+def get_doctor_id_by_alias(session, alias: str) -> int:
+    """
+    Resolve doctor_id from alias using ALIAS_TO_NAME and the doctors table.
+
+    Steps:
+    - Find (first_name, last_name) for given alias.
+    - Query doctors table for this pair.
+    - Return doctor's id.
+    """
+    if alias not in ALIAS_TO_NAME:
+        raise KeyError(f"Alias {alias!r} not found in ALIAS_TO_NAME mapping")
+
+    first_name, last_name = ALIAS_TO_NAME[alias]
+
+    stmt = select(Doctor).where(Doctor.first_name == first_name).where(Doctor.last_name == last_name)
+    doctor = session.execute(stmt).scalar_one_or_none()
+
+    if doctor is None:
+        raise RuntimeError(f"Doctor not found in DB for alias {alias!r} " f"-> ({first_name!r}, {last_name!r})")
+
+    return doctor.id
+
+
+def get_or_create_working(
+    session,
+    doctor_id: int,
+    year: int,
+    month: int,
+) -> PreferenceWorking:
+    """
+    Get existing PreferenceWorking row for (doctor_id, year, month)
+    or create a new one if it does not exist.
+
+    Newly created row has:
+    - lock_version = 1
+    - empty lists and default counters.
+    """
+    stmt = (
+        select(PreferenceWorking)
+        .where(PreferenceWorking.doctor_id == doctor_id)
+        .where(PreferenceWorking.year == year)
+        .where(PreferenceWorking.month == month)
+    )
+    existing = session.execute(stmt).scalar_one_or_none()
+
+    if existing is not None:
+        return existing
+
+    working = PreferenceWorking(
+        doctor_id=doctor_id,
+        year=year,
+        month=month,
+        lock_version=1,
+    )
+    session.add(working)
+    session.flush()  # assign ID
+    print("  created new PreferenceWorking row")
+    return working
+
+
+def build_payload_from_working(working: PreferenceWorking) -> Dict[str, Any]:
+    """
+    Build JSON payload for PreferenceVersion from PreferenceWorking row.
+
+    Important:
+    - Datetimes are converted to ISO strings so they can be stored in JSON.
+    - This payload shape should roughly match the DTO for preferences.
+    """
+    return {
+        "doctor_id": working.doctor_id,
+        "year": working.year,
+        "month": working.month,
+        "unavailable_duty_days": working.unavailable_duty_days,
+        "unavailable_oncall_days": working.unavailable_oncall_days,
+        "preferred_duty_days": working.preferred_duty_days,
+        "preferred_oncall_days": working.preferred_oncall_days,
+        "min_duties_weekdays": working.min_duties_weekdays,
+        "max_duties_weekdays": working.max_duties_weekdays,
+        "min_duties_weekends": working.min_duties_weekends,
+        "max_duties_weekends": working.max_duties_weekends,
+        "min_oncall_weekdays": working.min_oncall_weekdays,
+        "max_oncall_weekdays": working.max_oncall_weekdays,
+        "min_oncall_weekends": working.min_oncall_weekends,
+        "max_oncall_weekends": working.max_oncall_weekends,
+        "weekend_back_to_back_allowed": working.weekend_back_to_back_allowed,
+        "preferred_partners": working.preferred_partners,
+        "comments": working.comments,
+        "last_saved_at": working.last_saved_at.isoformat() if working.last_saved_at else None,
+        "last_saved_by_user_id": working.last_saved_by_user_id,
+        "last_saved_by_role": working.last_saved_by_role,
+        "last_admin_note": working.last_admin_note,
+    }
+
+
+def upsert_pointer(
+    session,
+    doctor_id: int,
+    year: int,
+    month: int,
+    version_id: int,
+    submitted_at: datetime,
+) -> None:
+    """
+    Create or update PreferencePointer for (doctor_id, year, month)
+    so that it points to the given version_id.
+
+    For seed we treat this as if doctor has "submitted" preferences.
+    """
+    stmt = (
+        select(PreferencePointer)
+        .where(PreferencePointer.doctor_id == doctor_id)
+        .where(PreferencePointer.year == year)
+        .where(PreferencePointer.month == month)
+    )
+    pointer = session.execute(stmt).scalar_one_or_none()
+
+    if pointer is None:
+        pointer = PreferencePointer(
+            doctor_id=doctor_id,
+            year=year,
+            month=month,
         )
+        session.add(pointer)
 
-    print(f"\nTotal files mapped: {len(files)}")
+    pointer.current_version_id = version_id
+    pointer.submitted_at = submitted_at
+    # For seed we store fake "system/admin" submitter.
+    pointer.submitted_by_user_id = 0
+    pointer.submitted_by_role = "admin"
+
+
+# ---------------------------------------------------------------------------
+# Main processing
+# ---------------------------------------------------------------------------
+
+
+def process_single_file(session, path: Path) -> None:
+    """
+    Process one Excel file:
+    - parse metadata from filename
+    - map original Excel year to target demo year (2023->2025, 2024->2026, 2025->2027)
+    - resolve doctor_id
+    - read four day lists + comment from Excel
+    - upsert working
+    - create version + pointer
+    """
+    raw_year, month, alias = parse_year_month_alias(path)
+    year = map_year_for_seed(raw_year)
+    doctor_id = get_doctor_id_by_alias(session, alias)
+
+    (
+        preferred_duty_days,
+        unavailable_duty_days,
+        preferred_oncall_days,
+        unavailable_oncall_days,
+        comment,
+    ) = load_day_lists_from_excel(path)
+
+    print(
+        f"[FILE] {path.name} -> raw_year={raw_year}, mapped_year={year}, "
+        f"month={month}, alias={alias}, doctor_id={doctor_id}"
+    )
+    print(f"  preferred_duty_days    = {preferred_duty_days}")
+    print(f"  unavailable_duty_days  = {unavailable_duty_days}")
+    print(f"  preferred_oncall_days  = {preferred_oncall_days}")
+    print(f"  unavailable_oncall_days= {unavailable_oncall_days}")
+    print(f"  comment                = {comment!r}")
+
+    # 1) Upsert working row
+    working = get_or_create_working(session, doctor_id, year, month)
+
+    # Update working row with lists from Excel.
+    working.preferred_duty_days = preferred_duty_days
+    working.unavailable_duty_days = unavailable_duty_days
+    working.preferred_oncall_days = preferred_oncall_days
+    working.unavailable_oncall_days = unavailable_oncall_days
+
+    # Store comment (can be None if not present).
+    working.comments = comment
+
+    # We can also set last_saved_* audit fields for clarity.
+    now = datetime.utcnow()
+    working.last_saved_at = now
+    working.last_saved_by_user_id = 0
+    working.last_saved_by_role = "admin"
+
+    # 2) Create new version with full JSON payload
+    payload = build_payload_from_working(working)
+
+    new_version = PreferenceVersion(
+        doctor_id=doctor_id,
+        year=year,
+        month=month,
+        kind="checkpoint",  # imported checkpoint
+        payload=payload,  # this is the ONLY data field in versions
+        created_at=now,
+        created_by_user_id=0,
+        created_by_role="admin",
+        note="Seeded from Excel file",
+    )
+    session.add(new_version)
+    session.flush()  # so new_version.id is available
+
+    print(f"  created PreferenceVersion id={new_version.id}")
+
+    # 3) Update pointer to point to this version
+    upsert_pointer(session, doctor_id, year, month, new_version.id, now)
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Seed real preferences from Excel (currently DRY-RUN only).")
-    parser.add_argument(
-        "--root-dir",
-        type=Path,
-        default=Path("data/preferences_excel"),
-        help="Directory with normalized Excel files YYYY_MM_alias.xlsx",
-    )
-    parser.add_argument(
-        "--commit",
-        action="store_true",
-        help="When set, perform real inserts (TODO). For now only dry-run is implemented.",
-    )
-    args = parser.parse_args()
+    """
+    Entry point of the script.
+    - Creates DB session.
+    - Iterates over all .xlsx files in EXCEL_DIR.
+    - Processes each file and commits at the end.
+    """
+    if not EXCEL_DIR.exists():
+        raise RuntimeError(f"Directory {EXCEL_DIR!r} does not exist. Adjust EXCEL_DIR in the script.")
 
-    db: Session = SessionLocal()
+    excel_files = sorted(EXCEL_DIR.glob("*.xlsx"))
+    if not excel_files:
+        print(f"No .xlsx files found in {EXCEL_DIR}")
+        return
+
+    session = SessionLocal()
     try:
-        files = collect_pref_files(db, args.root_dir)
+        for path in excel_files:
+            process_single_file(session, path)
 
-        # For now we always only print the plan.
-        dry_run_print(files)
-
-        if args.commit:
-            print(
-                "\n[INFO] --commit was passed, but real DB inserts are not "
-                "implemented yet. This script currently only performs a dry run."
-            )
-            # TODO: implement real inserts into Preference* tables.
+        # Commit all changes once at the end.
+        session.commit()
+        print("All files processed and committed.")
+    except Exception as exc:
+        # In case of error we rollback to keep DB consistent.
+        session.rollback()
+        print(f"ERROR: {exc}")
+        raise
     finally:
-        db.close()
+        session.close()
 
 
 if __name__ == "__main__":
