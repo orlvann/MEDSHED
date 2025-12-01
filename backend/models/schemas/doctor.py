@@ -6,7 +6,7 @@ from typing import List, Optional
 
 from pydantic import BaseModel, EmailStr, Field
 
-from backend.models.common_enums import DoctorRole
+from backend.models.common_enums import DoctorRole, Role
 
 from .dto_common import PageMeta
 
@@ -25,7 +25,8 @@ class DoctorCreate(BaseModel):
     role: DoctorRole
     is_active: bool = True
     is_head: bool = False
-    email: Optional[EmailStr] = None
+    email: EmailStr  # Required: user account will be auto-created
+    user_role: Role = Field(..., description="User account role: doctor or doctor_admin")
 
 
 class DoctorPut(BaseModel):
@@ -36,7 +37,9 @@ class DoctorPut(BaseModel):
     role: DoctorRole
     is_active: bool
     is_head: bool
-    email: Optional[EmailStr] = None
+    email: Optional[EmailStr] = Field(None, description="Email address of the doctor")
+    user_role: Optional[Role] = Field(None, description="User account role: doctor or doctor_admin")
+    user_is_active: Optional[bool] = Field(None, description="Whether user can login (users.is_active)")
 
 
 class DoctorRead(BaseModel):
@@ -51,6 +54,9 @@ class DoctorRead(BaseModel):
     email: Optional[EmailStr] = None
     created_at: datetime
     updated_at: datetime
+    # User account fields (None if no linked user)
+    user_is_active: Optional[bool] = Field(None, description="Whether user can login (from users table)")
+    user_role: Optional[Role] = Field(None, description="User account role (from users table)")
 
 
 class DoctorList(PageMeta):

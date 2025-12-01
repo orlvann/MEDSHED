@@ -4,8 +4,8 @@ Router dependencies for basic role-based access control (RBAC).
 
 Purpose:
 - Keep role checks out of router functions.
-- Make it easy to swap the internals for real JWT validation later
-  without changing routers' signatures.
+- Extract and validate JWT tokens from Authorization header.
+- Provide user context to protected endpoints.
 
 Notes:
 - Error bodies are standardized across the API as:
@@ -15,40 +15,71 @@ Notes:
 from __future__ import annotations
 
 from fastapi import Depends, HTTPException, status
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from sqlalchemy.orm import Session
 
 # Unified error factory (keeps errors consistent with the rest of the API).
+from backend.db.session import get_db
 from backend.models.schemas.dto_common import make_error
+from backend.services import auth_service
+
+# HTTP Bearer scheme for extracting tokens from Authorization header
+security = HTTPBearer()
 
 
 class UserCtx:
     """
     Minimal user context propagated via Depends.
 
-    Real-world implementation should:
-    - Parse and verify JWT (signature, expiration, audience, etc.).
-    - Map claims to roles/permissions.
-    - Optionally load user from DB (for flags like is_active).
+    Contains:
+    - user_id: Database ID of the authenticated user
+    - role: User role ("admin" | "doctor")
+    - email: User email address
     """
 
-    def __init__(self, user_id: int, role: str) -> None:
+    def __init__(self, user_id: int, role: str, email: str) -> None:
         self.user_id = user_id
         self.role = role  # expected values: "admin" | "doctor"
+        self.email = email
 
 
-# TODO (replace stub):
-# - Decode JWT from Authorization: Bearer <token>.
-# - Validate signature and claims.
-# - Create UserCtx from claims (user_id, role).
-def get_current_user() -> UserCtx:
+def get_current_user(
+    credentials: HTTPAuthorizationCredentials = Depends(security),
+    db: Session = Depends(get_db)
+) -> UserCtx:
     """
-    Stub: always returns an admin user.
-
-    Replace with e.g.:
-        token = auth_service.get_bearer_token(request)
-        claims = auth_service.decode_and_verify(token)
-        return UserCtx(user_id=claims.sub, role=claims.role)
+    Extract and validate JWT token from Authorization header.
+    
+    Args:
+        credentials: HTTP Bearer token from Authorization header
+        db: Database session
+        
+    Returns:
+        UserCtx with user information
+        
+    Raises:
+        HTTPException: 401 if token is invalid or user not found
     """
-    return UserCtx(user_id=101, role="admin")
+    token = credentials.credentials
+    
+    try:
+        user = auth_service.get_user_from_token(db, token)
+        return UserCtx(
+            user_id=user.id,
+            role=user.role.value,
+            email=user.email
+        )
+    except auth_service.InvalidTokenError:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=make_error("invalid_token"),
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    except auth_service.InactiveUserError:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=make_error("inactive_user"),
+        )
 
 
 def require_admin(user: UserCtx = Depends(get_current_user)) -> UserCtx:

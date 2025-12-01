@@ -46,7 +46,7 @@ def upgrade() -> None:
         "users",
         sa.Column("id", sa.Integer(), autoincrement=True, nullable=False),
         sa.Column("email", sa.String(length=320), nullable=False),
-        sa.Column("role", sa.Enum("admin", "doctor", name="user_role"), nullable=False),
+        sa.Column("role", sa.Enum("admin", "doctor", "doctor_admin", name="user_role"), nullable=False),
         sa.Column("password_hash", sa.String(length=256), nullable=False),
         sa.Column("is_active", sa.Boolean(), server_default="true", nullable=False),
         sa.Column("doctor_id", sa.Integer(), nullable=True),
