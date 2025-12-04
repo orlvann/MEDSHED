@@ -29,15 +29,16 @@ What this script does:
 
 3. For each period it seeds preferences:
 
-   3.1. ALL CRITICAL (no specialists available at all)
+      3.1. ALL CRITICAL (no specialists available at all)
         - For each specialist:
-            * unavailable_duty_days = all days in month
+            * unavailable_onsite_days = all days in month
             * unavailable_oncall_days = all days in month
         - Residents stay fully available (no unavailable_* set).
         - Creates:
             * PreferenceWorking row per doctor
             * ONE PreferenceVersion checkpoint per doctor
             * PreferencePointer pointing to that checkpoint.
+
 
         Availability effect:
         - For every day:
@@ -219,19 +220,25 @@ def _payload_from_working(row: PreferenceWorking) -> dict:
     This will be stored in PreferenceVersion.payload.
     """
     return {
-        "unavailable_duty_days": row.unavailable_duty_days or [],
+        "unavailable_onsite_days": row.unavailable_onsite_days or [],
         "unavailable_oncall_days": row.unavailable_oncall_days or [],
-        "preferred_duty_days": row.preferred_duty_days or [],
+        "preferred_onsite_days": row.preferred_onsite_days or [],
         "preferred_oncall_days": row.preferred_oncall_days or [],
-        "min_duties_weekdays": row.min_duties_weekdays,
-        "max_duties_weekdays": row.max_duties_weekdays,
-        "min_duties_weekends": row.min_duties_weekends,
-        "max_duties_weekends": row.max_duties_weekends,
-        "min_oncall_weekdays": row.min_oncall_weekdays,
-        "max_oncall_weekdays": row.max_oncall_weekdays,
-        "min_oncall_weekends": row.min_oncall_weekends,
+        "min_onsite_total": row.min_onsite_total,
+        "max_onsite_total": row.max_onsite_total,
+        "target_onsite_total": row.target_onsite_total,
+        "min_oncall_total": row.min_oncall_total,
+        "max_oncall_total": row.max_oncall_total,
+        "target_oncall_total": row.target_oncall_total,
+        "max_onsite_weekends": row.max_onsite_weekends,
+        "target_onsite_weekends": row.target_onsite_weekends,
         "max_oncall_weekends": row.max_oncall_weekends,
-        "weekend_back_to_back_allowed": row.weekend_back_to_back_allowed,
+        "target_oncall_weekends": row.target_oncall_weekends,
+        "preferred_onsite_weekdays": row.preferred_onsite_weekdays or [],
+        "preferred_oncall_weekdays": row.preferred_oncall_weekdays or [],
+        "avoid_onsite_weekdays": row.avoid_onsite_weekdays or [],
+        "avoid_oncall_weekdays": row.avoid_oncall_weekdays or [],
+        "allow_weekend_consecutive_onsite_oncall": row.allow_weekend_consecutive_onsite_oncall,
         "preferred_partners": row.preferred_partners or [],
         "comments": row.comments,
     }
@@ -335,27 +342,31 @@ def _seed_period_all_critical(
 
         if doc.role == DoctorRole.specialist:
             # Specialists: never available in this period.
-            working.unavailable_duty_days = all_days
+            working.unavailable_onsite_days = all_days
             working.unavailable_oncall_days = all_days
         else:
             # Residents: fully available (no unavailable_*).
-            working.unavailable_duty_days = []
+            working.unavailable_onsite_days = []
             working.unavailable_oncall_days = []
 
         # Other fields – simple stable demo values.
-        working.preferred_duty_days = []
+        working.preferred_onsite_days = []
         working.preferred_oncall_days = []
 
-        working.min_duties_weekdays = 1
-        working.max_duties_weekdays = 5
-        working.min_duties_weekends = 0
-        working.max_duties_weekends = 3
-        working.min_oncall_weekdays = 0
-        working.max_oncall_weekdays = 4
-        working.min_oncall_weekends = 0
-        working.max_oncall_weekends = 2
+        working.min_onsite_total = 4
+        working.max_onsite_total = 8
+        working.target_onsite_total = 6
 
-        working.weekend_back_to_back_allowed = True
+        working.min_oncall_total = 2
+        working.max_oncall_total = 6
+        working.target_oncall_total = 4
+
+        working.max_onsite_weekends = 3
+        working.target_onsite_weekends = 2
+        working.max_oncall_weekends = 2
+        working.target_oncall_weekends = 1
+
+        working.allow_weekend_consecutive_onsite_oncall = True
         working.preferred_partners = []
         working.comments = f"edge all-critical period for doctor {doc.id}"
 
@@ -432,32 +443,36 @@ def _seed_period_all_alert(
 
         if doc.role == DoctorRole.specialist:
             if doc.id == always_available_spec.id:
-                # This specialist is available for ON_DUTY only.
+                # This specialist is available for ONSITE only.
                 # He is marked unavailable for ON_CALL on all days.
-                working.unavailable_duty_days = []
+                working.unavailable_onsite_days = []
                 working.unavailable_oncall_days = all_days
             else:
-                # All other specialists are never available (duty + on-call).
-                working.unavailable_duty_days = all_days
+                # All other specialists are never available (onsite + on-call).
+                working.unavailable_onsite_days = all_days
                 working.unavailable_oncall_days = all_days
         else:
             # Residents fully available.
-            working.unavailable_duty_days = []
+            working.unavailable_onsite_days = []
             working.unavailable_oncall_days = []
 
-        working.preferred_duty_days = []
+        working.preferred_onsite_days = []
         working.preferred_oncall_days = []
 
-        working.min_duties_weekdays = 1
-        working.max_duties_weekdays = 5
-        working.min_duties_weekends = 0
-        working.max_duties_weekends = 3
-        working.min_oncall_weekdays = 0
-        working.max_oncall_weekdays = 4
-        working.min_oncall_weekends = 0
-        working.max_oncall_weekends = 2
+        working.min_onsite_total = 4
+        working.max_onsite_total = 8
+        working.target_onsite_total = 6
 
-        working.weekend_back_to_back_allowed = True
+        working.min_oncall_total = 2
+        working.max_oncall_total = 6
+        working.target_oncall_total = 4
+
+        working.max_onsite_weekends = 3
+        working.target_onsite_weekends = 2
+        working.max_oncall_weekends = 2
+        working.target_oncall_weekends = 1
+
+        working.allow_weekend_consecutive_onsite_oncall = True
         working.preferred_partners = []
         working.comments = f"edge all-alert period for doctor {doc.id}"
 
@@ -516,21 +531,25 @@ def _seed_period_all_ok(
         working = _ensure_working_row(session, doctor_id=doc.id, year=year, month=month)
 
         # Fully available, no unavailability lists.
-        working.unavailable_duty_days = []
+        working.unavailable_onsite_days = []
         working.unavailable_oncall_days = []
-        working.preferred_duty_days = []
+        working.preferred_onsite_days = []
         working.preferred_oncall_days = []
 
-        working.min_duties_weekdays = 1
-        working.max_duties_weekdays = 5
-        working.min_duties_weekends = 0
-        working.max_duties_weekends = 3
-        working.min_oncall_weekdays = 0
-        working.max_oncall_weekdays = 4
-        working.min_oncall_weekends = 0
-        working.max_oncall_weekends = 2
+        working.min_onsite_total = 4
+        working.max_onsite_total = 8
+        working.target_onsite_total = 6
 
-        working.weekend_back_to_back_allowed = True
+        working.min_oncall_total = 2
+        working.max_oncall_total = 6
+        working.target_oncall_total = 4
+
+        working.max_onsite_weekends = 3
+        working.target_onsite_weekends = 2
+        working.max_oncall_weekends = 2
+        working.target_oncall_weekends = 1
+
+        working.allow_weekend_consecutive_onsite_oncall = True
         working.preferred_partners = []
         working.comments = f"edge all-ok period for doctor {doc.id}"
 

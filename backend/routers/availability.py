@@ -32,7 +32,8 @@ def availability_overview(
 
     Uses real doctors + preferences data:
     - only active doctors are counted,
-    - missing preferences = fully available (but still visible as 'missing' in summary).
+    - missing preferences = fully available (onsite + on-call)
+      (but still visible as 'missing' in preferences summary).
     """
     return get_month_availability(year=year, month=month, actor=user)
 
@@ -51,7 +52,7 @@ def availability_day_drilldown(
 ):
     """
     Admin-only: show which doctors are available on a specific day,
-    split into duty/on-call and resident/specialist lists.
+    split into onsite/on-call and resident/specialist lists.
     """
     data = get_day_availability(year=year, month=month, day=day, actor=user)
     if data is None:

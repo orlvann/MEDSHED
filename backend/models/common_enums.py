@@ -5,7 +5,9 @@
 from enum import Enum
 
 
-class Role(str, Enum):
+class UserRole(str, Enum):
+    """User roles used for RBAC and account type."""
+
     admin = "admin"
     doctor = "doctor"
     doctor_admin = "doctor_admin"
@@ -17,8 +19,13 @@ class DoctorRole(str, Enum):
 
 
 class ShiftType(str, Enum):
-    on_duty = "on_duty"
-    on_call = "on_call"
+    # New names for public API
+    onsite = "onsite"
+    oncall = "oncall"
+
+    # Backward-compat names (deprecated; use onsite/oncall instead)
+    on_duty = "onsite"
+    on_call = "oncall"
 
 
 class ScheduleStatus(str, Enum):

@@ -6,7 +6,7 @@ Flow:
 - For each Excel file (e.g. 2023_02_devon.xlsx):
   - Parse year, month and alias from the filename.
   - Map alias -> (first_name, last_name) and find doctor_id in DB.
-  - Read duty/on-call preferences from Excel:
+  - Read onsite/on-call preferences from Excel:
         CHCĘ / CHCE      -> preferred_*_days
         NIE MOGĘ / MOGE  -> unavailable_*_days
         MOGĘ / ""        -> implicitly available (not stored).
@@ -182,32 +182,30 @@ def load_day_lists_from_excel(
 
     Returns:
         (
-            preferred_duty_days,
-            unavailable_duty_days,
+            preferred_onsite_days,
+            unavailable_onsite_days,
             preferred_oncall_days,
             unavailable_oncall_days,
             comment,  # full text of the comment row or None
         )
 
     Rules:
-    - Column C ("Dyżur"):
-        CHCĘ / CHCE          -> preferred_duty_days
-        NIE MOGĘ / NIE MOGE  -> unavailable_duty_days
+    - Column C ("Dyżur" / onsite):
+        CHCĘ / CHCE          -> preferred_onsite_days
+        NIE MOGĘ / NIE MOGE  -> unavailable_onsite_days
         MOGĘ / ""            -> ignored (means "normally available")
     - Column D ("Poddyżur" / on-call):
         CHCĘ / CHCE          -> preferred_oncall_days
         NIE MOGĘ / NIE MOGE  -> unavailable_oncall_days
         MOGĘ / ""            -> ignored
-    - Comment:
-        We scan from the bottom upwards and look for a cell in column B or A
-        whose text starts with "KOMENTARZ". The whole cell content is stored.
     """
+
     wb = load_workbook(path, data_only=True)
     ws = wb.active
     assert ws is not None, "Workbook has no active worksheet"
 
-    preferred_duty_days: List[int] = []
-    unavailable_duty_days: List[int] = []
+    preferred_onsite_days: List[int] = []
+    unavailable_onsite_days: List[int] = []
     preferred_oncall_days: List[int] = []
     unavailable_oncall_days: List[int] = []
     comment: Optional[str] = None
@@ -220,14 +218,14 @@ def load_day_lists_from_excel(
             # Skip rows that do not have a valid day number.
             continue
 
-        duty_value = normalize_str(ws[f"C{row_idx}"].value)
+        onsite_value = normalize_str(ws[f"C{row_idx}"].value)
         oncall_value = normalize_str(ws[f"D{row_idx}"].value)
 
-        # Duty column (C)
-        if is_preferred(duty_value):
-            preferred_duty_days.append(day)
-        elif is_unavailable(duty_value):
-            unavailable_duty_days.append(day)
+        # Onsite column (C)
+        if is_preferred(onsite_value):
+            preferred_onsite_days.append(day)
+        elif is_unavailable(onsite_value):
+            unavailable_onsite_days.append(day)
         # "MOGĘ" and "" are treated as neutral -> not stored.
 
         # On-call column (D)
@@ -266,8 +264,8 @@ def load_day_lists_from_excel(
         break
 
     return (
-        preferred_duty_days,
-        unavailable_duty_days,
+        preferred_onsite_days,
+        unavailable_onsite_days,
         preferred_oncall_days,
         unavailable_oncall_days,
         comment,
@@ -351,20 +349,26 @@ def build_payload_from_working(working: PreferenceWorking) -> Dict[str, Any]:
         "doctor_id": working.doctor_id,
         "year": working.year,
         "month": working.month,
-        "unavailable_duty_days": working.unavailable_duty_days,
-        "unavailable_oncall_days": working.unavailable_oncall_days,
-        "preferred_duty_days": working.preferred_duty_days,
-        "preferred_oncall_days": working.preferred_oncall_days,
-        "min_duties_weekdays": working.min_duties_weekdays,
-        "max_duties_weekdays": working.max_duties_weekdays,
-        "min_duties_weekends": working.min_duties_weekends,
-        "max_duties_weekends": working.max_duties_weekends,
-        "min_oncall_weekdays": working.min_oncall_weekdays,
-        "max_oncall_weekdays": working.max_oncall_weekdays,
-        "min_oncall_weekends": working.min_oncall_weekends,
+        "unavailable_onsite_days": working.unavailable_onsite_days or [],
+        "unavailable_oncall_days": working.unavailable_oncall_days or [],
+        "preferred_onsite_days": working.preferred_onsite_days or [],
+        "preferred_oncall_days": working.preferred_oncall_days or [],
+        "min_onsite_total": working.min_onsite_total,
+        "max_onsite_total": working.max_onsite_total,
+        "target_onsite_total": working.target_onsite_total,
+        "min_oncall_total": working.min_oncall_total,
+        "max_oncall_total": working.max_oncall_total,
+        "target_oncall_total": working.target_oncall_total,
+        "max_onsite_weekends": working.max_onsite_weekends,
+        "target_onsite_weekends": working.target_onsite_weekends,
         "max_oncall_weekends": working.max_oncall_weekends,
-        "weekend_back_to_back_allowed": working.weekend_back_to_back_allowed,
-        "preferred_partners": working.preferred_partners,
+        "target_oncall_weekends": working.target_oncall_weekends,
+        "preferred_onsite_weekdays": working.preferred_onsite_weekdays or [],
+        "preferred_oncall_weekdays": working.preferred_oncall_weekdays or [],
+        "avoid_onsite_weekdays": working.avoid_onsite_weekdays or [],
+        "avoid_oncall_weekdays": working.avoid_oncall_weekdays or [],
+        "allow_weekend_consecutive_onsite_oncall": working.allow_weekend_consecutive_onsite_oncall,
+        "preferred_partners": working.preferred_partners or [],
         "comments": working.comments,
         "last_saved_at": working.last_saved_at.isoformat() if working.last_saved_at else None,
         "last_saved_by_user_id": working.last_saved_by_user_id,
@@ -430,8 +434,8 @@ def process_single_file(session, path: Path) -> None:
     doctor_id = get_doctor_id_by_alias(session, alias)
 
     (
-        preferred_duty_days,
-        unavailable_duty_days,
+        preferred_onsite_days,
+        unavailable_onsite_days,
         preferred_oncall_days,
         unavailable_oncall_days,
         comment,
@@ -441,8 +445,8 @@ def process_single_file(session, path: Path) -> None:
         f"[FILE] {path.name} -> raw_year={raw_year}, mapped_year={year}, "
         f"month={month}, alias={alias}, doctor_id={doctor_id}"
     )
-    print(f"  preferred_duty_days    = {preferred_duty_days}")
-    print(f"  unavailable_duty_days  = {unavailable_duty_days}")
+    print(f"  preferred_onsite_days  = {preferred_onsite_days}")
+    print(f"  unavailable_onsite_days= {unavailable_onsite_days}")
     print(f"  preferred_oncall_days  = {preferred_oncall_days}")
     print(f"  unavailable_oncall_days= {unavailable_oncall_days}")
     print(f"  comment                = {comment!r}")
@@ -451,8 +455,8 @@ def process_single_file(session, path: Path) -> None:
     working = get_or_create_working(session, doctor_id, year, month)
 
     # Update working row with lists from Excel.
-    working.preferred_duty_days = preferred_duty_days
-    working.unavailable_duty_days = unavailable_duty_days
+    working.preferred_onsite_days = preferred_onsite_days
+    working.unavailable_onsite_days = unavailable_onsite_days
     working.preferred_oncall_days = preferred_oncall_days
     working.unavailable_oncall_days = unavailable_oncall_days
 

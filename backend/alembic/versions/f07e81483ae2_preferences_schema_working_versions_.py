@@ -61,21 +61,33 @@ def upgrade() -> None:
         sa.Column("year", sa.Integer(), nullable=False),
         sa.Column("month", sa.Integer(), nullable=False),
         sa.Column("lock_version", sa.Integer(), server_default="1", nullable=False),
-        sa.Column("unavailable_duty_days", sa.JSON(), nullable=True),
+        # Day-level preferences (calendar days 1..31)
+        sa.Column("unavailable_onsite_days", sa.JSON(), nullable=True),
         sa.Column("unavailable_oncall_days", sa.JSON(), nullable=True),
-        sa.Column("preferred_duty_days", sa.JSON(), nullable=True),
+        sa.Column("preferred_onsite_days", sa.JSON(), nullable=True),
         sa.Column("preferred_oncall_days", sa.JSON(), nullable=True),
-        sa.Column("min_duties_weekdays", sa.Integer(), server_default="0", nullable=False),
-        sa.Column("max_duties_weekdays", sa.Integer(), nullable=True),
-        sa.Column("min_duties_weekends", sa.Integer(), server_default="0", nullable=False),
-        sa.Column("max_duties_weekends", sa.Integer(), nullable=True),
-        sa.Column("min_oncall_weekdays", sa.Integer(), server_default="0", nullable=False),
-        sa.Column("max_oncall_weekdays", sa.Integer(), nullable=True),
-        sa.Column("min_oncall_weekends", sa.Integer(), server_default="0", nullable=False),
+        # Monthly totals (soft constraints; some fields are future-only)
+        sa.Column("min_onsite_total", sa.Integer(), nullable=True),  # future: not used in MVP
+        sa.Column("max_onsite_total", sa.Integer(), nullable=True),
+        sa.Column("target_onsite_total", sa.Integer(), nullable=True),
+        sa.Column("min_oncall_total", sa.Integer(), nullable=True),  # future: not used in MVP
+        sa.Column("max_oncall_total", sa.Integer(), nullable=True),
+        sa.Column("target_oncall_total", sa.Integer(), nullable=True),
+        # Weekend refinement (optional, advanced)
+        sa.Column("max_onsite_weekends", sa.Integer(), nullable=True),
+        sa.Column("target_onsite_weekends", sa.Integer(), nullable=True),
         sa.Column("max_oncall_weekends", sa.Integer(), nullable=True),
-        sa.Column("weekend_back_to_back_allowed", sa.Boolean(), server_default="1", nullable=False),
+        sa.Column("target_oncall_weekends", sa.Integer(), nullable=True),
+        # Weekday patterns (0=Monday..6=Sunday)
+        sa.Column("preferred_onsite_weekdays", sa.JSON(), nullable=True),
+        sa.Column("preferred_oncall_weekdays", sa.JSON(), nullable=True),
+        sa.Column("avoid_onsite_weekdays", sa.JSON(), nullable=True),
+        sa.Column("avoid_oncall_weekdays", sa.JSON(), nullable=True),
+        # Other preferences
+        sa.Column("allow_weekend_consecutive_onsite_oncall", sa.Boolean(), server_default="0", nullable=False),
         sa.Column("preferred_partners", sa.JSON(), nullable=True),
         sa.Column("comments", sa.Text(), nullable=True),
+        # Audit
         sa.Column("last_saved_at", sa.DateTime(), nullable=True),
         sa.Column("last_saved_by_user_id", sa.Integer(), nullable=True),
         sa.Column("last_saved_by_role", sa.String(length=32), nullable=True),
@@ -85,6 +97,7 @@ def upgrade() -> None:
         sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint("doctor_id", "year", "month", name="uq_working_doctor_period"),
     )
+
     op.create_index(op.f("ix_preferences_working_doctor_id"), "preferences_working", ["doctor_id"], unique=False)
     op.create_table(
         "preferences_pointers",
