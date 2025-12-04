@@ -24,7 +24,7 @@ from backend.models.common_enums import (
 )
 
 # Auth / User
-from .auth import LoginRequest, TokenResponse
+from .auth import LoginRequest, SetPasswordRequest, SetPasswordResponse, TokenResponse
 
 # Availability
 from .availability import (
@@ -80,7 +80,13 @@ from .schedule import (
     ScheduleWorkingPut,
     ScheduleWorkingRead,
 )
-from .user import UserRead
+from .user import (
+    UserAdminCreate,
+    UserAdminList,
+    UserAdminRead,
+    UserAdminUpdate,
+    UserRead,
+)
 
 # Explicit public surface for this package
 __all__ = [
@@ -96,7 +102,13 @@ __all__ = [
     # Auth / User
     "LoginRequest",
     "TokenResponse",
+    "SetPasswordRequest",
+    "SetPasswordResponse",
     "UserRead",
+    "UserAdminCreate",
+    "UserAdminRead",
+    "UserAdminUpdate",
+    "UserAdminList",
     # Doctor
     "DoctorCreate",
     "DoctorPut",

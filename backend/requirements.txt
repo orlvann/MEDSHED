@@ -1,10 +1,14 @@
 fastapi~=0.119
 uvicorn~=0.37
 pydantic~=2.12
+pydantic-settings~=2.0
 python-dotenv~=1.1
 email-validator~=2.3
 SQLAlchemy~=2.0
 ortools==9.14.6206
 alembic
+python-jose[cryptography]>=3.3.0,<4.0
+passlib>=1.7.4,<2.0
+bcrypt>=4.0.0,<4.2.0
 
 

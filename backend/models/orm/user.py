@@ -39,7 +39,7 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from backend.db.session import Base
-from backend.models.common_enums import Role  # "admin" | "doctor"
+from backend.models.common_enums import UserRole  # "admin" | "doctor" | "doctor_admin"
 
 
 class User(Base):
@@ -55,7 +55,7 @@ class User(Base):
     # Identity
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     email: Mapped[str] = mapped_column(String(320), nullable=False)  # unique via named constraint below
-    role: Mapped[Role] = mapped_column(SAEnum(Role, name="user_role", validate_strings=True), nullable=False)
+    role: Mapped[UserRole] = mapped_column(SAEnum(UserRole, name="user_role", validate_strings=True), nullable=False)
 
     # Auth
     password_hash: Mapped[str] = mapped_column(String(256), nullable=False)

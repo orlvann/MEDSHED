@@ -11,41 +11,40 @@ It focuses on individual preferences, legal compliance, and work-life balance to
 
 ## Key Features
 
-* Constraint-based scheduling with **Google OR-Tools (CP-SAT)**
-* Supports individual shift preferences and rest-period rules
-* Interactive calendars for easy schedule management
-* Real-time updates and manual adjustment options
-* Diagnostics (fairness, coverage, penalties)
-* Export to Excel, PDF, and calendar sync
+- Constraint-based scheduling with **Google OR-Tools (CP-SAT)**
+- Supports individual shift preferences and rest-period rules
+- Interactive calendars for easy schedule management
+- Real-time updates and manual adjustment options
+- Diagnostics (fairness, coverage, penalties)
+- Export to Excel, PDF, and calendar sync
 
 ## Architecture / Tech Stack
 
-* **Backend:** Python **3.11**, FastAPI, OR-Tools
-* **Frontend:** React, TypeScript *(planned/parallel work)*
-* **Database:** **SQLite (dev)** + **Alembic** migrations; **PostgreSQL (target in prod)**
-* **Runtime/Infra:** Uvicorn (dev/prod), Azure (deployment target)
+- **Backend:** Python **3.11**, FastAPI, OR-Tools
+- **Frontend:** React, TypeScript _(planned/parallel work)_
+- **Database:** **SQLite (dev)** + **Alembic** migrations; **PostgreSQL (target in prod)**
+- **Runtime/Infra:** Uvicorn (dev/prod), Azure (deployment target)
 
 > **Python version:** we standardize on **3.11** for stable wheels (e.g., OR-Tools on Linux/WSL/macOS) and fewer dependency surprises.
-> If you try **3.12**, create a fresh venv and run the full test suite first. *(CI will pin 3.11 when added.)*
+> If you try **3.12**, create a fresh venv and run the full test suite first. _(CI will pin 3.11 when added.)_
 
 ## Project Team
 
-* Anna Orlova
-* Aleksandra Muga-Bartkowiak
-* Despoina Karli
+- Anna Orlova
+- Aleksandra Muga-Bartkowiak
+- Despoina Karli
 
 ## Project Status (working draft)
 
 See **[docs/DEV_STATUS.md](docs/DEV_STATUS.md)** for a living overview of what’s done vs. next.
 
-
 ---
 
 ## Prerequisites (dev)
 
-* **OS:** **Linux** or **macOS** (or **Windows 11 via WSL2/Ubuntu** running Linux toolchain)
-* **Python:** **3.11**
-* **Git**
+- **OS:** **Linux** or **macOS** (or **Windows 11 via WSL2/Ubuntu** running Linux toolchain)
+- **Python:** **3.11**
+- **Git**
 
 ### Quick install helpers
 
@@ -58,7 +57,7 @@ sudo apt install -y python3.11 python3.11-venv python3-pip git
 
 **Windows 11 (WSL2 with Ubuntu):**
 
-* Install **WSL** + **Ubuntu** from Microsoft Store, then use the Linux commands above inside Ubuntu.
+- Install **WSL** + **Ubuntu** from Microsoft Store, then use the Linux commands above inside Ubuntu.
 
 **macOS (Sonoma/Sequoia):**
 
@@ -89,6 +88,9 @@ pip install -r requirements.txt
 # 3) Run the API (dev)
 PYTHONPATH=. uvicorn backend.asgi:app --reload
 
+# OR For Windows in wsl
+PYTHONPATH=. uvicorn backend.asgi:app --host 0.0.0.0 --port 8000 --reload
+
 # 4) Open Swagger at:
 # http://127.0.0.1:8000/docs
 ```
@@ -101,7 +103,6 @@ Local dev uses **SQLite** + **Alembic**:
 
 > No local config needed. By default we use SQLite at `backend/db/sqlite.db`.
 > Set `DATABASE_URL` to override (e.g., Postgres).
-
 
 ```bash
 make db-upgrade   # create/upgrade schema
@@ -189,10 +190,17 @@ if origins:
 
 ## Configuration
 
+### 2) Uprość sekcję „Configuration”
+
+Zastąp całą obecną sekcję „Configuration” tym krótkim wariantem:
+
+`````md
+## Configuration
+
 No local config is required for dev: Alembic and the app fall back to SQLite at `backend/db/sqlite.db`.
 If you want to use another DB (e.g., Postgres), set:
 
-```dotenv
+````dotenv
 DATABASE_URL=postgresql+psycopg://USER:PASS@HOST:5432/DBNAME
 
 **Optional variables (not required for local dev):**
@@ -208,7 +216,10 @@ All public routes live under **`/api/v1`**:
 
 ```python
 API_V1_PREFIX = "/api/v1"  # Version now → painless /api/v2 later without breaking clients
-```
+````
+`````
+
+````
 
 When the contract evolves, add `/api/v2` alongside `/api/v1` and migrate gradually.
 
@@ -246,12 +257,12 @@ PYTHONPATH=. uvicorn backend.asgi:app --reload
 
 **VS Code / Cursor:**
 
-* `.vscode/launch.json` runs `uvicorn backend.asgi:app --reload`
-* Uses your selected interpreter `.venv/bin/python`
+- `.vscode/launch.json` runs `uvicorn backend.asgi:app --reload`
+- Uses your selected interpreter `.venv/bin/python`
 
 **Tasks (optional):**
 
-* `.vscode/tasks.json` → Terminal → *Run Task* → **Run API (uvicorn)**
+- `.vscode/tasks.json` → Terminal → _Run Task_ → **Run API (uvicorn)**
 
 ---
 
@@ -272,19 +283,19 @@ We keep `requirements.txt` **short** (only top-level libraries). Pip resolves su
 
 **Runtime (`requirements.txt`):**
 
-* `fastapi` — web framework
-* `uvicorn[standard]` — ASGI server; `[standard]` pulls faster libs (**uvloop**, **httptools**) on Linux/WSL/macOS
-* `python-dotenv` — loads `.env` config
-* `pydantic[email]` — request/response models **+ email validation** (`EmailStr`)
-* `ortools` — CP-SAT solver for scheduling
-* *(optional later)* `pandas`, `numpy` for reports/analytics
+- `fastapi` — web framework
+- `uvicorn[standard]` — ASGI server; `[standard]` pulls faster libs (**uvloop**, **httptools**) on Linux/WSL/macOS
+- `python-dotenv` — loads `.env` config
+- `pydantic[email]` — request/response models **+ email validation** (`EmailStr`)
+- `ortools` — CP-SAT solver for scheduling
+- _(optional later)_ `pandas`, `numpy` for reports/analytics
 
 **Dev tools (`requirements-dev.txt`):**
 
-* `pytest` — tests
-* `ruff` — fast linter
-* `black` — code formatter
-* `pre-commit` — runs format/lint **before each git commit** (team consistency)
+- `pytest` — tests
+- `ruff` — fast linter
+- `black` — code formatter
+- `pre-commit` — runs format/lint **before each git commit** (team consistency)
 
 Enable pre-commit hooks (optional but recommended):
 
@@ -298,10 +309,10 @@ pre-commit run --all-files   # one-time run across repo
 
 ## Using Swagger / ReDoc (quick guide)
 
-* Start the backend (`make app`).
-* Open **Swagger UI**: **[http://127.0.0.1:8000/docs](http://127.0.0.1:8000/docs)**
-* Or **ReDoc**: **[http://127.0.0.1:8000/redoc](http://127.0.0.1:8000/redoc)**
-* Raw OpenAPI spec: **[http://127.0.0.1:8000/openapi.json](http://127.0.0.1:8000/openapi.json)**
+- Start the backend (`make app`).
+- Open **Swagger UI**: **[http://127.0.0.1:8000/docs](http://127.0.0.1:8000/docs)**
+- Or **ReDoc**: **[http://127.0.0.1:8000/redoc](http://127.0.0.1:8000/redoc)**
+- Raw OpenAPI spec: **[http://127.0.0.1:8000/openapi.json](http://127.0.0.1:8000/openapi.json)**
   (Optional) snapshot to file:
   `curl http://127.0.0.1:8000/openapi.json -o docs/openapi-v1.json`
 
@@ -309,17 +320,17 @@ pre-commit run --all-files   # one-time run across repo
 
 ## Git Workflow (short)
 
-* Branch per feature: `feat/<name>`
-* Small, frequent commits with clear messages
-* PR → review → merge
+- Branch per feature: `feat/<name>`
+- Small, frequent commits with clear messages
+- PR → review → merge
 
 ---
 
 ## Troubleshooting
 
-* **Debugger can’t find Python** → ensure interpreter is `.venv/bin/python`; recreate venv if needed.
-* **Imports like `backend.*` fail** → run from repo root; `PYTHONPATH=.` is already set in `launch.json` / `pytest.ini`.
-* **OR-Tools won’t install** → use Python **3.11**. If needed on Linux/macOS:
+- **Debugger can’t find Python** → ensure interpreter is `.venv/bin/python`; recreate venv if needed.
+- **Imports like `backend.*` fail** → run from repo root; `PYTHONPATH=.` is already set in `launch.json` / `pytest.ini`.
+- **OR-Tools won’t install** → use Python **3.11**. If needed on Linux/macOS:
   `pip install --only-binary=:all: ortools`.
 
 ---
@@ -329,3 +340,4 @@ pre-commit run --all-files   # one-time run across repo
 This is an **educational project** under a **private** repository.
 The University retains a **right of first publication** for the diploma thesis.
 No license is granted for public use or redistribution without the MEDSCHED Team’s written permission.
+````

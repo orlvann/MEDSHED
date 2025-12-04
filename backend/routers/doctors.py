@@ -46,8 +46,20 @@ def doctors_list(
     role: Optional[DoctorRole] = Query(None, description="Filter by role"),
     search: Optional[str] = Query(None, description="Search by name/email"),
     is_active: Literal["true", "false", "all"] = Query("all", description='Active flag: "true" | "false" | "all"'),
+    user_role: Optional[str] = Query(None, description="Filter by user role (doctor/doctor_admin)"),
+    user_is_active: Optional[str] = Query(None, description="Filter by user login status"),
+    is_head: Optional[str] = Query(None, description="Filter by head of department status"),
 ):
-    return list_doctors(page=page, size=size, role=role, search=search, is_active=is_active)
+    return list_doctors(
+        page=page, 
+        size=size, 
+        role=role, 
+        search=search, 
+        is_active=is_active,
+        user_role=user_role,
+        user_is_active=user_is_active,
+        is_head=is_head,
+    )
 
 
 @router.get(

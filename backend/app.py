@@ -1,11 +1,13 @@
 # backend/app.py
 from fastapi import FastAPI
 
-from .routers import auth, availability, doctors, preferences, schedules
+from .routers import admin_users, auth, availability, doctors, pending_doctors, preferences, schedules
 
 TAGS_METADATA = [
     {"name": "auth", "description": "Login and identity"},
     {"name": "doctors", "description": "Doctors CRUD and listing"},
+    {"name": "admin-users", "description": "Admin users management (admin-only)"},
+    {"name": "admin-pending-doctors", "description": "Pending doctor registrations management (admin-only)"},
     {
         "name": "preferences:admin",
         "description": "Monthly preference forms — ADMIN path (manage others, deadlines, history)",
@@ -35,6 +37,9 @@ def create_app() -> FastAPI:
     )
     app.include_router(auth.router)
     app.include_router(doctors.router)
+    app.include_router(pending_doctors.public_router)
+    app.include_router(pending_doctors.admin_router)
+    app.include_router(admin_users.router)
     app.include_router(preferences.router)
     app.include_router(schedules.router)
     app.include_router(availability.router)
