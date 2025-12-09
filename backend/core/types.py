@@ -73,7 +73,7 @@ class PreferencesInput:
     # Other preferences
     allow_weekend_consecutive_onsite_oncall: bool = False
     preferred_partners: List[int] = field(default_factory=list)
-    comments: str | None = None  # informational only, likely ignored by solver
+    comments: str | None = None  # informational only, ignored by solver
 
 
 @dataclass
