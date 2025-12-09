@@ -105,3 +105,34 @@ class ProblemData:
     # Slots the solver must completely ignore (Admin wants to keep them empty)
     ignore_days: Set[int] = field(default_factory=set)
     ignore_slots: Set[Tuple[int, ShiftType]] = field(default_factory=set)
+
+
+@dataclass
+class Slot:
+    """
+    Single potential assignment in the schedule.
+
+    This is a low-level unit used by the solver:
+    - day: calendar day number (1..31),
+    - shift_type: onsite or oncall,
+    - doctor_id: doctor assigned to this slot.
+    """
+
+    day: int
+    shift_type: ShiftType
+    doctor_id: int
+
+
+@dataclass
+class HardModel:
+    """
+    Minimal hard-constraint model used by the solver engine.
+
+    For now it only contains:
+    - problem: original ProblemData for context,
+    - allowed_slots: all slots that are not blocked by hard filters
+    (ignore_days, ignore_slots, unavailable days from preferences).
+    """
+
+    problem: ProblemData
+    allowed_slots: List[Slot]
