@@ -22,7 +22,7 @@ from . import (
     objective_builder,
     seeding,
 )
-from .types import ProblemData
+from .types import ProblemData, SolverAssignment, SolverSolution, SolverStatus
 
 
 def generate_schedule(problem: ProblemData) -> List[Assignment]:
@@ -80,15 +80,44 @@ def generate_schedule(problem: ProblemData) -> List[Assignment]:
     return assignments
 
 
-def _solution_to_assignments(solution, problem: ProblemData) -> List[Assignment]:
+def _solution_to_assignments(solution: SolverSolution, problem: ProblemData) -> List[Assignment]:
     """
-    Convert the low-level solver solution (e.g. CP-SAT variable values)
-    into a list of Assignment objects.
+    Convert the low-level solver solution into a list of Assignment DTOs.
 
+    ```
     This helper keeps the mapping logic in one place, so that:
-    - services see only clean Assignment DTOs,
+    - services see only clean Assignment objects,
     - engine/constraint_builder can work with more technical structures.
+
+    For MVP:
+    - if solver status is not OK, we return an empty list,
+    - otherwise we map each SolverAssignment to Assignment and sort the result.
     """
-    # TODO: implement once engine and constraint_builder define the internal format.
-    # For now we return an empty list so that the module is importable in tests.
-    return []
+    # Early exit: for non-OK statuses we do not expose any assignments in MVP.
+    if solution.status is not SolverStatus.OK:
+        # Later we may decide to surface partial results or diagnostics here.
+        return []
+
+    # Local list for DTO assignments returned to services / API layer.
+    assignments: List[Assignment] = []
+
+    # Explicitly type the internal solver assignments (helps readers and tools).
+    solver_assignments: List[SolverAssignment] = solution.assignments
+
+    for sa in solver_assignments:
+        # Simple dataclass -> DTO mapping.
+        assignments.append(
+            Assignment(
+                day=sa.day,
+                shift_type=sa.shift_type,
+                doctor_id=sa.doctor_id,
+            )
+        )
+
+    # Ensure deterministic ordering of API payloads.
+    # We sort by (day, shift_type value, doctor_id).
+    assignments.sort(key=lambda a: (a.day, a.shift_type.value, a.doctor_id))
+
+    # `problem` is kept in the signature for future extensions
+    # (e.g. mapping extra metadata); it is not used in MVP.
+    return assignments
