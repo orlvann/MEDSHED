@@ -23,10 +23,6 @@ class ShiftType(str, Enum):
     onsite = "onsite"
     oncall = "oncall"
 
-    # Backward-compat names (deprecated; use onsite/oncall instead)
-    on_duty = "onsite"
-    on_call = "oncall"
-
 
 class ScheduleStatus(str, Enum):
     draft = "draft"

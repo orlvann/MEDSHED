@@ -9,6 +9,7 @@ These are small, pure-Python data containers (dataclasses) that are:
 """
 
 from dataclasses import dataclass, field
+from enum import Enum
 from typing import Dict, List, Set, Tuple
 
 from backend.models.common_enums import DoctorRole, ShiftType
@@ -136,3 +137,50 @@ class HardModel:
 
     problem: ProblemData
     allowed_slots: List[Slot]
+
+
+@dataclass
+class SolverAssignment:
+    """
+    Single assignment decision produced by the solver.
+
+    ```
+    - day: calendar day number (1..31),
+    - shift_type: onsite or oncall,
+    - doctor_id: doctor assigned to this slot.
+    """
+
+    day: int
+    shift_type: ShiftType
+    doctor_id: int
+
+
+class SolverStatus(str, Enum):
+    """
+    High-level status of the solver run.
+
+    ```
+    Using an Enum instead of a plain string:
+    - avoids typos in status values,
+    - gives us autocomplete and a single source of truth,
+    - still serializes nicely to JSON (value is a string).
+    """
+
+    OK = "OK"
+    EMPTY = "EMPTY"  # no allowed slots or no assignments produced
+    INFEASIBLE = "INFEASIBLE"  # model cannot be satisfied
+    NOT_SOLVED = "NOT_SOLVED"  # solver did not run or aborted
+    ERROR = "ERROR"  # internal error while building/solving
+
+
+@dataclass
+class SolverSolution:
+    """
+    Full solver result for one month.
+
+    - status: high-level solver status,
+    - assignments: list of concrete SolverAssignment objects.
+    """
+
+    status: SolverStatus
+    assignments: List[SolverAssignment] = field(default_factory=list)

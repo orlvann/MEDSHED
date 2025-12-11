@@ -50,13 +50,11 @@ def build_hard_model(problem: ProblemData, seed_hints: Any) -> HardModel:
 
                 # If we have preferences, apply unavailable-day filters.
                 if prefs is not None:
-                    # Treat onsite / on_duty as the same family.
-                    if shift_type in (ShiftType.onsite, ShiftType.on_duty):
+                    if shift_type in (ShiftType.onsite):
                         if day in prefs.unavailable_onsite_days:
                             # Doctor cannot work onsite on this day.
                             continue
-                    # Treat oncall / on_call as the same family.
-                    elif shift_type in (ShiftType.oncall, ShiftType.on_call):
+                    elif shift_type in (ShiftType.oncall):
                         if day in prefs.unavailable_oncall_days:
                             # Doctor cannot be on call on this day.
                             continue

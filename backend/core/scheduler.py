@@ -45,7 +45,7 @@ def generate_schedule(problem: ProblemData) -> List[Assignment]:
 
     # 1) Warm-start hints (may be empty for MVP)
     #    Example hints:
-    #    - heads (is_head=True) on their preferred weekend days,
+    #    - heads (is_head=True) on their preferred days,
     #    - hardest slots (few available doctors),
     #    - weekend onsite+oncall combos for doctors who allow it.
     seed_hints = seeding.generate_initial_hints(problem)
