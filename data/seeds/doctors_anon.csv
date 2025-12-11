@@ -1,0 +1,13 @@
+alias,first_name,last_name,email,role,is_head,is_active
+devon,Brad,Devon,brad.devon@hospital.org,specialist,true,true
+grizzly,Rick,Grizzly,rick.grizzly@hospital.org,resident,false,true
+hamster,Anna,Hamster,anna.hamster@hospital.org,resident,false,true
+jedi,Martin,Jedi,martin.jedi@hospital.org,resident,false,true
+kolton,Jake,Kolton,jake.kolton@hospital.org,specialist,false,true
+lukewood,Ralph,Lukewood,ralph.lukewood@hospital.org,specialist,false,true
+router,Mark,Router,mark.router@hospital.org,specialist,true,true
+skipperP,Paul,Skipper,paul.skipper@mhospital.org,resident,false,true
+skipperW,William,Skipper,william.skipper@hospital.org,specialist,false,true
+streeter,Anna,Streeter,anna.streeter@hospital.org,resident,false,true
+sussman,Paul,Sussman,paul.sussman@hospital.org,specialist,false,true
+tacker,Alice,Tacker,alice.tacker@hospital.org,specialist,false,true

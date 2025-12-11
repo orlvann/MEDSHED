@@ -18,7 +18,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from backend.db.session import SessionLocal
-from backend.models.common_enums import DoctorRole, Role
+from backend.models.common_enums import DoctorRole, UserRole
 from backend.models.orm.doctor import Doctor
 
 # Preferences models are imported for completeness (not used for seeding now)
@@ -67,7 +67,7 @@ def get_or_create_user(
     db: Session,
     *,
     email: str,
-    role: Role,
+    role: UserRole,
     password_plain: str,
     doctor_id: Optional[int] = None,
 ) -> User:
@@ -113,14 +113,14 @@ def main() -> None:
         admin_user = get_or_create_user(
             db,
             email="admin@hospital.org",
-            role=Role.admin,
+            role=UserRole.admin,
             password_plain="admin123",
             doctor_id=None,
         )
         doctor_user = get_or_create_user(
             db,
             email="doctor@hospital.org",
-            role=Role.doctor,
+            role=UserRole.doctor,
             password_plain="doctor123",
             doctor_id=anna.id,  # 1:1 link to Doctor(Anna)
         )

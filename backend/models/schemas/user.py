@@ -21,7 +21,7 @@ from typing import List, Optional
 
 from pydantic import BaseModel, EmailStr, Field
 
-from backend.models.common_enums import Role  # "admin" | "doctor" | "doctor_admin"
+from backend.models.common_enums import UserRole  # "admin" | "doctor" | "doctor_admin"
 
 from .dto_common import PageMeta
 
@@ -29,13 +29,13 @@ from .dto_common import PageMeta
 class UserRead(BaseModel):
     """
     Public representation of the current user (e.g., GET /api/v1/auth/me).
-    Role is derived from the token on the backend.
+    UserRole is derived from the token on the backend.
     Timestamps are UTC ISO-8601 (with 'Z').
     """
 
     id: int
     email: EmailStr
-    role: Role
+    role: UserRole
     is_active: bool = True
     created_at: datetime | None = None
     updated_at: datetime | None = None  # keep parity with other DTOs using created_at/updated_at
@@ -56,25 +56,26 @@ class UserRead(BaseModel):
 
 # Admin Users Management Schemas
 
+
 class UserAdminCreate(BaseModel):
     """Create a new admin user."""
-    
+
     email: EmailStr
 
 
 class UserAdminUpdate(BaseModel):
     """Update an existing admin user."""
-    
+
     email: Optional[EmailStr] = None
     is_active: Optional[bool] = None
 
 
 class UserAdminRead(BaseModel):
     """Admin user details (extended from UserRead)."""
-    
+
     id: int
     email: EmailStr
-    role: Role
+    role: UserRole
     is_active: bool
     created_at: datetime
     updated_at: datetime
@@ -82,5 +83,5 @@ class UserAdminRead(BaseModel):
 
 class UserAdminList(PageMeta):
     """Pagination envelope for admin users listing."""
-    
+
     items: List[UserAdminRead] = Field(default_factory=list)

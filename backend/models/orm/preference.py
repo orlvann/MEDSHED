@@ -39,24 +39,37 @@ class PreferenceWorking(Base):
     lock_version: Mapped[int] = mapped_column(Integer, nullable=False, default=1, server_default="1")
 
     # Editable fields (mirroring DTO; use JSON/TEXT arrays for day lists)
-    unavailable_duty_days: Mapped[Optional[list[int]]] = mapped_column(JSON, default=list)
+    # Day-level preferences (calendar days 1..31)
+    unavailable_onsite_days: Mapped[Optional[list[int]]] = mapped_column(JSON, default=list)
     unavailable_oncall_days: Mapped[Optional[list[int]]] = mapped_column(JSON, default=list)
-    preferred_duty_days: Mapped[Optional[list[int]]] = mapped_column(JSON, default=list)
+    preferred_onsite_days: Mapped[Optional[list[int]]] = mapped_column(JSON, default=list)
     preferred_oncall_days: Mapped[Optional[list[int]]] = mapped_column(JSON, default=list)
 
-    min_duties_weekdays: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
-    max_duties_weekdays: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
-    min_duties_weekends: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
-    max_duties_weekends: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
-    min_oncall_weekdays: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
-    max_oncall_weekdays: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
-    min_oncall_weekends: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    # Monthly totals (soft constraints; some fields are future-only)
+    min_onsite_total: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)  # future: not used in MVP
+    max_onsite_total: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    target_onsite_total: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+
+    min_oncall_total: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)  # future: not used in MVP
+    max_oncall_total: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    target_oncall_total: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+
+    # Weekend refinement (optional, advanced)
+    max_onsite_weekends: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    target_onsite_weekends: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     max_oncall_weekends: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    target_oncall_weekends: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
 
-    weekend_back_to_back_allowed: Mapped[bool] = mapped_column(
-        Boolean, nullable=False, default=True, server_default="1"
+    # Weekday patterns (0=Monday..6=Sunday)
+    preferred_onsite_weekdays: Mapped[Optional[list[int]]] = mapped_column(JSON, default=list)
+    preferred_oncall_weekdays: Mapped[Optional[list[int]]] = mapped_column(JSON, default=list)
+    avoid_onsite_weekdays: Mapped[Optional[list[int]]] = mapped_column(JSON, default=list)
+    avoid_oncall_weekdays: Mapped[Optional[list[int]]] = mapped_column(JSON, default=list)
+
+    # Other preferences
+    allow_weekend_consecutive_onsite_oncall: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="0"
     )
-
     preferred_partners: Mapped[Optional[list[int]]] = mapped_column(JSON, default=list)
     comments: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 

@@ -12,7 +12,7 @@ Data sources:
 
 Policy:
 - If an active doctor has NO preferences for {year, month}:
-  -> treat them as fully available (all days, duty + on-call).
+  -> treat them as fully available (all days, on-site + on-call).
   -> but they still appear as "missing" in Preferences summary.
 """
 
@@ -58,7 +58,7 @@ def _compute_available_days_for_doctor(
     For a given doctor and period, return days where they are available.
 
     Returns:
-        (available_duty_days, available_oncall_days) as sets of day numbers.
+        (available_onsite_days, available_oncall_days) as sets of day numbers.
 
     Rules:
     - If there is NO checkpoint for this doctor+period:
@@ -89,20 +89,20 @@ def _compute_available_days_for_doctor(
 
     payload = version.payload
 
-    unavailable_duty = set(payload.get("unavailable_duty_days") or [])
+    unavailable_onsite = set(payload.get("unavailable_onsite_days") or [])
     unavailable_oncall = set(payload.get("unavailable_oncall_days") or [])
 
     # Preferred lists are not used here – availability is defined by "unavailable_*".
-    available_duty = {d for d in all_days if d not in unavailable_duty}
+    available_onsite = {d for d in all_days if d not in unavailable_onsite}
     available_oncall = {d for d in all_days if d not in unavailable_oncall}
 
-    return available_duty, available_oncall
+    return available_onsite, available_oncall
 
 
 def _compute_risk_for_day(
     *,
-    spec_duty: int,
-    res_duty: int,
+    spec_onsite: int,
+    res_onsite: int,
     spec_oncall: int,
     res_oncall: int,
 ) -> RiskLevel:
@@ -110,8 +110,8 @@ def _compute_risk_for_day(
     Compute RiskLevel for a single day based on per-category counts.
 
     Meaning of inputs:
-    - spec_duty / res_duty:     how many specialists / residents are available for ON_DUTY.
-    - spec_oncall / res_oncall: how many specialists / residents are available for ON_CALL.
+    - spec_onsite / res_onsite: how many specialists / residents are available for ONSITE.
+    - spec_oncall / res_oncall: how many specialists / residents are available for ONCALL.
 
     Derived totals:
     - total_specialists = all specialists available that day (duty + on_call).
@@ -132,8 +132,9 @@ def _compute_risk_for_day(
     - alert:
         * everything else (not critical and not ok).
     """
-    total_specialists = spec_duty + spec_oncall
-    total_residents = res_duty + res_oncall
+    total_specialists = spec_onsite + spec_oncall
+    total_residents = res_onsite + res_oncall
+
     total_doctors = total_specialists + total_residents
 
     # Critical if almost nobody is available (0 or 1 doctor total).
@@ -144,12 +145,12 @@ def _compute_risk_for_day(
     if total_specialists == 0:
         return RiskLevel.critical
 
-    total_duty = spec_duty + res_duty
+    total_onsite = spec_onsite + res_onsite
     total_oncall = spec_oncall + res_oncall
 
     # "Ok" if both categories have "enough" doctors and specialists.
     if (
-        total_duty >= MIN_OK_DOCTORS_PER_CATEGORY
+        total_onsite >= MIN_OK_DOCTORS_PER_CATEGORY
         and total_oncall >= MIN_OK_DOCTORS_PER_CATEGORY
         and total_specialists >= MIN_OK_SPECIALISTS_TOTAL
     ):
@@ -166,7 +167,7 @@ def get_month_availability(*, year: int, month: int, actor) -> AvailabilityOverv
     Steps:
     1) Ensure latest checkpoints reflect newest working snapshots.
     2) Load all active doctors.
-    3) For each doctor, compute available days for duty/on-call.
+    3) For each doctor, compute available days for onsite/on-call.
     4) Aggregate counts per day and compute RiskLevel.
     """
     # Step 1: sync working → checkpoints where needed.
@@ -177,8 +178,8 @@ def get_month_availability(*, year: int, month: int, actor) -> AvailabilityOverv
     days_in_month = _days_in_month(year, month)
 
     # Pre-initialize counters for each day.
-    spec_duty_counts: Dict[int, int] = {d: 0 for d in range(1, days_in_month + 1)}
-    res_duty_counts: Dict[int, int] = {d: 0 for d in range(1, days_in_month + 1)}
+    spec_onsite_counts: Dict[int, int] = {d: 0 for d in range(1, days_in_month + 1)}
+    res_onsite_counts: Dict[int, int] = {d: 0 for d in range(1, days_in_month + 1)}
     spec_oncall_counts: Dict[int, int] = {d: 0 for d in range(1, days_in_month + 1)}
     res_oncall_counts: Dict[int, int] = {d: 0 for d in range(1, days_in_month + 1)}
 
@@ -188,16 +189,16 @@ def get_month_availability(*, year: int, month: int, actor) -> AvailabilityOverv
 
         # Step 3: for each doctor, compute availability and update daily counters.
         for doc in doctors:
-            available_duty, available_oncall = _compute_available_days_for_doctor(
+            available_onsite, available_oncall = _compute_available_days_for_doctor(
                 session, year=year, month=month, doctor_id=doc.id
             )
 
             for day in range(1, days_in_month + 1):
-                if day in available_duty:
+                if day in available_onsite:
                     if doc.role == DoctorRole.specialist:
-                        spec_duty_counts[day] += 1
+                        spec_onsite_counts[day] += 1
                     else:
-                        res_duty_counts[day] += 1
+                        res_onsite_counts[day] += 1
 
                 if day in available_oncall:
                     if doc.role == DoctorRole.specialist:
@@ -208,14 +209,14 @@ def get_month_availability(*, year: int, month: int, actor) -> AvailabilityOverv
         # Step 4: build summaries with risk for each day.
         day_summaries: List[AvailabilityDaySummary] = []
         for day in range(1, days_in_month + 1):
-            spec_duty = spec_duty_counts[day]
-            res_duty = res_duty_counts[day]
+            spec_onsite = spec_onsite_counts[day]
+            res_onsite = res_onsite_counts[day]
             spec_oncall = spec_oncall_counts[day]
             res_oncall = res_oncall_counts[day]
 
             risk = _compute_risk_for_day(
-                spec_duty=spec_duty,
-                res_duty=res_duty,
+                spec_onsite=spec_onsite,
+                res_onsite=res_onsite,
                 spec_oncall=spec_oncall,
                 res_oncall=res_oncall,
             )
@@ -223,8 +224,8 @@ def get_month_availability(*, year: int, month: int, actor) -> AvailabilityOverv
             day_summaries.append(
                 AvailabilityDaySummary(
                     day=day,
-                    available_specialists_duty=spec_duty,
-                    available_residents_duty=res_duty,
+                    available_specialists_onsite=spec_onsite,
+                    available_residents_onsite=res_onsite,
                     available_specialists_oncall=spec_oncall,
                     available_residents_oncall=res_oncall,
                     risk=risk,
@@ -258,8 +259,8 @@ def get_day_availability(*, year: int, month: int, day: int, actor) -> Availabil
     period_status = PeriodStatus(get_period_status(year, month))
     org_tz = ORG_TZ
 
-    specialists_duty: List[DoctorMini] = []
-    residents_duty: List[DoctorMini] = []
+    specialists_onsite: List[DoctorMini] = []
+    residents_onsite: List[DoctorMini] = []
     specialists_oncall: List[DoctorMini] = []
     residents_oncall: List[DoctorMini] = []
 
@@ -267,17 +268,17 @@ def get_day_availability(*, year: int, month: int, day: int, actor) -> Availabil
         doctors: List[Doctor] = session.query(Doctor).filter_by(is_active=True).all()
 
         for doc in doctors:
-            available_duty, available_oncall = _compute_available_days_for_doctor(
+            available_onsite, available_oncall = _compute_available_days_for_doctor(
                 session, year=year, month=month, doctor_id=doc.id
             )
 
             mini = DoctorMini(id=doc.id, first_name=doc.first_name, last_name=doc.last_name)
 
-            if day in available_duty:
+            if day in available_onsite:
                 if doc.role == DoctorRole.specialist:
-                    specialists_duty.append(mini)
+                    specialists_onsite.append(mini)
                 else:
-                    residents_duty.append(mini)
+                    residents_onsite.append(mini)
 
             if day in available_oncall:
                 if doc.role == DoctorRole.specialist:
@@ -285,13 +286,13 @@ def get_day_availability(*, year: int, month: int, day: int, actor) -> Availabil
                 else:
                     residents_oncall.append(mini)
 
-    # Compute risk based on counts for this single day.
-    risk = _compute_risk_for_day(
-        spec_duty=len(specialists_duty),
-        res_duty=len(residents_duty),
-        spec_oncall=len(specialists_oncall),
-        res_oncall=len(residents_oncall),
-    )
+        # Compute risk based on counts for this single day.
+        risk = _compute_risk_for_day(
+            spec_onsite=len(specialists_onsite),
+            res_onsite=len(residents_onsite),
+            spec_oncall=len(specialists_oncall),
+            res_oncall=len(residents_oncall),
+        )
 
     return AvailabilityDayRead(
         year=year,
@@ -299,8 +300,8 @@ def get_day_availability(*, year: int, month: int, day: int, actor) -> Availabil
         day=day,
         org_timezone=org_tz,
         period_status=period_status,
-        specialists_duty=specialists_duty,
-        residents_duty=residents_duty,
+        specialists_onsite=specialists_onsite,
+        residents_onsite=residents_onsite,
         specialists_oncall=specialists_oncall,
         residents_oncall=residents_oncall,
         risk=risk,

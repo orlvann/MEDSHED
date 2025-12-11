@@ -36,11 +36,11 @@ def list_admin_users(
     page: int = Query(1, ge=1, description="Page number (1-based)"),
     size: int = Query(20, ge=1, le=100, description="Items per page"),
     search: Optional[str] = Query(None, description="Search by email"),
-    is_active: Optional[str] = Query("all", description="Filter by active status: true/false/all"),
+    is_active: str = Query("all", description="Filter by active status: true/false/all"),
 ):
     """
     List admin users with pagination and optional search filter.
-    
+
     Only returns users with role='admin' (excludes doctor and doctor_admin).
     """
     return admin_user_service.list_admin_users(
@@ -65,7 +65,7 @@ def list_admin_users(
 def get_admin_user(user_id: int):
     """
     Get a single admin user by ID.
-    
+
     Returns 404 if user not found or if user is not an admin.
     """
     return admin_user_service.get_admin_user(user_id=user_id)
@@ -84,13 +84,13 @@ def get_admin_user(user_id: int):
         404: {
             "model": ErrorPayload,
             "description": "Doctor not found (if doctor_id provided)",
-        }
+        },
     },
 )
 def create_admin_user(payload: UserAdminCreate = Body(...)):
     """
     Create a new admin user.
-    
+
     - Role is automatically set to 'admin'
     - Password is auto-generated
     - User starts with is_active=False
@@ -112,13 +112,13 @@ def create_admin_user(payload: UserAdminCreate = Body(...)):
         409: {
             "model": ErrorPayload,
             "description": "Email already in use",
-        }
+        },
     },
 )
 def update_admin_user(user_id: int, payload: UserAdminUpdate = Body(...)):
     """
     Update an existing admin user.
-    
+
     Can update:
     - Email
     - is_active status
@@ -141,9 +141,8 @@ def update_admin_user(user_id: int, payload: UserAdminUpdate = Body(...)):
 def delete_admin_user(user_id: int):
     """
     Delete an admin user.
-    
+
     Returns 404 if user not found or if user is not an admin.
     """
     admin_user_service.delete_admin_user(user_id=user_id)
     return None
-

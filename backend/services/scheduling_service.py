@@ -52,8 +52,11 @@ from sqlalchemy import delete, func, select
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
+from backend.core.types import DoctorInput, PreferencesInput, ProblemData
 from backend.db.session import SessionLocal
-from backend.models.common_enums import PeriodStatus, ScheduleStatus
+from backend.models.common_enums import PeriodStatus, ScheduleStatus, ShiftType
+from backend.models.orm.doctor import Doctor
+from backend.models.orm.preference import PreferencePointer, PreferenceVersion
 from backend.models.orm.schedule import (
     ScheduleDiagnostics,
     SchedulePointer,
@@ -79,7 +82,7 @@ from backend.models.schemas.schedule import (
     ScheduleWorkingRead,
     _ViewHint,
 )
-from backend.utils import ORG_TZ, get_period_status, normalize_assignments, normalize_meta, now_utc
+from backend.utils import ORG_TZ, days_in_month, get_period_status, normalize_assignments, normalize_meta, now_utc
 
 # Retention policy (FIFO): tune here
 # Change these to keep more/fewer historical snapshots.
@@ -537,6 +540,157 @@ def _normalize_snapshot_payload(raw: Dict[str, Any]) -> Dict[str, Any]:
 
 
 # --------------------------------- DTO builders --------------------------------
+def _build_problem_data_for_generate(session: Session, req: ScheduleGenerateRequest) -> ProblemData:
+    """
+    Build ProblemData for a generate request.
+
+    ```
+    This helper:
+    - computes the list of days in the month,
+    - loads active doctors from DB and maps them to DoctorInput,
+    - intersects requested participant_doctor_ids with active doctors in DB,
+    - builds PreferencesInput per participant doctor from PreferencePointer/PreferenceVersion (or defaults),
+    - converts ignore_days and ignore_slots from the request to sets.
+    """
+
+    # Parse year and month as plain integers
+    year = int(req.year)
+    month = int(req.month)
+
+    # 1) Days of the month: 1..N using days_in_month helper
+    days_count = days_in_month(year, month)
+    days = list(range(1, days_count + 1))
+
+    # 2) Load doctors from DB (requested ids, filtered to is_active=True)
+    requested_ids = {int(did) for did in (req.participant_doctor_ids or [])}
+    doctors: Dict[int, DoctorInput] = {}
+
+    if requested_ids:
+        db_doctors = session.scalars(
+            select(Doctor).where(
+                Doctor.id.in_(requested_ids),
+                Doctor.is_active.is_(True),
+            )
+        ).all()
+    else:
+        db_doctors = []
+
+    active_ids: set[int] = set()
+
+    for d in db_doctors:
+        # Build minimal DoctorInput used by the solver
+        doctors[int(d.id)] = DoctorInput(
+            id=int(d.id),
+            role=d.role,
+            is_head=bool(d.is_head),
+            is_active=bool(d.is_active),
+        )
+        if d.is_active:
+            active_ids.add(int(d.id))
+
+    # 3) Participant ids = intersection of requested ids and active doctors from DB
+    participant_doctor_ids: set[int] = requested_ids & active_ids
+
+    # 4) Build preferences for each participant doctor
+    #    We use PreferencePointer + PreferenceVersion to read the latest submitted version.
+    #    If anything is missing, we fall back to empty/default PreferencesInput.
+    preferences: Dict[int, PreferencesInput] = {}
+    if participant_doctor_ids:
+        # Load all pointers for this period and participant doctors in one query
+        ptr_rows = session.scalars(
+            select(PreferencePointer).where(
+                PreferencePointer.doctor_id.in_(participant_doctor_ids),
+                PreferencePointer.year == year,
+                PreferencePointer.month == month,
+            )
+        ).all()
+
+        # Map doctor_id -> pointer row (only when a version id is present)
+        pointers_by_doctor: Dict[int, PreferencePointer] = {
+            int(ptr.doctor_id): ptr for ptr in ptr_rows if ptr.current_version_id is not None
+        }
+
+        # Collect all version ids that we need to load
+        version_ids = {int(ptr.current_version_id) for ptr in ptr_rows if ptr.current_version_id is not None}
+
+        versions_by_id: Dict[int, PreferenceVersion] = {}
+        if version_ids:
+            # Load all referenced versions in one query
+            ver_rows = session.scalars(select(PreferenceVersion).where(PreferenceVersion.id.in_(version_ids))).all()
+            versions_by_id = {int(ver.id): ver for ver in ver_rows}
+
+        # Helper to safely convert JSON list fields to a plain list of ints
+        def _as_int_list(raw) -> List[int]:
+            # If value is missing or null, return an empty list
+            if not raw:
+                return []
+            if isinstance(raw, list):
+                # Cast values to int defensively
+                return [int(x) for x in raw]
+            return []
+
+        # Build PreferencesInput for each participant doctor
+        for doctor_id in participant_doctor_ids:
+            payload: Dict[str, Any] = {}
+
+            ptr = pointers_by_doctor.get(int(doctor_id))
+            if ptr is not None and ptr.current_version_id is not None:
+                ver = versions_by_id.get(int(ptr.current_version_id))
+                if ver is not None and isinstance(ver.payload, dict):
+                    # Copy payload to avoid mutating ORM-attached dict
+                    payload = dict(ver.payload or {})
+
+            # Map JSON payload to PreferencesInput; defaults are used when keys are missing
+            preferences[doctor_id] = PreferencesInput(
+                doctor_id=int(doctor_id),
+                unavailable_onsite_days=_as_int_list(payload.get("unavailable_onsite_days")),
+                unavailable_oncall_days=_as_int_list(payload.get("unavailable_oncall_days")),
+                preferred_onsite_days=_as_int_list(payload.get("preferred_onsite_days")),
+                preferred_oncall_days=_as_int_list(payload.get("preferred_oncall_days")),
+                min_onsite_total=payload.get("min_onsite_total"),
+                max_onsite_total=payload.get("max_onsite_total"),
+                target_onsite_total=payload.get("target_onsite_total"),
+                min_oncall_total=payload.get("min_oncall_total"),
+                max_oncall_total=payload.get("max_oncall_total"),
+                target_oncall_total=payload.get("target_oncall_total"),
+                max_onsite_weekends=payload.get("max_onsite_weekends"),
+                target_onsite_weekends=payload.get("target_onsite_weekends"),
+                max_oncall_weekends=payload.get("max_oncall_weekends"),
+                target_oncall_weekends=payload.get("target_oncall_weekends"),
+                preferred_onsite_weekdays=_as_int_list(payload.get("preferred_onsite_weekdays")),
+                preferred_oncall_weekdays=_as_int_list(payload.get("preferred_oncall_weekdays")),
+                avoid_onsite_weekdays=_as_int_list(payload.get("avoid_onsite_weekdays")),
+                avoid_oncall_weekdays=_as_int_list(payload.get("avoid_oncall_weekdays")),
+                allow_weekend_consecutive_onsite_oncall=bool(
+                    payload.get("allow_weekend_consecutive_onsite_oncall", False)
+                ),
+                preferred_partners=_as_int_list(payload.get("preferred_partners")),
+                comments=payload.get("comments"),
+            )
+
+    # When there are no participants, 'preferences' stays empty dict (solver sees no doctors)
+
+    # 5) Ignored days and slots from the request
+    ignore_days: set[int] = {int(day) for day in (req.ignore_days or [])}
+
+    ignore_slots: set[tuple[int, ShiftType]] = set()
+    for slot in req.ignore_slots or []:
+        # slot is IgnoreSlot DTO with day and ShiftType enum
+        ignore_slots.add((int(slot.day), slot.shift_type))
+
+    # 6) Build and return ProblemData for the solver
+    return ProblemData(
+        year=year,
+        month=month,
+        days=days,
+        doctors=doctors,
+        preferences=preferences,
+        participant_doctor_ids=participant_doctor_ids,
+        ignore_days=ignore_days,
+        ignore_slots=ignore_slots,
+    )
+
+
 def _draft_view(
     version_id: int, payload: Dict[str, Any], *, can_undo: bool, can_redo: bool, count: int
 ) -> ScheduleDraftView:
@@ -680,34 +834,48 @@ class SchedulingService:
     @_translate_sqla_errors
     def generate(self, req: ScheduleGenerateRequest, *, user_id: Optional[int]) -> ScheduleGenerateCreated:
         """
-        Generate (MVP): seed working with meta + empty assignments and create first draft version.
+        Generate (MVP): build ProblemData, call the solver, seed working and create first draft version.
+            Behavior:
+            - Builds ProblemData from DB and request (participants, preferences stub, ignore_*).
+            - Calls the core scheduler to get assignments (may be empty list in MVP).
+            - Seeds/overwrites working with solver assignments and meta.
+            - Creates a draft version and points the draft pointer to it.
+            - Computes and stores diagnostics for the draft.
 
-        Behavior:
-          - Seeds/overwrites working.
-          - Creates a draft version and points the draft pointer to it.
-          - Computes and stores diagnostics for the draft.
-
-        Invariant (clear REDO semantics):
-          - A newly created checkpoint is always the max(version.id) for the month.
-          - The draft pointer is moved to this newest id, so there is no "next" (redo) available.
-          - We assert this by snapping the pointer to max(id) after insertion.
+            Invariant (clear REDO semantics):
+            - A newly created checkpoint is always the max(version.id) for the month.
+            - The draft pointer is moved to this newest id, so there is no "next" (redo) available.
+            - We assert this by snapping the pointer to max(id) after insertion.
         """
 
         year, month = int(req.year), int(req.month)
         # _ensure_editable(year, month)  # Enable later to block edits on past periods
         with SessionLocal() as session:
+            # Build core ProblemData from DB and request
+            problem = _build_problem_data_for_generate(session, req)
+
+            # Lazy import to avoid potential circular imports at module import time
+            from backend.core import scheduler
+
+            # Call solver to generate assignments (can still return empty list in MVP)
+            assignments = scheduler.generate_schedule(problem)
+
+            # Normalize snapshot payload: use participants from ProblemData + solver assignments
             payload = _normalize_snapshot_payload(
                 {
-                    "participant_doctor_ids": req.participant_doctor_ids or [],
-                    "assignments": [],  # generated seed has no assignments yet
+                    "participant_doctor_ids": sorted(problem.participant_doctor_ids),
+                    "assignments": [a.model_dump(mode="json") for a in assignments],
                     "meta": {"labels": ["as_generated"], "exceptions": []},
                 }
             )
+
+            # Ensure working row exists and overwrite it with the new snapshot
             _get_or_init_working(session, year, month)
             _update_working(
                 session, year, month, payload=payload, if_match_lock_version=None, updated_by_user_id=user_id
             )
 
+            # Create an immutable draft version based on the same payload
             vid = _insert_version(
                 session,
                 year=year,
@@ -1131,7 +1299,7 @@ class SchedulingService:
         - If diagnostics cache is missing or stale, compute and upsert before returning.
         - Summary KPIs only; 'details' remains None in MVP.
 
-        Post-MVP roadmap (keep comments concise in code; full text lives in docs/api-contract-v1.md):
+        Post-MVP optional roadmap lives in docs/api-contract-v1.md:
         - Strongly typed 'details' sections (coverage, preferences, fairness, partnering, visuals, suggestions).
         - Optional endpoints:
             GET  /api/v1/schedules/{y}/{m}/diagnostics/details?target=...

@@ -253,27 +253,27 @@ def _build_unavailable_for_doctor(
     day_alert: int,
 ) -> Tuple[list[int], list[int]]:
     """
-    Build unavailable_duty_days and unavailable_oncall_days for a single doctor.
+    Build unavailable_onsite_days and unavailable_oncall_days for a single doctor.
 
     Rules for demo:
     - day_critical:
-        * all specialists are unavailable (duty + on-call)
+        * all specialists are unavailable (onsite + on-call)
         * residents stay available.
     - day_alert:
         * exactly one specialist is partially available:
             - the first specialist in `specialists`:
-                available for DUTY, unavailable for ON-CALL
-        * all remaining specialists are unavailable (duty + on-call)
+                available for ONSITE, unavailable for ON-CALL
+        * all remaining specialists are unavailable (onsite + on-call)
         * residents stay fully available.
 
     For other days we do not mark anything → fully available.
     """
-    unavailable_duty: set[int] = set()
+    unavailable_onsite: set[int] = set()
     unavailable_oncall: set[int] = set()
 
     if doc.role == DoctorRole.specialist:
         # All specialists unavailable on the critical day.
-        unavailable_duty.add(day_critical)
+        unavailable_onsite.add(day_critical)
         unavailable_oncall.add(day_critical)
 
         if specialists:
@@ -283,13 +283,13 @@ def _build_unavailable_for_doctor(
                 unavailable_oncall.add(day_alert)
             else:
                 # Other specialists: fully unavailable on alert day.
-                unavailable_duty.add(day_alert)
+                unavailable_onsite.add(day_alert)
                 unavailable_oncall.add(day_alert)
 
     # Residents: we do not mark them unavailable for those demo days,
     # so they stay available and help form alert/critical combinations.
 
-    return sorted(unavailable_duty), sorted(unavailable_oncall)
+    return sorted(unavailable_onsite), sorted(unavailable_oncall)
 
 
 def _payload_from_working(row: PreferenceWorking) -> dict:
@@ -299,19 +299,25 @@ def _payload_from_working(row: PreferenceWorking) -> dict:
     This mirrors the service helper and is stored in PreferenceVersion.payload.
     """
     return {
-        "unavailable_duty_days": row.unavailable_duty_days or [],
+        "unavailable_onsite_days": row.unavailable_onsite_days or [],
         "unavailable_oncall_days": row.unavailable_oncall_days or [],
-        "preferred_duty_days": row.preferred_duty_days or [],
+        "preferred_onsite_days": row.preferred_onsite_days or [],
         "preferred_oncall_days": row.preferred_oncall_days or [],
-        "min_duties_weekdays": row.min_duties_weekdays,
-        "max_duties_weekdays": row.max_duties_weekdays,
-        "min_duties_weekends": row.min_duties_weekends,
-        "max_duties_weekends": row.max_duties_weekends,
-        "min_oncall_weekdays": row.min_oncall_weekdays,
-        "max_oncall_weekdays": row.max_oncall_weekdays,
-        "min_oncall_weekends": row.min_oncall_weekends,
+        "min_onsite_total": row.min_onsite_total,
+        "max_onsite_total": row.max_onsite_total,
+        "target_onsite_total": row.target_onsite_total,
+        "min_oncall_total": row.min_oncall_total,
+        "max_oncall_total": row.max_oncall_total,
+        "target_oncall_total": row.target_oncall_total,
+        "max_onsite_weekends": row.max_onsite_weekends,
+        "target_onsite_weekends": row.target_onsite_weekends,
         "max_oncall_weekends": row.max_oncall_weekends,
-        "weekend_back_to_back_allowed": row.weekend_back_to_back_allowed,
+        "target_oncall_weekends": row.target_oncall_weekends,
+        "preferred_onsite_weekdays": row.preferred_onsite_weekdays or [],
+        "preferred_oncall_weekdays": row.preferred_oncall_weekdays or [],
+        "avoid_onsite_weekdays": row.avoid_onsite_weekdays or [],
+        "avoid_oncall_weekdays": row.avoid_oncall_weekdays or [],
+        "allow_weekend_consecutive_onsite_oncall": row.allow_weekend_consecutive_onsite_oncall,
         "preferred_partners": row.preferred_partners or [],
         "comments": row.comments,
     }
@@ -437,7 +443,7 @@ def _seed_open_period_preferences(
         working = _ensure_working_row(session, doctor_id=doc.id, year=year, month=month)
 
         # Build unavailable_* lists based on role and special days.
-        unavailable_duty, unavailable_oncall = _build_unavailable_for_doctor(
+        unavailable_onsite, unavailable_oncall = _build_unavailable_for_doctor(
             doc,
             specialists=specialists,
             day_critical=day_critical,
@@ -445,22 +451,27 @@ def _seed_open_period_preferences(
         )
 
         # Fill editable fields.
-        working.unavailable_duty_days = unavailable_duty
+        working.unavailable_onsite_days = unavailable_onsite
         working.unavailable_oncall_days = unavailable_oncall
-        working.preferred_duty_days = []  # not used by availability
+        working.preferred_onsite_days = []  # not used by availability in this demo
         working.preferred_oncall_days = []
 
-        # Simple min/max settings for demo.
-        working.min_duties_weekdays = 2
-        working.max_duties_weekdays = 5
-        working.min_duties_weekends = 0
-        working.max_duties_weekends = 3
-        working.min_oncall_weekdays = 1
-        working.max_oncall_weekdays = 4
-        working.min_oncall_weekends = 0
-        working.max_oncall_weekends = 2
+        # Simple totals and weekend settings for demo.
+        working.min_onsite_total = 4
+        working.max_onsite_total = 8
+        working.target_onsite_total = 6
 
-        working.weekend_back_to_back_allowed = True
+        working.min_oncall_total = 2
+        working.max_oncall_total = 6
+        working.target_oncall_total = 4
+
+        working.max_onsite_weekends = 3
+        working.target_onsite_weekends = 2
+        working.max_oncall_weekends = 2
+        working.target_oncall_weekends = 1
+
+        # Weekday patterns left empty -> defaults (no special pattern).
+        working.allow_weekend_consecutive_onsite_oncall = True
         working.preferred_partners = []
         working.comments = f"demo working for doctor {doc.id}"
 
@@ -503,28 +514,32 @@ def _seed_open_period_preferences(
     for doc in working_only_docs:
         working = _ensure_working_row(session, doctor_id=doc.id, year=year, month=month)
 
-        unavailable_duty, unavailable_oncall = _build_unavailable_for_doctor(
+        unavailable_onsite, unavailable_oncall = _build_unavailable_for_doctor(
             doc,
             specialists=specialists,
             day_critical=day_critical,
             day_alert=day_alert,
         )
 
-        working.unavailable_duty_days = unavailable_duty
+        working.unavailable_onsite_days = unavailable_onsite
         working.unavailable_oncall_days = unavailable_oncall
-        working.preferred_duty_days = []
+        working.preferred_onsite_days = []
         working.preferred_oncall_days = []
 
-        working.min_duties_weekdays = 1
-        working.max_duties_weekdays = 3
-        working.min_duties_weekends = 0
-        working.max_duties_weekends = 2
-        working.min_oncall_weekdays = 0
-        working.max_oncall_weekdays = 2
-        working.min_oncall_weekends = 0
-        working.max_oncall_weekends = 1
+        working.min_onsite_total = 2
+        working.max_onsite_total = 5
+        working.target_onsite_total = 3
 
-        working.weekend_back_to_back_allowed = True
+        working.min_oncall_total = 0
+        working.max_oncall_total = 3
+        working.target_oncall_total = 1
+
+        working.max_onsite_weekends = 2
+        working.target_onsite_weekends = 1
+        working.max_oncall_weekends = 1
+        working.target_oncall_weekends = 0
+
+        working.allow_weekend_consecutive_onsite_oncall = True
         working.preferred_partners = []
         working.comments = f"demo working-only (no checkpoints) for doctor {doc.id}"
 

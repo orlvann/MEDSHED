@@ -24,9 +24,9 @@ def _normalize_days(days: List[int] | None) -> List[int]:
     return normalize_days(days)
 
 
-def _validate_min_le_max(min_v: int, max_v: Optional[int], name_min: str, name_max: str) -> None:
-    """Cross-field guard: min <= max (when max is set)."""
-    if max_v is not None and min_v > max_v:
+def _validate_min_le_max(min_v: Optional[int], max_v: Optional[int], name_min: str, name_max: str) -> None:
+    """Cross-field guard: min <= max when both are set."""
+    if min_v is not None and max_v is not None and min_v > max_v:
         raise ValueError(f"{name_min} cannot be greater than {name_max}")
 
 
@@ -36,29 +36,43 @@ def _validate_min_le_max(min_v: int, max_v: Optional[int], name_min: str, name_m
 class _PreferenceEditableMixin(BaseModel):
     """Editable fields used by Working PUT/Read and Checkpoint payloads."""
 
-    unavailable_duty_days: List[DayInt] = []
+    # Day-level preferences (calendar days 1..31)
+    unavailable_onsite_days: List[DayInt] = []
     unavailable_oncall_days: List[DayInt] = []
-    preferred_duty_days: List[DayInt] = []
+    preferred_onsite_days: List[DayInt] = []
     preferred_oncall_days: List[DayInt] = []
 
-    min_duties_weekdays: int = 0
-    max_duties_weekdays: Optional[int] = None
-    min_duties_weekends: int = 0
-    max_duties_weekends: Optional[int] = None
-    min_oncall_weekdays: int = 0
-    max_oncall_weekdays: Optional[int] = None
-    min_oncall_weekends: int = 0
-    max_oncall_weekends: Optional[int] = None
+    # Monthly totals (soft constraints; some fields are future-only)
+    min_onsite_total: Optional[int] = None  # future: not used in MVP
+    max_onsite_total: Optional[int] = None
+    target_onsite_total: Optional[int] = None
 
-    weekend_back_to_back_allowed: bool = True
+    min_oncall_total: Optional[int] = None  # future: not used in MVP
+    max_oncall_total: Optional[int] = None
+    target_oncall_total: Optional[int] = None
+
+    # Weekend refinement (optional, advanced)
+    max_onsite_weekends: Optional[int] = None
+    target_onsite_weekends: Optional[int] = None
+    max_oncall_weekends: Optional[int] = None
+    target_oncall_weekends: Optional[int] = None
+
+    # Weekday patterns (0=Monday..6=Sunday)
+    preferred_onsite_weekdays: List[int] = []
+    preferred_oncall_weekdays: List[int] = []
+    avoid_onsite_weekdays: List[int] = []
+    avoid_oncall_weekdays: List[int] = []
+
+    # Other preferences
+    allow_weekend_consecutive_onsite_oncall: bool = False
     preferred_partners: List[int] = []
     comments: Optional[str] = None
 
     # Normalize day lists (unique + sorted)
     @field_validator(
-        "unavailable_duty_days",
+        "unavailable_onsite_days",
         "unavailable_oncall_days",
-        "preferred_duty_days",
+        "preferred_onsite_days",
         "preferred_oncall_days",
         mode="before",
     )
@@ -67,9 +81,9 @@ class _PreferenceEditableMixin(BaseModel):
         return _normalize_days(v)
 
     @field_validator(
-        "max_duties_weekdays",
-        "max_duties_weekends",
-        "max_oncall_weekdays",
+        "max_onsite_total",
+        "max_oncall_total",
+        "max_onsite_weekends",
         "max_oncall_weekends",
         mode="before",
     )
@@ -81,34 +95,22 @@ class _PreferenceEditableMixin(BaseModel):
 
     @model_validator(mode="after")
     def _cross_field(self):
-        # min <= max where max is set
+        # min <= max where both are set
         _validate_min_le_max(
-            self.min_duties_weekdays,
-            self.max_duties_weekdays,
-            "min_duties_weekdays",
-            "max_duties_weekdays",
+            self.min_onsite_total,
+            self.max_onsite_total,
+            "min_onsite_total",
+            "max_onsite_total",
         )
         _validate_min_le_max(
-            self.min_duties_weekends,
-            self.max_duties_weekends,
-            "min_duties_weekends",
-            "max_duties_weekends",
+            self.min_oncall_total,
+            self.max_oncall_total,
+            "min_oncall_total",
+            "max_oncall_total",
         )
-        _validate_min_le_max(
-            self.min_oncall_weekdays,
-            self.max_oncall_weekdays,
-            "min_oncall_weekdays",
-            "max_oncall_weekdays",
-        )
-        _validate_min_le_max(
-            self.min_oncall_weekends,
-            self.max_oncall_weekends,
-            "min_oncall_weekends",
-            "max_oncall_weekends",
-        )
-        # No overlap between unavailable_* and preferred_* for the same shift type
-        if set(self.unavailable_duty_days) & set(self.preferred_duty_days):
-            raise ValueError("duty days cannot be both preferred and unavailable")
+        # No overlap between unavailable* and preferred* for the same shift type
+        if set(self.unavailable_onsite_days) & set(self.preferred_onsite_days):
+            raise ValueError("onsite days cannot be both preferred and unavailable")
         if set(self.unavailable_oncall_days) & set(self.preferred_oncall_days):
             raise ValueError("on-call days cannot be both preferred and unavailable")
         return self

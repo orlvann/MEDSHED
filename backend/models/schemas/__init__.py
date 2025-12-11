@@ -18,9 +18,9 @@ from backend.models.common_enums import (
     PeriodStatus,
     PreferenceStatus,
     RiskLevel,
-    Role,
     ScheduleStatus,
     ShiftType,
+    UserRole,
 )
 
 # Auth / User
@@ -91,7 +91,7 @@ from .user import (
 # Explicit public surface for this package
 __all__ = [
     # Enums / shared
-    "Role",
+    "UserRole",
     "DoctorRole",
     "ShiftType",
     "ScheduleStatus",

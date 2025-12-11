@@ -110,19 +110,30 @@ def _editable_payload_from_working(row: PreferenceWorking) -> dict:
     used to rebuild DTOs and overwrite working row on revert.
     """
     return {
-        "unavailable_duty_days": row.unavailable_duty_days or [],
+        # Day-level preferences
+        "unavailable_onsite_days": row.unavailable_onsite_days or [],
         "unavailable_oncall_days": row.unavailable_oncall_days or [],
-        "preferred_duty_days": row.preferred_duty_days or [],
+        "preferred_onsite_days": row.preferred_onsite_days or [],
         "preferred_oncall_days": row.preferred_oncall_days or [],
-        "min_duties_weekdays": row.min_duties_weekdays,
-        "max_duties_weekdays": row.max_duties_weekdays,
-        "min_duties_weekends": row.min_duties_weekends,
-        "max_duties_weekends": row.max_duties_weekends,
-        "min_oncall_weekdays": row.min_oncall_weekdays,
-        "max_oncall_weekdays": row.max_oncall_weekdays,
-        "min_oncall_weekends": row.min_oncall_weekends,
+        # Monthly totals
+        "min_onsite_total": row.min_onsite_total,
+        "max_onsite_total": row.max_onsite_total,
+        "target_onsite_total": row.target_onsite_total,
+        "min_oncall_total": row.min_oncall_total,
+        "max_oncall_total": row.max_oncall_total,
+        "target_oncall_total": row.target_oncall_total,
+        # Weekend refinement
+        "max_onsite_weekends": row.max_onsite_weekends,
+        "target_onsite_weekends": row.target_onsite_weekends,
         "max_oncall_weekends": row.max_oncall_weekends,
-        "weekend_back_to_back_allowed": row.weekend_back_to_back_allowed,
+        "target_oncall_weekends": row.target_oncall_weekends,
+        # Weekday patterns
+        "preferred_onsite_weekdays": row.preferred_onsite_weekdays or [],
+        "preferred_oncall_weekdays": row.preferred_oncall_weekdays or [],
+        "avoid_onsite_weekdays": row.avoid_onsite_weekdays or [],
+        "avoid_oncall_weekdays": row.avoid_oncall_weekdays or [],
+        # Other preferences
+        "allow_weekend_consecutive_onsite_oncall": row.allow_weekend_consecutive_onsite_oncall,
         "preferred_partners": row.preferred_partners or [],
         "comments": row.comments,
     }
@@ -143,22 +154,35 @@ def _apply_payload_to_working(
     - we create a checkpoint (to refresh audit),
     - we revert to another version.
     """
-    row.unavailable_duty_days = payload.get("unavailable_duty_days", [])
+    # Day-level preferences
+    row.unavailable_onsite_days = payload.get("unavailable_onsite_days", [])
     row.unavailable_oncall_days = payload.get("unavailable_oncall_days", [])
-    row.preferred_duty_days = payload.get("preferred_duty_days", [])
+    row.preferred_onsite_days = payload.get("preferred_onsite_days", [])
     row.preferred_oncall_days = payload.get("preferred_oncall_days", [])
 
-    row.min_duties_weekdays = payload.get("min_duties_weekdays", 0)
-    row.max_duties_weekdays = payload.get("max_duties_weekdays")
-    row.min_duties_weekends = payload.get("min_duties_weekends", 0)
-    row.max_duties_weekends = payload.get("max_duties_weekends")
+    # Monthly totals
+    row.min_onsite_total = payload.get("min_onsite_total")
+    row.max_onsite_total = payload.get("max_onsite_total")
+    row.target_onsite_total = payload.get("target_onsite_total")
 
-    row.min_oncall_weekdays = payload.get("min_oncall_weekdays", 0)
-    row.max_oncall_weekdays = payload.get("max_oncall_weekdays")
-    row.min_oncall_weekends = payload.get("min_oncall_weekends", 0)
+    row.min_oncall_total = payload.get("min_oncall_total")
+    row.max_oncall_total = payload.get("max_oncall_total")
+    row.target_oncall_total = payload.get("target_oncall_total")
+
+    # Weekend refinement
+    row.max_onsite_weekends = payload.get("max_onsite_weekends")
+    row.target_onsite_weekends = payload.get("target_onsite_weekends")
     row.max_oncall_weekends = payload.get("max_oncall_weekends")
+    row.target_oncall_weekends = payload.get("target_oncall_weekends")
 
-    row.weekend_back_to_back_allowed = payload.get("weekend_back_to_back_allowed", True)
+    # Weekday patterns
+    row.preferred_onsite_weekdays = payload.get("preferred_onsite_weekdays", [])
+    row.preferred_oncall_weekdays = payload.get("preferred_oncall_weekdays", [])
+    row.avoid_onsite_weekdays = payload.get("avoid_onsite_weekdays", [])
+    row.avoid_oncall_weekdays = payload.get("avoid_oncall_weekdays", [])
+
+    # Other preferences
+    row.allow_weekend_consecutive_onsite_oncall = payload.get("allow_weekend_consecutive_onsite_oncall", False)
     row.preferred_partners = payload.get("preferred_partners", [])
     row.comments = payload.get("comments")
 
@@ -352,41 +376,63 @@ def get_working(*, year: int, month: int, doctor_id: int, actor: UserCtx) -> Pre
 
     # 4) Map working row (or defaults) to DTO fields.
     if working is not None:
-        unavailable_duty_days = working.unavailable_duty_days or []
+        # Day-level preferences
+        unavailable_onsite_days = working.unavailable_onsite_days or []
         unavailable_oncall_days = working.unavailable_oncall_days or []
-        preferred_duty_days = working.preferred_duty_days or []
+        preferred_onsite_days = working.preferred_onsite_days or []
         preferred_oncall_days = working.preferred_oncall_days or []
+        # Monthly totals
+        min_onsite_total = working.min_onsite_total
+        max_onsite_total = working.max_onsite_total
+        target_onsite_total = working.target_onsite_total
 
-        min_duties_weekdays = working.min_duties_weekdays
-        max_duties_weekdays = working.max_duties_weekdays
-        min_duties_weekends = working.min_duties_weekends
-        max_duties_weekends = working.max_duties_weekends
-        min_oncall_weekdays = working.min_oncall_weekdays
-        max_oncall_weekdays = working.max_oncall_weekdays
-        min_oncall_weekends = working.min_oncall_weekends
+        min_oncall_total = working.min_oncall_total
+        max_oncall_total = working.max_oncall_total
+        target_oncall_total = working.target_oncall_total
+
+        # Weekend refinement
+        max_onsite_weekends = working.max_onsite_weekends
+        target_onsite_weekends = working.target_onsite_weekends
         max_oncall_weekends = working.max_oncall_weekends
+        target_oncall_weekends = working.target_oncall_weekends
 
-        weekend_back_to_back_allowed = working.weekend_back_to_back_allowed
+        # Weekday patterns
+        preferred_onsite_weekdays = working.preferred_onsite_weekdays or []
+        preferred_oncall_weekdays = working.preferred_oncall_weekdays or []
+        avoid_onsite_weekdays = working.avoid_onsite_weekdays or []
+        avoid_oncall_weekdays = working.avoid_oncall_weekdays or []
+
+        # Other preferences
+        allow_weekend_consecutive_onsite_oncall = working.allow_weekend_consecutive_onsite_oncall
         preferred_partners = working.preferred_partners or []
         comments = working.comments
         last_admin_note = working.last_admin_note
     else:
-        # No working row yet → treat as "allow all" defaults.
-        unavailable_duty_days = []
+        # No working row yet → defaults (doctor has not expressed preferences).
+        unavailable_onsite_days = []
         unavailable_oncall_days = []
-        preferred_duty_days = []
+        preferred_onsite_days = []
         preferred_oncall_days = []
 
-        min_duties_weekdays = 0
-        max_duties_weekdays = None
-        min_duties_weekends = 0
-        max_duties_weekends = None
-        min_oncall_weekdays = 0
-        max_oncall_weekdays = None
-        min_oncall_weekends = 0
-        max_oncall_weekends = None
+        min_onsite_total = None
+        max_onsite_total = None
+        target_onsite_total = None
 
-        weekend_back_to_back_allowed = True
+        min_oncall_total = None
+        max_oncall_total = None
+        target_oncall_total = None
+
+        max_onsite_weekends = None
+        target_onsite_weekends = None
+        max_oncall_weekends = None
+        target_oncall_weekends = None
+
+        preferred_onsite_weekdays = []
+        preferred_oncall_weekdays = []
+        avoid_onsite_weekdays = []
+        avoid_oncall_weekdays = []
+
+        allow_weekend_consecutive_onsite_oncall = False
         preferred_partners = []
         comments = None
         last_admin_note = None
@@ -415,19 +461,25 @@ def get_working(*, year: int, month: int, doctor_id: int, actor: UserCtx) -> Pre
         doctor_id=doctor_id,
         year=year,
         month=month,
-        unavailable_duty_days=unavailable_duty_days,
+        unavailable_onsite_days=unavailable_onsite_days,
         unavailable_oncall_days=unavailable_oncall_days,
-        preferred_duty_days=preferred_duty_days,
+        preferred_onsite_days=preferred_onsite_days,
         preferred_oncall_days=preferred_oncall_days,
-        min_duties_weekdays=min_duties_weekdays,
-        max_duties_weekdays=max_duties_weekdays,
-        min_duties_weekends=min_duties_weekends,
-        max_duties_weekends=max_duties_weekends,
-        min_oncall_weekdays=min_oncall_weekdays,
-        max_oncall_weekdays=max_oncall_weekdays,
-        min_oncall_weekends=min_oncall_weekends,
+        min_onsite_total=min_onsite_total,
+        max_onsite_total=max_onsite_total,
+        target_onsite_total=target_onsite_total,
+        min_oncall_total=min_oncall_total,
+        max_oncall_total=max_oncall_total,
+        target_oncall_total=target_oncall_total,
+        max_onsite_weekends=max_onsite_weekends,
+        target_onsite_weekends=target_onsite_weekends,
         max_oncall_weekends=max_oncall_weekends,
-        weekend_back_to_back_allowed=weekend_back_to_back_allowed,
+        target_oncall_weekends=target_oncall_weekends,
+        preferred_onsite_weekdays=preferred_onsite_weekdays,
+        preferred_oncall_weekdays=preferred_oncall_weekdays,
+        avoid_onsite_weekdays=avoid_onsite_weekdays,
+        avoid_oncall_weekdays=avoid_oncall_weekdays,
+        allow_weekend_consecutive_onsite_oncall=allow_weekend_consecutive_onsite_oncall,
         preferred_partners=preferred_partners,
         comments=comments,
         status=pref_status,
@@ -524,21 +576,34 @@ def save_working_autosave(
             working.lock_version = current_lv + 1
 
         # 2) Apply editable fields from payload.
-        working.unavailable_duty_days = payload.unavailable_duty_days
+        # Day-level preferences
+        working.unavailable_onsite_days = payload.unavailable_onsite_days
         working.unavailable_oncall_days = payload.unavailable_oncall_days
-        working.preferred_duty_days = payload.preferred_duty_days
+        working.preferred_onsite_days = payload.preferred_onsite_days
         working.preferred_oncall_days = payload.preferred_oncall_days
+        # Monthly totals
+        working.min_onsite_total = payload.min_onsite_total
+        working.max_onsite_total = payload.max_onsite_total
+        working.target_onsite_total = payload.target_onsite_total
 
-        working.min_duties_weekdays = payload.min_duties_weekdays
-        working.max_duties_weekdays = payload.max_duties_weekdays
-        working.min_duties_weekends = payload.min_duties_weekends
-        working.max_duties_weekends = payload.max_duties_weekends
-        working.min_oncall_weekdays = payload.min_oncall_weekdays
-        working.max_oncall_weekdays = payload.max_oncall_weekdays
-        working.min_oncall_weekends = payload.min_oncall_weekends
+        working.min_oncall_total = payload.min_oncall_total
+        working.max_oncall_total = payload.max_oncall_total
+        working.target_oncall_total = payload.target_oncall_total
+
+        # Weekend refinement
+        working.max_onsite_weekends = payload.max_onsite_weekends
+        working.target_onsite_weekends = payload.target_onsite_weekends
         working.max_oncall_weekends = payload.max_oncall_weekends
+        working.target_oncall_weekends = payload.target_oncall_weekends
 
-        working.weekend_back_to_back_allowed = payload.weekend_back_to_back_allowed
+        # Weekday patterns
+        working.preferred_onsite_weekdays = payload.preferred_onsite_weekdays
+        working.preferred_oncall_weekdays = payload.preferred_oncall_weekdays
+        working.avoid_onsite_weekdays = payload.avoid_onsite_weekdays
+        working.avoid_oncall_weekdays = payload.avoid_oncall_weekdays
+
+        # Other preferences
+        working.allow_weekend_consecutive_onsite_oncall = payload.allow_weekend_consecutive_onsite_oncall
         working.preferred_partners = payload.preferred_partners
         working.comments = payload.comments
 

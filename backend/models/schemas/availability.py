@@ -14,8 +14,8 @@ class AvailabilityDaySummary(BaseModel):
     day: DayInt
 
     # How many doctors are available by role and category.
-    available_specialists_duty: int
-    available_residents_duty: int
+    available_specialists_onsite: int
+    available_residents_onsite: int
     available_specialists_oncall: int
     available_residents_oncall: int
 
@@ -45,8 +45,8 @@ class AvailabilityDayRead(BaseModel):
     period_status: PeriodStatus
 
     # Doctors available that day for each category and role.
-    specialists_duty: list[DoctorMini] = Field(default_factory=list)
-    residents_duty: list[DoctorMini] = Field(default_factory=list)
+    specialists_onsite: list[DoctorMini] = Field(default_factory=list)
+    residents_onsite: list[DoctorMini] = Field(default_factory=list)
     specialists_oncall: list[DoctorMini] = Field(default_factory=list)
     residents_oncall: list[DoctorMini] = Field(default_factory=list)
 
