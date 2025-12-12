@@ -13,6 +13,8 @@ This module:
 
 from typing import List
 
+from pydantic import BaseModel
+
 from backend.models.schemas.schedule import Assignment
 
 from . import (
@@ -20,10 +22,20 @@ from . import (
     engine,
     seeding,
 )
+from .feasibility import analyze_problem
 from .types import HardModel, ProblemData, SolverAssignment, SolverSolution, SolverStatus
 
 
-def generate_schedule(problem: ProblemData) -> List[Assignment]:
+class ScheduleResult(BaseModel):
+    """
+    Bundle of raw solver solution and finalized Assignment DTOs.
+    """
+
+    solution: SolverSolution
+    assignments: List[Assignment]
+
+
+def generate_schedule(problem: ProblemData) -> ScheduleResult:
     """
     High-level entry point for schedule generation.
 
@@ -46,6 +58,16 @@ def generate_schedule(problem: ProblemData) -> List[Assignment]:
     5) (Later) optional heuristic polishing.
     6) Map SolverSolution -> Assignment via _solution_to_assignments.
     """
+
+    # 0) Feasibility pre-check (cheap, deterministic)
+    issues = analyze_problem(problem)
+    if issues:
+        solution = SolverSolution(
+            status=SolverStatus.INFEASIBLE,
+            assignments=[],
+            issues=issues,
+        )
+        return ScheduleResult(solution=solution, assignments=[])
 
     # 1) Warm-start hints (MVP: placeholder).
     #    Example hints:
@@ -80,7 +102,8 @@ def generate_schedule(problem: ProblemData) -> List[Assignment]:
     final_solution = solution
 
     # 6) Convert the final solution into API-level Assignment DTOs.
-    return _solution_to_assignments(final_solution, problem)
+    assignments = _solution_to_assignments(final_solution, problem)
+    return ScheduleResult(solution=final_solution, assignments=assignments)
 
 
 def _solution_to_assignments(solution: SolverSolution, problem: ProblemData) -> List[Assignment]:

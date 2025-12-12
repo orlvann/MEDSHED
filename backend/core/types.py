@@ -195,13 +195,30 @@ class SolverStatus(str, Enum):
 
 
 @dataclass
+class FeasibilityIssue:
+    """
+    Single feasibility issue detected before or during solving.
+
+    This is a lightweight diagnostic describing why the problem
+    cannot be solved (or is very likely infeasible).
+    """
+
+    day: int  # calendar day number (1..31)
+    code: str  # short machine-readable code, e.g. "no_specialist"
+    message: str  # short human-readable explanation
+
+
+@dataclass
 class SolverSolution:
     """
     Full solver result for one month.
 
+    ```
     - status: high-level solver status,
-    - assignments: list of concrete SolverAssignment objects.
+    - assignments: list of concrete SolverAssignment objects,
+    - issues: feasibility issues detected before or during solving.
     """
 
     status: SolverStatus
     assignments: List[SolverAssignment] = field(default_factory=list)
+    issues: List[FeasibilityIssue] = field(default_factory=list)

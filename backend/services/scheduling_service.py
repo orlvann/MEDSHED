@@ -871,15 +871,37 @@ class SchedulingService:
             # Lazy import to avoid potential circular imports at module import time
             from backend.core import scheduler
 
-            # Call solver to generate assignments (can still return empty list in MVP)
-            assignments = scheduler.generate_schedule(problem)
+            # Call solver to generate schedule result (solution + assignments)
+            result = scheduler.generate_schedule(problem)
+
+            solution = result.solution
+            assignments = result.assignments
 
             # Normalize snapshot payload: use participants from ProblemData + solver assignments
+            meta = {
+                "labels": ["as_generated"],
+                "exceptions": [],
+                # Store solver status as plain string for JSON/meta
+                "solver_status": solution.status.value,
+            }
+
+            # Include solver issues only when present
+            # FeasibilityIssue is a dataclass, so we build simple dicts manually.
+            if solution.issues:
+                meta["solver_issues"] = [
+                    {
+                        "day": i.day,
+                        "code": i.code,
+                        "message": i.message,
+                    }
+                    for i in solution.issues
+                ]
+
             payload = _normalize_snapshot_payload(
                 {
                     "participant_doctor_ids": sorted(problem.participant_doctor_ids),
                     "assignments": [a.model_dump(mode="json") for a in assignments],
-                    "meta": {"labels": ["as_generated"], "exceptions": []},
+                    "meta": meta,
                 }
             )
 

@@ -18,7 +18,6 @@ Policy:
 
 from __future__ import annotations
 
-from calendar import monthrange
 from typing import Dict, List, Set, Tuple
 
 from backend.db.session import SessionLocal
@@ -32,19 +31,12 @@ from backend.models.schemas.availability import (
 )
 from backend.models.schemas.doctor import DoctorMini
 from backend.services.preference_service import ensure_latest_checkpoints_for_period
-from backend.utils.timez import ORG_TZ, get_period_status
+from backend.utils.timez import ORG_TZ, days_in_month, get_period_status
 
 # Tunable thresholds for risk classification.
 # You can adjust these later after testing on real data.
 MIN_OK_DOCTORS_PER_CATEGORY = 2  # how many doctors per category is considered "safe"
 MIN_OK_SPECIALISTS_TOTAL = 2  # how many specialists per day is considered "safe enough"
-
-
-def _days_in_month(year: int, month: int) -> int:
-    """Return the real number of days in given month/year."""
-    # monthrange returns (weekday_of_first_day, number_of_days)
-    _, days = monthrange(year, month)
-    return days
 
 
 def _compute_available_days_for_doctor(
@@ -67,8 +59,8 @@ def _compute_available_days_for_doctor(
         -> read payload from PreferenceVersion and use "unavailable_*" lists
            to mark days as unavailable; all other days are available.
     """
-    days_in_month = _days_in_month(year, month)
-    all_days = set(range(1, days_in_month + 1))
+    num_days = days_in_month(year, month)
+    all_days = set(range(1, num_days + 1))
 
     # Load pointer for this doctor+period.
     pointer: PreferencePointer | None = (
@@ -175,13 +167,13 @@ def get_month_availability(*, year: int, month: int, actor) -> AvailabilityOverv
 
     period_status = PeriodStatus(get_period_status(year, month))
     org_tz = ORG_TZ
-    days_in_month = _days_in_month(year, month)
+    num_days = days_in_month(year, month)
 
     # Pre-initialize counters for each day.
-    spec_onsite_counts: Dict[int, int] = {d: 0 for d in range(1, days_in_month + 1)}
-    res_onsite_counts: Dict[int, int] = {d: 0 for d in range(1, days_in_month + 1)}
-    spec_oncall_counts: Dict[int, int] = {d: 0 for d in range(1, days_in_month + 1)}
-    res_oncall_counts: Dict[int, int] = {d: 0 for d in range(1, days_in_month + 1)}
+    spec_onsite_counts: Dict[int, int] = {d: 0 for d in range(1, num_days + 1)}
+    res_onsite_counts: Dict[int, int] = {d: 0 for d in range(1, num_days + 1)}
+    spec_oncall_counts: Dict[int, int] = {d: 0 for d in range(1, num_days + 1)}
+    res_oncall_counts: Dict[int, int] = {d: 0 for d in range(1, num_days + 1)}
 
     with SessionLocal() as session:
         # Step 2: get all active doctors.
@@ -193,7 +185,7 @@ def get_month_availability(*, year: int, month: int, actor) -> AvailabilityOverv
                 session, year=year, month=month, doctor_id=doc.id
             )
 
-            for day in range(1, days_in_month + 1):
+            for day in range(1, num_days + 1):
                 if day in available_onsite:
                     if doc.role == DoctorRole.specialist:
                         spec_onsite_counts[day] += 1
@@ -208,7 +200,7 @@ def get_month_availability(*, year: int, month: int, actor) -> AvailabilityOverv
 
         # Step 4: build summaries with risk for each day.
         day_summaries: List[AvailabilityDaySummary] = []
-        for day in range(1, days_in_month + 1):
+        for day in range(1, num_days + 1):
             spec_onsite = spec_onsite_counts[day]
             res_onsite = res_onsite_counts[day]
             spec_oncall = spec_oncall_counts[day]
@@ -249,8 +241,8 @@ def get_day_availability(*, year: int, month: int, day: int, actor) -> Availabil
         AvailabilityDayRead  -> if day is valid for this month.
         None                 -> if day is out of range (caller should return 404).
     """
-    days_in_month = _days_in_month(year, month)
-    if day < 1 or day > days_in_month:
+    num_days = days_in_month(year, month)
+    if day < 1 or day > num_days:
         return None
 
     # Ensure checkpoints are up-to-date before reading preferences.
