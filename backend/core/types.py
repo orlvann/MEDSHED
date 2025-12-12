@@ -10,7 +10,7 @@ These are small, pure-Python data containers (dataclasses) that are:
 
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Dict, List, Set, Tuple
+from typing import Any, Dict, List, Set, Tuple
 
 from backend.models.common_enums import DoctorRole, ShiftType
 
@@ -130,16 +130,34 @@ class Slot:
 @dataclass
 class HardModel:
     """
-    Minimal hard-constraint model used by the solver engine.
+    Data wrapper for the hard-constraint phase.
 
-    For now it only contains:
-    - problem: original ProblemData for context,
-    - allowed_slots: all slots that are not blocked by hard filters
-    (ignore_days, ignore_slots, unavailable days from preferences).
+    ```
+    This object contains:
+    - a flat copy of the ProblemData fields needed by the solver core,
+    - allowed_slots: a precomputed "hard feasible" doctor list per (day, shift_type).
+
+    Note:
+    - allowed_slots is ONLY based on ignore rules and unavailability.
+    - soft constraints (fairness, targets, weekends, etc.) are handled later.
     """
 
-    problem: ProblemData
-    allowed_slots: List[Slot]
+    # Base fields (copied from ProblemData so the core does not need to reach outside HardModel)
+    year: int
+    month: int
+    days: List[int]
+    doctors: Dict[int, DoctorInput]
+    preferences: Dict[int, PreferencesInput]
+    participant_doctor_ids: Set[int]
+    ignore_days: Set[int] = field(default_factory=set)
+    ignore_slots: Set[Tuple[int, ShiftType]] = field(default_factory=set)
+
+    # HardModel-specific:
+    # For each (day, shift_type) store doctors that are allowed to work in this slot.
+    allowed_slots: Dict[Tuple[int, ShiftType], List[int]] = field(default_factory=dict)
+
+    # Optional: keep seed hints for later stages (not used yet).
+    seed_hints: Any | None = None
 
 
 @dataclass
