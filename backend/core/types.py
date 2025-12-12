@@ -50,7 +50,7 @@ class PreferencesInput:
     preferred_onsite_days: List[int] = field(default_factory=list)
     preferred_oncall_days: List[int] = field(default_factory=list)
 
-    # Monthly totals (soft constraints)
+    # Monthly totals (soft caps and targets)
     min_onsite_total: int | None = None  # not used in MVP
     max_onsite_total: int | None = None
     target_onsite_total: int | None = None
@@ -59,19 +59,19 @@ class PreferencesInput:
     max_oncall_total: int | None = None
     target_oncall_total: int | None = None
 
-    # Weekend refinement (Sat–Sun)
+    # Weekend-specific caps and targets (Sat–Sun)
     max_onsite_weekends: int | None = None
     target_onsite_weekends: int | None = None
     max_oncall_weekends: int | None = None
     target_oncall_weekends: int | None = None
 
-    # Weekday patterns (0=Monday..6=Sunday)
+    # Weekly pattern preferences (0=Monday..6=Sunday)
     preferred_onsite_weekdays: List[int] = field(default_factory=list)
     preferred_oncall_weekdays: List[int] = field(default_factory=list)
     avoid_onsite_weekdays: List[int] = field(default_factory=list)
     avoid_oncall_weekdays: List[int] = field(default_factory=list)
 
-    # Other preferences
+    # Flags and relationship preferences
     allow_weekend_consecutive_onsite_oncall: bool = False
     preferred_partners: List[int] = field(default_factory=list)
     comments: str | None = None  # informational only, ignored by solver
@@ -93,6 +93,9 @@ class ProblemData:
 
     # Calendar days of this period, as day numbers 1..31
     days: List[int]
+
+    # Map of day -> weekday (0=Mon .. 6=Sun), computed once in the service.
+    weekdays: Dict[int, int]
 
     # Mapping doctor_id -> DoctorInput
     doctors: Dict[int, DoctorInput]

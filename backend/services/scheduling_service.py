@@ -42,6 +42,7 @@ This module keeps routers thin. All domain rules live here.
 
 from __future__ import annotations
 
+import calendar
 from datetime import datetime
 from functools import wraps
 from typing import Any, Dict, List, Literal, Optional, cast
@@ -561,6 +562,9 @@ def _build_problem_data_for_generate(session: Session, req: ScheduleGenerateRequ
     days_count = days_in_month(year, month)
     days = list(range(1, days_count + 1))
 
+    # Map each calendar day to its weekday (0=Mon .. 6=Sun)
+    weekdays = {day: calendar.weekday(year, month, day) for day in days}
+
     # 2) Load doctors from DB (requested ids, filtered to is_active=True)
     requested_ids = {int(did) for did in (req.participant_doctor_ids or [])}
     doctors: Dict[int, DoctorInput] = {}
@@ -641,26 +645,35 @@ def _build_problem_data_for_generate(session: Session, req: ScheduleGenerateRequ
                     payload = dict(ver.payload or {})
 
             # Map JSON payload to PreferencesInput; defaults are used when keys are missing
+            # Map JSON payload to PreferencesInput; defaults are used when keys are missing.
+            #
+            # Note: Optional[int] fields can be missing -> None (that's OK).
+            # If later you want stricter typing, you can add a helper like _as_int_or_none().
             preferences[doctor_id] = PreferencesInput(
                 doctor_id=int(doctor_id),
+                # Day-level preferences: 1..31
                 unavailable_onsite_days=_as_int_list(payload.get("unavailable_onsite_days")),
                 unavailable_oncall_days=_as_int_list(payload.get("unavailable_oncall_days")),
                 preferred_onsite_days=_as_int_list(payload.get("preferred_onsite_days")),
                 preferred_oncall_days=_as_int_list(payload.get("preferred_oncall_days")),
+                # Monthly totals (soft caps and targets
                 min_onsite_total=payload.get("min_onsite_total"),
                 max_onsite_total=payload.get("max_onsite_total"),
                 target_onsite_total=payload.get("target_onsite_total"),
                 min_oncall_total=payload.get("min_oncall_total"),
                 max_oncall_total=payload.get("max_oncall_total"),
                 target_oncall_total=payload.get("target_oncall_total"),
+                # Weekend-specific caps and targets
                 max_onsite_weekends=payload.get("max_onsite_weekends"),
                 target_onsite_weekends=payload.get("target_onsite_weekends"),
                 max_oncall_weekends=payload.get("max_oncall_weekends"),
                 target_oncall_weekends=payload.get("target_oncall_weekends"),
+                # Weekly patterns (0=Mon .. 6=Sun)
                 preferred_onsite_weekdays=_as_int_list(payload.get("preferred_onsite_weekdays")),
                 preferred_oncall_weekdays=_as_int_list(payload.get("preferred_oncall_weekdays")),
                 avoid_onsite_weekdays=_as_int_list(payload.get("avoid_onsite_weekdays")),
                 avoid_oncall_weekdays=_as_int_list(payload.get("avoid_oncall_weekdays")),
+                # Flags and relationships
                 allow_weekend_consecutive_onsite_oncall=bool(
                     payload.get("allow_weekend_consecutive_onsite_oncall", False)
                 ),
@@ -683,6 +696,7 @@ def _build_problem_data_for_generate(session: Session, req: ScheduleGenerateRequ
         year=year,
         month=month,
         days=days,
+        weekdays=weekdays,
         doctors=doctors,
         preferences=preferences,
         participant_doctor_ids=participant_doctor_ids,
