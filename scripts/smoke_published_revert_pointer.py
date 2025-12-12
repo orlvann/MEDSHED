@@ -1,4 +1,4 @@
-# backend/scripts/smoke_published_revert_pointer.py
+# scripts/smoke_published_revert_pointer.py
 """
 Smoke Test: Published Pointer Revert (prev/next) Only
 
@@ -17,7 +17,7 @@ What this script does NOT test
 
 How to run
 ----------
-python -m backend.scripts.smoke_published_revert_pointer
+python -m scripts.smoke_published_revert_pointer
 """
 
 from __future__ import annotations
@@ -93,9 +93,9 @@ def main() -> None:
         year,
         month,
         assignments=[
-            Assignment(day=1, shift_type=ShiftType.on_duty, doctor_id=1),
-            Assignment(day=1, shift_type=ShiftType.on_call, doctor_id=2),
-            Assignment(day=2, shift_type=ShiftType.on_duty, doctor_id=3),
+            Assignment(day=1, shift_type=ShiftType.onsite, doctor_id=1),
+            Assignment(day=1, shift_type=ShiftType.oncall, doctor_id=2),
+            Assignment(day=2, shift_type=ShiftType.onsite, doctor_id=3),
         ],
         meta={"labels": ["live"]},
         if_match_lock_version=w.lock_version,
