@@ -58,6 +58,11 @@ export const PendingDoctors = () => {
     null
   );
 
+  // Result dialog state (replaces alert())
+  const [resultDialogOpen, setResultDialogOpen] = useState(false);
+  const [resultMessage, setResultMessage] = useState("");
+  const [resultIsError, setResultIsError] = useState(false);
+
   const fetchPendingDoctors = async () => {
     try {
       setLoading(true);
@@ -112,7 +117,9 @@ export const PendingDoctors = () => {
 
       // Show success message
       const successMsg = `Doctor ${selectedDoctor.first_name} ${selectedDoctor.last_name} approved successfully! Welcome email sent.`;
-      alert(successMsg);
+      setResultMessage(successMsg);
+      setResultIsError(false);
+      setResultDialogOpen(true);
     } catch (err: any) {
       let errorMsg = "Failed to approve doctor";
       if (err.response?.data?.detail) {
@@ -127,7 +134,9 @@ export const PendingDoctors = () => {
       } else if (err.message) {
         errorMsg = err.message;
       }
-      alert(errorMsg);
+      setResultMessage(errorMsg);
+      setResultIsError(true);
+      setResultDialogOpen(true);
     }
   };
 
@@ -390,6 +399,28 @@ export const PendingDoctors = () => {
               >
                 Reject Registration
               </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
+
+        {/* Result Dialog (success/error) */}
+        <AlertDialog open={resultDialogOpen} onOpenChange={setResultDialogOpen}>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <div className="flex items-center space-x-2">
+                {resultIsError ? (
+                  <AlertTriangle className="h-5 w-5 text-red-600" />
+                ) : (
+                  <CheckCircle className="h-5 w-5 text-green-600" />
+                )}
+                <AlertDialogTitle>
+                  {resultIsError ? "Error" : "Success"}
+                </AlertDialogTitle>
+              </div>
+              <AlertDialogDescription>{resultMessage}</AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogAction>OK</AlertDialogAction>
             </AlertDialogFooter>
           </AlertDialogContent>
         </AlertDialog>

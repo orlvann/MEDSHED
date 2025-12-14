@@ -289,8 +289,10 @@ export const AdminUsersManagement = () => {
                             variant="ghost"
                             size="sm"
                             onClick={() => openDeleteDialog(user)}
+                            disabled={user.id === currentUser?.id}
+                            title={user.id === currentUser?.id ? "You cannot delete your own account" : "Delete user"}
                           >
-                            <Trash2 className="h-4 w-4 text-red-600" />
+                            <Trash2 className={`h-4 w-4 ${user.id === currentUser?.id ? "text-gray-400" : "text-red-600"}`} />
                           </Button>
                         </td>
                       </tr>

@@ -84,10 +84,10 @@ def get_current_user(
 
 def require_admin(user: UserCtx = Depends(get_current_user)) -> UserCtx:
     """
-    Enforce that only admins can access the endpoint.
+    Enforce that only admins and doctor_admins can access the endpoint.
     Returns the user context for downstream use (e.g., auditing).
     """
-    if user.role != "admin":
+    if user.role not in ("admin", "doctor_admin"):
         # Keep error shape consistent with the whole API.
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -98,10 +98,10 @@ def require_admin(user: UserCtx = Depends(get_current_user)) -> UserCtx:
 
 def require_doctor(user: UserCtx = Depends(get_current_user)) -> UserCtx:
     """
-    Enforce that doctors (and admins) can access the endpoint.
+    Enforce that only doctors and doctor_admins can access the endpoint.
     Useful for doctor-facing paths (/me, ICS, /published, exports).
     """
-    if user.role not in ("doctor", "admin"):
+    if user.role not in ("doctor", "doctor_admin"):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail=make_error("forbidden"),

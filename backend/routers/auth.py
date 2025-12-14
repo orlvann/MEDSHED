@@ -286,11 +286,20 @@ def me(user: UserCtx = Depends(get_current_user), db: Session = Depends(get_db))
             detail=make_error("not_found", "User not found"),
         )
     
+    # Get first_name and last_name from linked Doctor if exists
+    first_name = None
+    last_name = None
+    if db_user.doctor:
+        first_name = db_user.doctor.first_name
+        last_name = db_user.doctor.last_name
+
     return UserRead(
         id=db_user.id,
         email=db_user.email,
         role=db_user.role,
         is_active=db_user.is_active,
+        first_name=first_name,
+        last_name=last_name,
         created_at=db_user.created_at,
         updated_at=db_user.updated_at,
     )

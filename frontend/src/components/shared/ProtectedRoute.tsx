@@ -27,14 +27,13 @@ export const ProtectedRoute: React.FC<ProtectedRouteProps> = ({
   }
 
   if (requiredRole) {
-    // Allow doctor_admin to access doctor routes
-    if (
-      requiredRole === "doctor" &&
-      (user.role === "doctor" || user.role === "doctor_admin")
-    ) {
-      // Access granted
-    } else if (user.role !== requiredRole) {
-      // User doesn't have required role
+    // Allow doctor_admin to access both admin and doctor routes
+    // Admin can only access admin routes, not doctor routes
+    const hasAccess =
+      (requiredRole === "admin" && (user.role === "admin" || user.role === "doctor_admin")) ||
+      (requiredRole === "doctor" && (user.role === "doctor" || user.role === "doctor_admin"));
+
+    if (!hasAccess) {
       return <Navigate to="/unauthorized" replace />;
     }
   }
