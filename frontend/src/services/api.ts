@@ -14,6 +14,13 @@ import type {
   AdminUserCreate,
   AdminUserUpdate,
   AdminUserList,
+  PreferenceWorkingRead,
+  PreferenceWorkingPut,
+  PreferenceAutosaveAck,
+  PreferenceCheckpointCreated,
+  PreferenceRevertRead,
+  PreferencesSummaryRead,
+  PreferencesDeadlineRead,
 } from "../types";
 
 // Base API URL - can be overridden by environment variable
@@ -151,6 +158,103 @@ export const adminUsersApi = {
 
   delete: async (id: number): Promise<void> => {
     await api.delete(`/api/v1/admin/users/${id}`);
+  },
+};
+
+// Preferences API (Admin)
+export const preferencesApi = {
+  // Summary - who submitted vs missing
+  getSummary: async (
+    year: number,
+    month: number
+  ): Promise<PreferencesSummaryRead> => {
+    const response = await api.get<PreferencesSummaryRead>(
+      "/api/v1/preferences/summary",
+      { params: { year, month } }
+    );
+    return response.data;
+  },
+
+  // Deadline management
+  getDeadline: async (
+    year: number,
+    month: number
+  ): Promise<PreferencesDeadlineRead> => {
+    const response = await api.get<PreferencesDeadlineRead>(
+      `/api/v1/preferences/deadlines/${year}/${month}`
+    );
+    return response.data;
+  },
+
+  updateDeadline: async (
+    year: number,
+    month: number,
+    deadline: string
+  ): Promise<PreferencesDeadlineRead> => {
+    const response = await api.put<PreferencesDeadlineRead>(
+      `/api/v1/preferences/deadlines/${year}/${month}`,
+      { deadline }
+    );
+    return response.data;
+  },
+
+  // Admin operations for specific doctor
+  getWorking: async (
+    year: number,
+    month: number,
+    doctorId: number
+  ): Promise<PreferenceWorkingRead> => {
+    const response = await api.get<PreferenceWorkingRead>(
+      `/api/v1/preferences/${year}/${month}/${doctorId}`
+    );
+    return response.data;
+  },
+
+  saveWorking: async (
+    year: number,
+    month: number,
+    doctorId: number,
+    data: PreferenceWorkingPut
+  ): Promise<PreferenceAutosaveAck> => {
+    const response = await api.put<PreferenceAutosaveAck>(
+      `/api/v1/preferences/${year}/${month}/${doctorId}/working`,
+      data
+    );
+    return response.data;
+  },
+
+  createCheckpoint: async (
+    year: number,
+    month: number,
+    doctorId: number
+  ): Promise<PreferenceCheckpointCreated> => {
+    const response = await api.post<PreferenceCheckpointCreated>(
+      `/api/v1/preferences/${year}/${month}/${doctorId}/checkpoint`,
+      {}
+    );
+    return response.data;
+  },
+
+  revertLast: async (
+    year: number,
+    month: number,
+    doctorId: number
+  ): Promise<PreferenceRevertRead> => {
+    const response = await api.post<PreferenceRevertRead>(
+      `/api/v1/preferences/${year}/${month}/${doctorId}/revert-last`
+    );
+    return response.data;
+  },
+
+  revertNext: async (
+    year: number,
+    month: number,
+    doctorId: number
+  ): Promise<PreferenceRevertRead> => {
+    const response = await api.post<PreferenceRevertRead>(
+      `/api/v1/preferences/${year}/${month}/${doctorId}/revert-next`
+    );
+    return response.data;
   },
 };
 

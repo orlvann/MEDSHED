@@ -28,6 +28,9 @@ from backend.services.preference_service import (
     upsert_deadline,
 )
 from backend.utils.timez import is_period_closed
+from backend.services.email_service import send_deadline_changed_email
+from backend.db.session import get_db
+from backend.models.orm import Doctor
 
 router: APIRouter = APIRouter()
 
@@ -137,7 +140,27 @@ def deadline_put(
     month: MonthInt = Path(...),
     body: dict = Body(..., description='{"deadline": "2026-01-22T23:59:59Z"} (org tz aware in BE)'),
 ):
-    return upsert_deadline(year=year, month=month, body=body, actor=user)
+    result = upsert_deadline(year=year, month=month, body=body, actor=user)
+
+    # Send email notifications to all active doctors
+    if result.deadline:
+        db = next(get_db())
+        try:
+            active_doctors = db.query(Doctor).filter(Doctor.is_active == True).all()
+            for doctor in active_doctors:
+                if doctor.email:
+                    send_deadline_changed_email(
+                        email=doctor.email,
+                        first_name=doctor.first_name,
+                        last_name=doctor.last_name,
+                        year=year,
+                        month=month,
+                        new_deadline=result.deadline.isoformat(),
+                    )
+        finally:
+            db.close()
+
+    return result
 
 
 # ------------------------------------------------------------------------------

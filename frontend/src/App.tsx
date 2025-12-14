@@ -9,6 +9,7 @@ import { AdminHome } from "./pages/admin/AdminHome";
 import { DoctorsManagement } from "./pages/admin/DoctorsManagement";
 import { AdminUsersManagement } from "./pages/admin/AdminUsersManagement";
 import { PendingDoctors } from "./pages/admin/PendingDoctors";
+import { PreferencesManagement } from "./pages/admin/PreferencesManagement";
 import { Unauthorized } from "./pages/Unauthorized";
 
 function App() {
@@ -65,14 +66,7 @@ function App() {
             path="/admin/preferences"
             element={
               <ProtectedRoute requiredRole="admin">
-                <div className="flex items-center justify-center min-h-screen">
-                  <div className="text-center">
-                    <h1 className="text-2xl font-bold mb-4">
-                      Preferences Management
-                    </h1>
-                    <p className="text-muted-foreground">Coming soon...</p>
-                  </div>
-                </div>
+                <PreferencesManagement />
               </ProtectedRoute>
             }
           />
