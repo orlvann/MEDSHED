@@ -22,6 +22,9 @@ class AvailabilityDaySummary(BaseModel):
     # Overall risk flag for this day (ok / alert / critical).
     risk: RiskLevel
 
+    # Machine-readable reasons for critical days (empty for ok/alert).
+    risk_issues: list[str] = Field(default_factory=list)
+
 
 class AvailabilityOverviewRead(BaseModel):
     """Monthly overview (input for the 'Generate New Draft' calendar)."""
@@ -51,6 +54,7 @@ class AvailabilityDayRead(BaseModel):
     residents_oncall: list[DoctorMini] = Field(default_factory=list)
 
     risk: RiskLevel
+    risk_issues: list[str] = Field(default_factory=list)
 
 
 __all__ = [

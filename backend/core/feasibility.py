@@ -12,6 +12,10 @@ No SQLAlchemy, no FastAPI, no OR-Tools — pure core logic only.
 from dataclasses import dataclass
 from typing import Dict, List
 
+from backend.core.issues import (
+    FEASIBILITY_ISSUE_MESSAGES,
+    classify_feasibility_issues_for_counts,
+)
 from backend.core.types import FeasibilityIssue, ProblemData
 from backend.models.common_enums import DoctorRole, ShiftType
 
@@ -89,7 +93,7 @@ def analyze_problem(problem: ProblemData) -> List[FeasibilityIssue]:
     Run quick feasibility checks before building the CP-SAT model.
 
     ```
-    Rules (per non-ignored day):
+    Rules (per non-ignored day) are defined in backend.core.issues:
     - no onsite candidates        -> "no_onsite_candidate"
     - no oncall candidates        -> "no_oncall_candidate"
     - no specialist at all        -> "no_specialist"
@@ -104,44 +108,19 @@ def analyze_problem(problem: ProblemData) -> List[FeasibilityIssue]:
         total_oncall = cap.spec_oncall + cap.res_oncall
         total_specialists = cap.spec_onsite + cap.spec_oncall
 
-        # No onsite candidate at all
-        if total_onsite == 0:
-            issues.append(
-                FeasibilityIssue(
-                    day=day,
-                    code="no_onsite_candidate",
-                    message="No doctor is available for onsite duty on this day.",
-                )
-            )
+        codes = classify_feasibility_issues_for_counts(
+            total_onsite=total_onsite,
+            total_oncall=total_oncall,
+            total_specialists=total_specialists,
+        )
 
-        # No oncall candidate at all
-        if total_oncall == 0:
+        for code in codes:
+            message = FEASIBILITY_ISSUE_MESSAGES.get(code, code)
             issues.append(
                 FeasibilityIssue(
                     day=day,
-                    code="no_oncall_candidate",
-                    message="No doctor is available for on-call duty on this day.",
-                )
-            )
-
-        # No specialist in any role
-        if total_specialists == 0:
-            issues.append(
-                FeasibilityIssue(
-                    day=day,
-                    code="no_specialist",
-                    message="No specialist is available on this day.",
-                )
-            )
-
-        # Only one possible doctor overall (cannot split roles)
-        # MVP heuristic: if both roles exist but total candidates are effectively < 2
-        if total_onsite + total_oncall <= 1:
-            issues.append(
-                FeasibilityIssue(
-                    day=day,
-                    code="single_candidate_for_both_roles",
-                    message="Only one doctor is available, roles cannot be split.",
+                    code=code,
+                    message=message,
                 )
             )
 
