@@ -21,6 +21,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "../../components/ui/alert-dialog";
+import { PreferencesEditor, getDefaultPreferences, MONTH_NAMES, formatDate, getTimeRemaining } from "../../components/preferences";
 import { preferencesApi, doctorsApi } from "../../services/api";
 import type {
   Doctor,
@@ -39,77 +40,9 @@ import {
   XCircle,
   Pencil,
   Eye,
-  Undo2,
-  Redo2,
-  Save,
   X,
   AlertTriangle,
 } from "lucide-react";
-
-const MONTH_NAMES = [
-  "January", "February", "March", "April", "May", "June",
-  "July", "August", "September", "October", "November", "December"
-];
-
-const WEEKDAY_NAMES = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
-
-// Helper to get days in month
-const getDaysInMonth = (year: number, month: number): number => {
-  return new Date(year, month, 0).getDate();
-};
-
-// Helper to get first day of month (0 = Sunday, 1 = Monday, etc.)
-const getFirstDayOfMonth = (year: number, month: number): number => {
-  const day = new Date(year, month - 1, 1).getDay();
-  return day === 0 ? 6 : day - 1; // Convert to Monday = 0
-};
-
-// Helper to format date
-const formatDate = (dateStr: string | null): string => {
-  if (!dateStr) return "-";
-  const date = new Date(dateStr);
-  return date.toLocaleDateString("en-US", {
-    month: "short",
-    day: "numeric",
-    year: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
-};
-
-// Helper to calculate days remaining
-const getDaysRemaining = (deadline: string | null): number | null => {
-  if (!deadline) return null;
-  const now = new Date();
-  const deadlineDate = new Date(deadline);
-  const diff = deadlineDate.getTime() - now.getTime();
-  return Math.ceil(diff / (1000 * 60 * 60 * 24));
-};
-
-// Default empty preference form
-const getDefaultPreferences = (): PreferenceWorkingPut => ({
-  unavailable_onsite_days: [],
-  unavailable_oncall_days: [],
-  preferred_onsite_days: [],
-  preferred_oncall_days: [],
-  min_onsite_total: null,
-  max_onsite_total: null,
-  target_onsite_total: null,
-  min_oncall_total: null,
-  max_oncall_total: null,
-  target_oncall_total: null,
-  max_onsite_weekends: null,
-  target_onsite_weekends: null,
-  max_oncall_weekends: null,
-  target_oncall_weekends: null,
-  preferred_onsite_weekdays: [],
-  preferred_oncall_weekdays: [],
-  avoid_onsite_weekdays: [],
-  avoid_oncall_weekdays: [],
-  allow_weekend_consecutive_onsite_oncall: false,
-  preferred_partners: [],
-  comments: null,
-});
 
 export const PreferencesManagement = () => {
   const navigate = useNavigate();
@@ -406,71 +339,8 @@ export const PreferencesManagement = () => {
     }
   };
 
-  // Calendar day state helpers
-  type DayState = "can" | "cant" | "want";
-
-  const getDayState = (
-    day: number,
-    unavailableDays: number[],
-    preferredDays: number[]
-  ): DayState => {
-    if (unavailableDays.includes(day)) return "cant";
-    if (preferredDays.includes(day)) return "want";
-    return "can";
-  };
-
-  const cycleDayState = (
-    day: number,
-    currentState: DayState,
-    unavailableDays: number[],
-    preferredDays: number[],
-    setUnavailable: (days: number[]) => void,
-    setPreferred: (days: number[]) => void
-  ) => {
-    if (currentState === "can") {
-      // CAN -> WANT
-      setPreferred([...preferredDays, day].sort((a, b) => a - b));
-    } else if (currentState === "want") {
-      // WANT -> CAN'T
-      setPreferred(preferredDays.filter((d) => d !== day));
-      setUnavailable([...unavailableDays, day].sort((a, b) => a - b));
-    } else {
-      // CAN'T -> CAN
-      setUnavailable(unavailableDays.filter((d) => d !== day));
-    }
-  };
-
-  // Weekday state helpers
-  const getWeekdayState = (
-    weekday: number,
-    preferredWeekdays: number[],
-    avoidWeekdays: number[]
-  ): DayState => {
-    if (avoidWeekdays.includes(weekday)) return "cant";
-    if (preferredWeekdays.includes(weekday)) return "want";
-    return "can";
-  };
-
-  const cycleWeekdayState = (
-    weekday: number,
-    currentState: DayState,
-    preferredWeekdays: number[],
-    avoidWeekdays: number[],
-    setPreferred: (days: number[]) => void,
-    setAvoid: (days: number[]) => void
-  ) => {
-    if (currentState === "can") {
-      setPreferred([...preferredWeekdays, weekday].sort((a, b) => a - b));
-    } else if (currentState === "want") {
-      setPreferred(preferredWeekdays.filter((d) => d !== weekday));
-      setAvoid([...avoidWeekdays, weekday].sort((a, b) => a - b));
-    } else {
-      setAvoid(avoidWeekdays.filter((d) => d !== weekday));
-    }
-  };
-
-  const daysRemaining = getDaysRemaining(deadline?.deadline ?? null);
-  const isPast = deadline?.status === "locked" || (daysRemaining !== null && daysRemaining < 0);
+  const timeRemaining = getTimeRemaining(deadline?.deadline ?? null);
+  const isPast = deadline?.status === "locked" || (timeRemaining?.isPast ?? false);
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -526,9 +396,9 @@ export const PreferencesManagement = () => {
                     {deadline.deadline && (
                       <span className="ml-4 text-gray-600">
                         Deadline: {formatDate(deadline.deadline)}
-                        {daysRemaining !== null && daysRemaining >= 0 && (
+                        {timeRemaining && !timeRemaining.isPast && (
                           <span className="ml-2 text-sm">
-                            ({daysRemaining} day{daysRemaining !== 1 ? "s" : ""} remaining)
+                            ({timeRemaining.days} day{timeRemaining.days !== 1 ? "s" : ""} remaining)
                           </span>
                         )}
                       </span>
@@ -707,10 +577,10 @@ export const PreferencesManagement = () => {
           </AlertDialogContent>
         </AlertDialog>
 
-        {/* Edit Modal */}
+        {/* Edit Modal with PreferencesEditor */}
         {editModalOpen && selectedDoctor && (
           <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 overflow-y-auto py-8">
-            <Card className="w-full max-w-4xl mx-4 max-h-[90vh] overflow-y-auto">
+            <Card className="w-full max-w-5xl mx-4 max-h-[90vh] overflow-y-auto">
               <CardHeader className="sticky top-0 bg-white z-10 border-b">
                 <div className="flex items-center justify-between">
                   <div>
@@ -719,20 +589,6 @@ export const PreferencesManagement = () => {
                     </CardTitle>
                     <CardDescription>
                       {MONTH_NAMES[month - 1]} {year}
-                      {preferenceData && (
-                        <span className="ml-4">
-                          Status:{" "}
-                          <span
-                            className={
-                              preferenceData.status === "submitted"
-                                ? "text-green-600"
-                                : "text-red-600"
-                            }
-                          >
-                            {preferenceData.status}
-                          </span>
-                        </span>
-                      )}
                     </CardDescription>
                   </div>
                   <Button variant="ghost" size="sm" onClick={closeEditModal}>
@@ -744,435 +600,24 @@ export const PreferencesManagement = () => {
                 {formLoading ? (
                   <div className="text-center py-8">Loading preferences...</div>
                 ) : (
-                  <div className="space-y-8">
-                    {/* A) Availability Calendar */}
-                    <div>
-                      <h3 className="text-lg font-semibold mb-4">A) Availability Calendar</h3>
-                      <p className="text-sm text-muted-foreground mb-4">
-                        Click on a day to cycle through: CAN (gray) → WANT (green) → CAN'T (red)
-                      </p>
-
-                      {/* On-site Calendar */}
-                      <div className="mb-6">
-                        <h4 className="font-medium mb-2">On-site Duty</h4>
-                        <div className="grid grid-cols-7 gap-1">
-                          {WEEKDAY_NAMES.map((day) => (
-                            <div key={day} className="text-center text-xs font-medium text-gray-500 py-1">
-                              {day}
-                            </div>
-                          ))}
-                          {/* Empty cells for first week offset */}
-                          {Array.from({ length: getFirstDayOfMonth(year, month) }).map((_, i) => (
-                            <div key={`empty-${i}`} className="h-10" />
-                          ))}
-                          {/* Day cells */}
-                          {Array.from({ length: getDaysInMonth(year, month) }).map((_, i) => {
-                            const day = i + 1;
-                            const state = getDayState(
-                              day,
-                              formData.unavailable_onsite_days,
-                              formData.preferred_onsite_days
-                            );
-                            return (
-                              <button
-                                key={day}
-                                type="button"
-                                onClick={() =>
-                                  cycleDayState(
-                                    day,
-                                    state,
-                                    formData.unavailable_onsite_days,
-                                    formData.preferred_onsite_days,
-                                    (days) =>
-                                      setFormData({ ...formData, unavailable_onsite_days: days }),
-                                    (days) =>
-                                      setFormData({ ...formData, preferred_onsite_days: days })
-                                  )
-                                }
-                                className={`h-10 rounded text-sm font-medium transition-colors ${
-                                  state === "cant"
-                                    ? "bg-red-100 text-red-700 hover:bg-red-200"
-                                    : state === "want"
-                                    ? "bg-green-100 text-green-700 hover:bg-green-200"
-                                    : "bg-gray-100 text-gray-700 hover:bg-gray-200"
-                                }`}
-                              >
-                                {day}
-                              </button>
-                            );
-                          })}
-                        </div>
-                      </div>
-
-                      {/* On-call Calendar */}
-                      <div>
-                        <h4 className="font-medium mb-2">On-call Shift</h4>
-                        <div className="grid grid-cols-7 gap-1">
-                          {WEEKDAY_NAMES.map((day) => (
-                            <div key={day} className="text-center text-xs font-medium text-gray-500 py-1">
-                              {day}
-                            </div>
-                          ))}
-                          {Array.from({ length: getFirstDayOfMonth(year, month) }).map((_, i) => (
-                            <div key={`empty-oncall-${i}`} className="h-10" />
-                          ))}
-                          {Array.from({ length: getDaysInMonth(year, month) }).map((_, i) => {
-                            const day = i + 1;
-                            const state = getDayState(
-                              day,
-                              formData.unavailable_oncall_days,
-                              formData.preferred_oncall_days
-                            );
-                            return (
-                              <button
-                                key={day}
-                                type="button"
-                                onClick={() =>
-                                  cycleDayState(
-                                    day,
-                                    state,
-                                    formData.unavailable_oncall_days,
-                                    formData.preferred_oncall_days,
-                                    (days) =>
-                                      setFormData({ ...formData, unavailable_oncall_days: days }),
-                                    (days) =>
-                                      setFormData({ ...formData, preferred_oncall_days: days })
-                                  )
-                                }
-                                className={`h-10 rounded text-sm font-medium transition-colors ${
-                                  state === "cant"
-                                    ? "bg-red-100 text-red-700 hover:bg-red-200"
-                                    : state === "want"
-                                    ? "bg-green-100 text-green-700 hover:bg-green-200"
-                                    : "bg-gray-100 text-gray-700 hover:bg-gray-200"
-                                }`}
-                              >
-                                {day}
-                              </button>
-                            );
-                          })}
-                        </div>
-                      </div>
-                    </div>
-
-                    {/* B) Shift Counts */}
-                    <div>
-                      <h3 className="text-lg font-semibold mb-4">B) How Many Shifts</h3>
-                      <div className="grid grid-cols-3 gap-4">
-                        <div></div>
-                        <div className="text-center font-medium">Target</div>
-                        <div className="text-center font-medium">Maximum</div>
-
-                        <div className="font-medium">On-site Total</div>
-                        <Input
-                          type="number"
-                          min="0"
-                          value={formData.target_onsite_total ?? ""}
-                          onChange={(e) =>
-                            setFormData({
-                              ...formData,
-                              target_onsite_total: e.target.value ? parseInt(e.target.value) : null,
-                            })
-                          }
-                          placeholder="-"
-                        />
-                        <Input
-                          type="number"
-                          min="0"
-                          value={formData.max_onsite_total ?? ""}
-                          onChange={(e) =>
-                            setFormData({
-                              ...formData,
-                              max_onsite_total: e.target.value ? parseInt(e.target.value) : null,
-                            })
-                          }
-                          placeholder="-"
-                        />
-
-                        <div className="font-medium">On-call Total</div>
-                        <Input
-                          type="number"
-                          min="0"
-                          value={formData.target_oncall_total ?? ""}
-                          onChange={(e) =>
-                            setFormData({
-                              ...formData,
-                              target_oncall_total: e.target.value ? parseInt(e.target.value) : null,
-                            })
-                          }
-                          placeholder="-"
-                        />
-                        <Input
-                          type="number"
-                          min="0"
-                          value={formData.max_oncall_total ?? ""}
-                          onChange={(e) =>
-                            setFormData({
-                              ...formData,
-                              max_oncall_total: e.target.value ? parseInt(e.target.value) : null,
-                            })
-                          }
-                          placeholder="-"
-                        />
-
-                        <div className="font-medium text-sm text-gray-600">On-site Weekends</div>
-                        <Input
-                          type="number"
-                          min="0"
-                          value={formData.target_onsite_weekends ?? ""}
-                          onChange={(e) =>
-                            setFormData({
-                              ...formData,
-                              target_onsite_weekends: e.target.value ? parseInt(e.target.value) : null,
-                            })
-                          }
-                          placeholder="-"
-                        />
-                        <Input
-                          type="number"
-                          min="0"
-                          value={formData.max_onsite_weekends ?? ""}
-                          onChange={(e) =>
-                            setFormData({
-                              ...formData,
-                              max_onsite_weekends: e.target.value ? parseInt(e.target.value) : null,
-                            })
-                          }
-                          placeholder="-"
-                        />
-
-                        <div className="font-medium text-sm text-gray-600">On-call Weekends</div>
-                        <Input
-                          type="number"
-                          min="0"
-                          value={formData.target_oncall_weekends ?? ""}
-                          onChange={(e) =>
-                            setFormData({
-                              ...formData,
-                              target_oncall_weekends: e.target.value ? parseInt(e.target.value) : null,
-                            })
-                          }
-                          placeholder="-"
-                        />
-                        <Input
-                          type="number"
-                          min="0"
-                          value={formData.max_oncall_weekends ?? ""}
-                          onChange={(e) =>
-                            setFormData({
-                              ...formData,
-                              max_oncall_weekends: e.target.value ? parseInt(e.target.value) : null,
-                            })
-                          }
-                          placeholder="-"
-                        />
-                      </div>
-                    </div>
-
-                    {/* C) Weekday Patterns */}
-                    <div>
-                      <h3 className="text-lg font-semibold mb-4">C) Preferred Days of the Week</h3>
-                      <p className="text-sm text-muted-foreground mb-4">
-                        Click to cycle: Neutral (gray) → Prefer (green) → Avoid (red)
-                      </p>
-
-                      <div className="space-y-4">
-                        <div>
-                          <h4 className="font-medium mb-2">On-site</h4>
-                          <div className="flex space-x-2">
-                            {WEEKDAY_NAMES.map((name, idx) => {
-                              const state = getWeekdayState(
-                                idx,
-                                formData.preferred_onsite_weekdays,
-                                formData.avoid_onsite_weekdays
-                              );
-                              return (
-                                <button
-                                  key={idx}
-                                  type="button"
-                                  onClick={() =>
-                                    cycleWeekdayState(
-                                      idx,
-                                      state,
-                                      formData.preferred_onsite_weekdays,
-                                      formData.avoid_onsite_weekdays,
-                                      (days) =>
-                                        setFormData({ ...formData, preferred_onsite_weekdays: days }),
-                                      (days) =>
-                                        setFormData({ ...formData, avoid_onsite_weekdays: days })
-                                    )
-                                  }
-                                  className={`w-12 h-10 rounded text-sm font-medium transition-colors ${
-                                    state === "cant"
-                                      ? "bg-red-100 text-red-700 hover:bg-red-200"
-                                      : state === "want"
-                                      ? "bg-green-100 text-green-700 hover:bg-green-200"
-                                      : "bg-gray-100 text-gray-700 hover:bg-gray-200"
-                                  }`}
-                                >
-                                  {name}
-                                </button>
-                              );
-                            })}
-                          </div>
-                        </div>
-
-                        <div>
-                          <h4 className="font-medium mb-2">On-call</h4>
-                          <div className="flex space-x-2">
-                            {WEEKDAY_NAMES.map((name, idx) => {
-                              const state = getWeekdayState(
-                                idx,
-                                formData.preferred_oncall_weekdays,
-                                formData.avoid_oncall_weekdays
-                              );
-                              return (
-                                <button
-                                  key={idx}
-                                  type="button"
-                                  onClick={() =>
-                                    cycleWeekdayState(
-                                      idx,
-                                      state,
-                                      formData.preferred_oncall_weekdays,
-                                      formData.avoid_oncall_weekdays,
-                                      (days) =>
-                                        setFormData({ ...formData, preferred_oncall_weekdays: days }),
-                                      (days) =>
-                                        setFormData({ ...formData, avoid_oncall_weekdays: days })
-                                    )
-                                  }
-                                  className={`w-12 h-10 rounded text-sm font-medium transition-colors ${
-                                    state === "cant"
-                                      ? "bg-red-100 text-red-700 hover:bg-red-200"
-                                      : state === "want"
-                                      ? "bg-green-100 text-green-700 hover:bg-green-200"
-                                      : "bg-gray-100 text-gray-700 hover:bg-gray-200"
-                                  }`}
-                                >
-                                  {name}
-                                </button>
-                              );
-                            })}
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-
-                    {/* D) Weekend Rule */}
-                    <div>
-                      <h3 className="text-lg font-semibold mb-4">D) Weekend Rest Rule Exception</h3>
-                      <div className="flex items-center space-x-2">
-                        <input
-                          type="checkbox"
-                          id="weekend_rule"
-                          checked={formData.allow_weekend_consecutive_onsite_oncall}
-                          onChange={(e) =>
-                            setFormData({
-                              ...formData,
-                              allow_weekend_consecutive_onsite_oncall: e.target.checked,
-                            })
-                          }
-                          className="h-4 w-4"
-                        />
-                        <Label htmlFor="weekend_rule">
-                          I am OK with an intense weekend (consecutive on-site + on-call)
-                        </Label>
-                      </div>
-                    </div>
-
-                    {/* E) Preferred Partners */}
-                    <div>
-                      <h3 className="text-lg font-semibold mb-4">E) Preferred Colleagues</h3>
-                      <p className="text-sm text-muted-foreground mb-2">
-                        Select doctors you prefer to work with (optional)
-                      </p>
-                      <div className="flex flex-wrap gap-2">
-                        {doctors
-                          .filter((d) => d.id !== selectedDoctor.id)
-                          .map((doctor) => {
-                            const isSelected = formData.preferred_partners.includes(doctor.id);
-                            return (
-                              <button
-                                key={doctor.id}
-                                type="button"
-                                onClick={() => {
-                                  if (isSelected) {
-                                    setFormData({
-                                      ...formData,
-                                      preferred_partners: formData.preferred_partners.filter(
-                                        (id) => id !== doctor.id
-                                      ),
-                                    });
-                                  } else {
-                                    setFormData({
-                                      ...formData,
-                                      preferred_partners: [...formData.preferred_partners, doctor.id],
-                                    });
-                                  }
-                                }}
-                                className={`px-3 py-1 rounded-full text-sm transition-colors ${
-                                  isSelected
-                                    ? "bg-blue-100 text-blue-700 border border-blue-300"
-                                    : "bg-gray-100 text-gray-700 border border-gray-200 hover:bg-gray-200"
-                                }`}
-                              >
-                                {doctor.first_name} {doctor.last_name}
-                              </button>
-                            );
-                          })}
-                      </div>
-                    </div>
-
-                    {/* F) Comments */}
-                    <div>
-                      <h3 className="text-lg font-semibold mb-4">F) Comments</h3>
-                      <textarea
-                        value={formData.comments ?? ""}
-                        onChange={(e) =>
-                          setFormData({
-                            ...formData,
-                            comments: e.target.value || null,
-                          })
-                        }
-                        placeholder="Any additional notes for the coordinator..."
-                        className="w-full h-24 rounded-md border border-input bg-background px-3 py-2 text-sm"
-                      />
-                    </div>
-
-                    {/* Action Buttons */}
-                    <div className="flex items-center justify-between pt-4 border-t">
-                      <div className="flex space-x-2">
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={handleUndo}
-                          disabled={!preferenceData?.can_undo || saveLoading}
-                        >
-                          <Undo2 className="h-4 w-4 mr-1" />
-                          Undo
-                        </Button>
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={handleRedo}
-                          disabled={!preferenceData?.can_redo || saveLoading}
-                        >
-                          <Redo2 className="h-4 w-4 mr-1" />
-                          Redo
-                        </Button>
-                      </div>
-                      <div className="flex space-x-2">
-                        <Button variant="outline" onClick={closeEditModal} disabled={saveLoading}>
-                          Cancel
-                        </Button>
-                        <Button onClick={handleSaveCheckpoint} disabled={saveLoading}>
-                          <Save className="h-4 w-4 mr-1" />
-                          {saveLoading ? "Saving..." : "Save"}
-                        </Button>
-                      </div>
-                    </div>
-                  </div>
+                  <PreferencesEditor
+                    mode="admin"
+                    doctorId={selectedDoctor.id}
+                    doctorName={`${selectedDoctor.first_name} ${selectedDoctor.last_name}`}
+                    year={year}
+                    month={month}
+                    colleagues={doctors}
+                    deadline={deadline}
+                    formData={formData}
+                    onFormDataChange={setFormData}
+                    onSave={handleSaveCheckpoint}
+                    onUndo={handleUndo}
+                    onRedo={handleRedo}
+                    canUndo={preferenceData?.can_undo ?? false}
+                    canRedo={preferenceData?.can_redo ?? false}
+                    status={preferenceData?.status ?? "missing"}
+                    isSaving={saveLoading}
+                  />
                 )}
               </CardContent>
             </Card>
