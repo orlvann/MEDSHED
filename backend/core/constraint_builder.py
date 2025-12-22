@@ -41,11 +41,25 @@ def build_hard_model(problem: ProblemData, seed_hints: Any) -> HardModel:
 
     allowed_slots: Dict[Tuple[int, ShiftType], List[int]] = {}
 
+    # Active days = days that solver must actually schedule.
+    # Exclude:
+    # - ignore_days (whole day ignored),
+    # - days where BOTH shifts are ignored via ignore_slots (day effectively empty).
+    active_days: List[int] = []
     for day in problem.days:
-        # Skip days that must be completely empty.
         if day in problem.ignore_days:
             continue
 
+        both_ignored = (day, ShiftType.onsite) in problem.ignore_slots and (
+            day,
+            ShiftType.oncall,
+        ) in problem.ignore_slots
+        if both_ignored:
+            continue
+
+        active_days.append(day)
+
+    for day in active_days:
         # We only consider the two shift types used by the schedule.
         for shift_type in (ShiftType.onsite, ShiftType.oncall):
             # Skip slots that admin explicitly wants to keep empty.
@@ -75,6 +89,7 @@ def build_hard_model(problem: ProblemData, seed_hints: Any) -> HardModel:
         year=problem.year,
         month=problem.month,
         days=list(problem.days),
+        active_days=list(active_days),
         doctors=dict(problem.doctors),
         preferences=dict(problem.preferences),
         participant_doctor_ids=set(problem.participant_doctor_ids),

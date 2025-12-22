@@ -138,14 +138,18 @@ class HardModel:
     - allowed_slots: a precomputed "hard feasible" doctor list per (day, shift_type).
 
     Note:
-    - allowed_slots is ONLY based on ignore rules and unavailability.
-    - soft constraints (fairness, targets, weekends, etc.) are handled later.
+    - days: full calendar days for this month (1..num_days),
+    - active_days: only days that are inside solver scope (days minus ignore_days,
+      and minus days where both slots are ignored).
     """
 
     # Base fields (copied from ProblemData so the core does not need to reach outside HardModel)
     year: int
     month: int
+    # Full calendar days of this period
     days: List[int]
+    # Days solver must schedule (constraints iterate only over these)
+    active_days: List[int]
     doctors: Dict[int, DoctorInput]
     preferences: Dict[int, PreferencesInput]
     participant_doctor_ids: Set[int]

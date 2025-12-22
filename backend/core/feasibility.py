@@ -58,6 +58,10 @@ def compute_day_capacity(problem: ProblemData) -> Dict[int, DayCapacity]:
         if day in problem.ignore_days:
             continue
 
+        # If both shifts are ignored, day is effectively empty -> skip
+        if (day, ShiftType.onsite) in problem.ignore_slots and (day, ShiftType.oncall) in problem.ignore_slots:
+            continue
+
         cap = DayCapacity(day=day)
 
         for doctor_id in problem.participant_doctor_ids:

@@ -44,28 +44,40 @@ def build_and_solve(model: HardModel) -> SolverSolution:
     # 3) Hard constraints -------------------------------------------------------
 
     # 3.1 Enforce exactly one onsite and one oncall doctor per active day.
-    for day in model.days:
-        onsite_vars = [
-            x[(day, ShiftType.onsite, doc_id)]
-            for doc_id in model.allowed_slots.get((day, ShiftType.onsite), [])
-            if (day, ShiftType.onsite, doc_id) in x
-        ]
-        if onsite_vars:
-            cp.Add(sum(onsite_vars) == 1)
+    for day in model.active_days:
+        # Onsite coverage (only if not ignored)
+        if (day, ShiftType.onsite) not in model.ignore_slots:
+            onsite_vars = [
+                x[(day, ShiftType.onsite, doc_id)]
+                for doc_id in model.allowed_slots.get((day, ShiftType.onsite), [])
+                if (day, ShiftType.onsite, doc_id) in x
+            ]
+            if onsite_vars:
+                cp.Add(sum(onsite_vars) == 1)
+            else:
+                cp.Add(0 == 1)  # required slot but no candidates -> infeasible
 
-        oncall_vars = [
-            x[(day, ShiftType.oncall, doc_id)]
-            for doc_id in model.allowed_slots.get((day, ShiftType.oncall), [])
-            if (day, ShiftType.oncall, doc_id) in x
-        ]
-        if oncall_vars:
-            cp.Add(sum(oncall_vars) == 1)
+        # Oncall coverage (only if not ignored)
+        if (day, ShiftType.oncall) not in model.ignore_slots:
+            oncall_vars = [
+                x[(day, ShiftType.oncall, doc_id)]
+                for doc_id in model.allowed_slots.get((day, ShiftType.oncall), [])
+                if (day, ShiftType.oncall, doc_id) in x
+            ]
+            if oncall_vars:
+                cp.Add(sum(oncall_vars) == 1)
+            else:
+                cp.Add(0 == 1)  # required slot but no candidates -> infeasible
 
-    # 3.2 Enforce that each active day has at least one specialist (onsite OR oncall).
-    for day in model.days:
+    # 3.2 Enforce that each active day has at least one specialist among REQUIRED shifts (onsite OR oncall).
+    for day in model.active_days:
+        required_shifts = [st for st in (ShiftType.onsite, ShiftType.oncall) if (day, st) not in model.ignore_slots]
+        if not required_shifts:
+            # both shifts ignored -> nothing to enforce on this day
+            continue
+
         specialist_vars: List[cp_model.IntVar] = []
-
-        for shift_type in (ShiftType.onsite, ShiftType.oncall):
+        for shift_type in required_shifts:
             for doc_id in model.allowed_slots.get((day, shift_type), []):
                 doctor = model.doctors.get(doc_id)
                 if doctor and doctor.role == DoctorRole.specialist:
@@ -76,12 +88,10 @@ def build_and_solve(model: HardModel) -> SolverSolution:
         if specialist_vars:
             cp.Add(sum(specialist_vars) >= 1)
         else:
-            # If the input says "no specialist is allowed today", make the model infeasible on purpose.
-            # This matches the rule: at least one specialist is required daily.
-            cp.Add(0 >= 1)
+            cp.Add(0 >= 1)  # required day but no specialist candidate -> infeasible
 
     # 3.3 Enforce that the same doctor cannot be onsite AND oncall on the same day.
-    for day in model.days:
+    for day in model.active_days:
         for doc_id in model.participant_doctor_ids:
             v_ons = x.get((day, ShiftType.onsite, doc_id))
             v_onc = x.get((day, ShiftType.oncall, doc_id))
