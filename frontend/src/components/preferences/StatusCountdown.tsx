@@ -12,6 +12,7 @@ interface StatusCountdownProps {
   onResetAll: () => void;
   onMarkVacation: () => void;
   mode: "admin" | "doctor";
+  disabled?: boolean;
 }
 
 export const StatusCountdown = ({
@@ -22,6 +23,7 @@ export const StatusCountdown = ({
   onResetAll,
   onMarkVacation,
   mode,
+  disabled = false,
 }: StatusCountdownProps) => {
   const [timeRemaining, setTimeRemaining] = useState<TimeRemaining | null>(
     getTimeRemaining(deadline)
@@ -42,7 +44,7 @@ export const StatusCountdown = ({
   }, [deadline]);
 
   const isLocked = timeRemaining?.isPast || !deadline;
-  const isDisabled = isLocked && mode === "doctor";
+  const isDisabled = disabled || (isLocked && mode === "doctor");
 
   return (
     <div className="space-y-4">

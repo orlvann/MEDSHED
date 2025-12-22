@@ -167,3 +167,75 @@ export const getVacationDays = (vacation: VacationPeriod | null): number[] => {
   }
   return days;
 };
+
+// Derive vacation period from unavailable days arrays
+// Vacation is the longest consecutive range of days that are in BOTH arrays
+export const deriveVacationFromDays = (
+  unavailableOnsiteDays: number[],
+  unavailableOncallDays: number[]
+): VacationPeriod | null => {
+  // Find days that are in both arrays (intersection)
+  const commonDays = unavailableOnsiteDays
+    .filter((d) => unavailableOncallDays.includes(d))
+    .sort((a, b) => a - b);
+
+  if (commonDays.length === 0) return null;
+
+  // Find all consecutive ranges
+  const ranges: VacationPeriod[] = [];
+  let rangeStart = commonDays[0];
+  let rangeEnd = commonDays[0];
+
+  for (let i = 1; i < commonDays.length; i++) {
+    if (commonDays[i] === rangeEnd + 1) {
+      // Continue the range
+      rangeEnd = commonDays[i];
+    } else {
+      // Save current range if it has at least 2 days (typical for vacation)
+      if (rangeEnd - rangeStart >= 1) {
+        ranges.push({ startDay: rangeStart, endDay: rangeEnd });
+      }
+      // Start new range
+      rangeStart = commonDays[i];
+      rangeEnd = commonDays[i];
+    }
+  }
+
+  // Don't forget the last range
+  if (rangeEnd - rangeStart >= 1) {
+    ranges.push({ startDay: rangeStart, endDay: rangeEnd });
+  }
+
+  // Return the longest range (most likely to be vacation)
+  if (ranges.length === 0) return null;
+
+  return ranges.reduce((longest, current) =>
+    current.endDay - current.startDay > longest.endDay - longest.startDay
+      ? current
+      : longest
+  );
+};
+
+// Check if a specific day number in a month is a weekend
+export const isDayWeekend = (year: number, month: number, day: number): boolean => {
+  const dayOfWeek = getDayOfWeek(year, month, day);
+  return isWeekend(dayOfWeek);
+};
+
+// Count weekday and weekend days in an array
+export const countDaysByType = (
+  year: number,
+  month: number,
+  days: number[]
+): { weekdays: number; weekends: number } => {
+  let weekdays = 0;
+  let weekends = 0;
+  for (const day of days) {
+    if (isDayWeekend(year, month, day)) {
+      weekends++;
+    } else {
+      weekdays++;
+    }
+  }
+  return { weekdays, weekends };
+};

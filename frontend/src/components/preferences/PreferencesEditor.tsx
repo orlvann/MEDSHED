@@ -1,4 +1,4 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useMemo } from "react";
 import { Undo2, Redo2, ChevronLeft, ChevronRight, Save } from "lucide-react";
 import { Button } from "../ui/button";
 import { IntegratedCalendar } from "./IntegratedCalendar";
@@ -9,8 +9,9 @@ import { ColleagueSelector } from "./ColleagueSelector";
 import { AdditionalNote } from "./AdditionalNote";
 import { WeekendRuleSection } from "./WeekendRuleSection";
 import { VacationModal } from "./VacationModal";
-import { getDayState, getNextDayState, getDaysInMonth, type VacationPeriod } from "./types";
-import type { Doctor, PreferenceWorkingPut, PreferenceStatus, PreferencesDeadlineRead } from "../../types";
+import { getDayState, getNextDayState, getDaysInMonth, deriveVacationFromDays, isDayWeekend, countDaysByType, type VacationPeriod } from "./types";
+import type { ValidationError } from "./validation";
+import type { Doctor, PreferenceWorkingPut, PreferenceStatus, PreferencesDeadlineRead, PeriodStatus } from "../../types";
 
 export interface PreferencesEditorProps {
   // Mode for future doctor page support
@@ -35,17 +36,25 @@ export interface PreferencesEditorProps {
 
   // Callbacks
   onSave: () => Promise<void>;
-  onUndo: () => Promise<void>;
-  onRedo: () => Promise<void>;
-  onPrevious?: () => Promise<void>;
-  onNext?: () => Promise<void>;
 
-  // State from parent
+  // Local undo/redo (client-side history, sync)
+  onUndo: () => void;
+  onRedo: () => void;
   canUndo: boolean;
   canRedo: boolean;
-  canPrevious?: boolean;
-  canNext?: boolean;
+
+  // Server version browsing (async)
+  onPreviousVersion?: () => Promise<void>;
+  onNextVersion?: () => Promise<void>;
+  canPreviousVersion?: boolean;
+  canNextVersion?: boolean;
+
+  // State from parent
   status: PreferenceStatus;
+  periodStatus?: PeriodStatus;
+
+  // Validation
+  validationErrors?: ValidationError[];
 
   // Loading states
   isSaving?: boolean;
@@ -58,16 +67,16 @@ export const getDefaultPreferences = (): PreferenceWorkingPut => ({
   unavailable_oncall_days: [],
   preferred_onsite_days: [],
   preferred_oncall_days: [],
-  min_onsite_total: null,
-  max_onsite_total: null,
-  target_onsite_total: null,
-  min_oncall_total: null,
-  max_oncall_total: null,
-  target_oncall_total: null,
-  max_onsite_weekends: null,
-  target_onsite_weekends: null,
-  max_oncall_weekends: null,
-  target_oncall_weekends: null,
+  min_onsite_total: 0,
+  max_onsite_total: 0,
+  target_onsite_total: 0,
+  min_oncall_total: 0,
+  max_oncall_total: 0,
+  target_oncall_total: 0,
+  max_onsite_weekends: 0,
+  target_onsite_weekends: 0,
+  max_oncall_weekends: 0,
+  target_oncall_weekends: 0,
   preferred_onsite_weekdays: [],
   preferred_oncall_weekdays: [],
   avoid_onsite_weekdays: [],
@@ -91,19 +100,29 @@ export const PreferencesEditor = ({
   onSave,
   onUndo,
   onRedo,
-  onPrevious,
-  onNext,
   canUndo,
   canRedo,
-  canPrevious = false,
-  canNext = false,
+  onPreviousVersion,
+  onNextVersion,
+  canPreviousVersion = false,
+  canNextVersion = false,
   status,
+  periodStatus,
+  validationErrors = [],
   isSaving = false,
   isLoading = false,
 }: PreferencesEditorProps) => {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [vacationModalOpen, setVacationModalOpen] = useState(false);
-  const [vacation, setVacation] = useState<VacationPeriod | null>(null);
+
+  // Derive vacation from formData so it's restored on undo/redo
+  const vacation = useMemo(
+    () => deriveVacationFromDays(formData.unavailable_onsite_days, formData.unavailable_oncall_days),
+    [formData.unavailable_onsite_days, formData.unavailable_oncall_days]
+  );
+
+  // Derive read-only state from period status
+  const isReadOnly = periodStatus === "past";
 
   // Update a single field
   const updateField = useCallback(
@@ -122,6 +141,26 @@ export const PreferencesEditor = ({
         formData.preferred_onsite_days
       );
       const nextState = getNextDayState(currentState);
+
+      // Check limits before allowing "want" state
+      if (nextState === "want") {
+        const isWeekendDay = isDayWeekend(year, month, day);
+        const currentCounts = countDaysByType(year, month, formData.preferred_onsite_days);
+
+        if (isWeekendDay) {
+          // Check weekend limit (null = no limit, 0 = none allowed, >0 = check against limit)
+          const maxWeekends = formData.max_onsite_weekends;
+          if (maxWeekends !== null && currentCounts.weekends >= maxWeekends) {
+            return; // Limit reached, don't add
+          }
+        } else {
+          // Check total/weekday limit (null = no limit, 0 = none allowed, >0 = check against limit)
+          const maxTotal = formData.max_onsite_total;
+          if (maxTotal !== null && currentCounts.weekdays >= maxTotal) {
+            return; // Limit reached, don't add
+          }
+        }
+      }
 
       let newUnavailable = [...formData.unavailable_onsite_days];
       let newPreferred = [...formData.preferred_onsite_days];
@@ -145,7 +184,7 @@ export const PreferencesEditor = ({
         preferred_onsite_days: newPreferred,
       });
     },
-    [formData, onFormDataChange]
+    [formData, onFormDataChange, year, month]
   );
 
   // Handle on-call day click (cycle state)
@@ -157,6 +196,26 @@ export const PreferencesEditor = ({
         formData.preferred_oncall_days
       );
       const nextState = getNextDayState(currentState);
+
+      // Check limits before allowing "want" state
+      if (nextState === "want") {
+        const isWeekendDay = isDayWeekend(year, month, day);
+        const currentCounts = countDaysByType(year, month, formData.preferred_oncall_days);
+
+        if (isWeekendDay) {
+          // Check weekend limit (null = no limit, 0 = none allowed, >0 = check against limit)
+          const maxWeekends = formData.max_oncall_weekends;
+          if (maxWeekends !== null && currentCounts.weekends >= maxWeekends) {
+            return; // Limit reached, don't add
+          }
+        } else {
+          // Check total/weekday limit (null = no limit, 0 = none allowed, >0 = check against limit)
+          const maxTotal = formData.max_oncall_total;
+          if (maxTotal !== null && currentCounts.weekdays >= maxTotal) {
+            return; // Limit reached, don't add
+          }
+        }
+      }
 
       let newUnavailable = [...formData.unavailable_oncall_days];
       let newPreferred = [...formData.preferred_oncall_days];
@@ -178,7 +237,7 @@ export const PreferencesEditor = ({
         preferred_oncall_days: newPreferred,
       });
     },
-    [formData, onFormDataChange]
+    [formData, onFormDataChange, year, month]
   );
 
   // Set all on-site days to can't
@@ -208,11 +267,40 @@ export const PreferencesEditor = ({
     setVacationModalOpen(true);
   }, []);
 
-  // Save vacation period
+  // Save vacation period - applies vacation days to formData
   const handleSaveVacation = useCallback((newVacation: VacationPeriod) => {
-    setVacation(newVacation);
     setVacationModalOpen(false);
-  }, []);
+
+    // Generate all days in vacation period
+    const vacationDays: number[] = [];
+    for (let day = newVacation.startDay; day <= newVacation.endDay; day++) {
+      vacationDays.push(day);
+    }
+
+    // Add vacation days to unavailable arrays (avoiding duplicates)
+    const newUnavailableOnsite = [
+      ...new Set([...formData.unavailable_onsite_days, ...vacationDays]),
+    ].sort((a, b) => a - b);
+    const newUnavailableOncall = [
+      ...new Set([...formData.unavailable_oncall_days, ...vacationDays]),
+    ].sort((a, b) => a - b);
+
+    // Remove vacation days from preferred arrays
+    const newPreferredOnsite = formData.preferred_onsite_days.filter(
+      (d) => !vacationDays.includes(d)
+    );
+    const newPreferredOncall = formData.preferred_oncall_days.filter(
+      (d) => !vacationDays.includes(d)
+    );
+
+    onFormDataChange({
+      ...formData,
+      unavailable_onsite_days: newUnavailableOnsite,
+      unavailable_oncall_days: newUnavailableOncall,
+      preferred_onsite_days: newPreferredOnsite,
+      preferred_oncall_days: newPreferredOncall,
+    });
+  }, [formData, onFormDataChange]);
 
   // Reset all preferences
   const handleResetAll = useCallback(() => {
@@ -277,7 +365,7 @@ export const PreferencesEditor = ({
             variant="outline"
             size="sm"
             onClick={onUndo}
-            disabled={!canUndo || isSaving}
+            disabled={!canUndo || isSaving || isReadOnly}
             title="Undo"
           >
             <Undo2 className="h-4 w-4" />
@@ -286,7 +374,7 @@ export const PreferencesEditor = ({
             variant="outline"
             size="sm"
             onClick={onRedo}
-            disabled={!canRedo || isSaving}
+            disabled={!canRedo || isSaving || isReadOnly}
             title="Redo"
           >
             <Redo2 className="h-4 w-4" />
@@ -297,8 +385,8 @@ export const PreferencesEditor = ({
             <Button
               variant="outline"
               size="sm"
-              onClick={onPrevious}
-              disabled={!canPrevious || isSaving || !onPrevious}
+              onClick={onPreviousVersion}
+              disabled={!canPreviousVersion || isSaving || !onPreviousVersion}
               title="Previous version"
             >
               <ChevronLeft className="h-4 w-4 mr-1" />
@@ -307,8 +395,8 @@ export const PreferencesEditor = ({
             <Button
               variant="outline"
               size="sm"
-              onClick={onNext}
-              disabled={!canNext || isSaving || !onNext}
+              onClick={onNextVersion}
+              disabled={!canNextVersion || isSaving || !onNextVersion}
               title="Next version"
             >
               Next
@@ -318,7 +406,7 @@ export const PreferencesEditor = ({
           <Button
             size="sm"
             onClick={handleSave}
-            disabled={isSubmitting || isSaving}
+            disabled={isSubmitting || isSaving || isReadOnly || validationErrors.length > 0}
             title="Save"
           >
             <Save className="h-4 w-4 mr-1" />
@@ -343,6 +431,7 @@ export const PreferencesEditor = ({
             preferredOncallDays={formData.preferred_oncall_days}
             onOncallDayClick={handleOncallDayClick}
             vacation={vacation}
+            disabled={isReadOnly}
           />
         </div>
 
@@ -356,6 +445,7 @@ export const PreferencesEditor = ({
             onResetAll={handleResetAll}
             onMarkVacation={handleMarkVacation}
             mode={mode}
+            disabled={isReadOnly}
           />
         </div>
       </div>
@@ -374,11 +464,14 @@ export const PreferencesEditor = ({
             maxOncallWeekends={formData.max_oncall_weekends}
             targetOncallWeekends={formData.target_oncall_weekends}
             onChange={handleShiftCountChange}
+            disabled={isReadOnly}
+            errors={validationErrors}
           />
 
           <AdditionalNote
             value={formData.comments}
             onChange={(value) => updateField("comments", value)}
+            disabled={isReadOnly}
           />
         </div>
 
@@ -391,6 +484,7 @@ export const PreferencesEditor = ({
             preferredOncallWeekdays={formData.preferred_oncall_weekdays}
             avoidOncallWeekdays={formData.avoid_oncall_weekdays}
             onOncallWeekdayChange={handleOncallWeekdayChange}
+            disabled={isReadOnly}
           />
 
           <ColleagueSelector
@@ -398,6 +492,7 @@ export const PreferencesEditor = ({
             selectedIds={formData.preferred_partners}
             currentDoctorId={doctorId}
             onChange={(ids) => updateField("preferred_partners", ids)}
+            disabled={isReadOnly}
           />
 
           <WeekendRuleSection
@@ -405,6 +500,7 @@ export const PreferencesEditor = ({
             onChange={(checked) =>
               updateField("allow_weekend_consecutive_onsite_oncall", checked)
             }
+            disabled={isReadOnly}
           />
         </div>
       </div>
@@ -416,7 +512,7 @@ export const PreferencesEditor = ({
             variant="outline"
             size="sm"
             onClick={onUndo}
-            disabled={!canUndo || isSaving}
+            disabled={!canUndo || isSaving || isReadOnly}
             title="Undo"
           >
             <Undo2 className="h-4 w-4" />
@@ -425,7 +521,7 @@ export const PreferencesEditor = ({
             variant="outline"
             size="sm"
             onClick={onRedo}
-            disabled={!canRedo || isSaving}
+            disabled={!canRedo || isSaving || isReadOnly}
             title="Redo"
           >
             <Redo2 className="h-4 w-4" />
@@ -436,8 +532,8 @@ export const PreferencesEditor = ({
             <Button
               variant="outline"
               size="sm"
-              onClick={onPrevious}
-              disabled={!canPrevious || isSaving || !onPrevious}
+              onClick={onPreviousVersion}
+              disabled={!canPreviousVersion || isSaving || !onPreviousVersion}
               title="Previous version"
             >
               <ChevronLeft className="h-4 w-4 mr-1" />
@@ -446,8 +542,8 @@ export const PreferencesEditor = ({
             <Button
               variant="outline"
               size="sm"
-              onClick={onNext}
-              disabled={!canNext || isSaving || !onNext}
+              onClick={onNextVersion}
+              disabled={!canNextVersion || isSaving || !onNextVersion}
               title="Next version"
             >
               Next
@@ -457,7 +553,7 @@ export const PreferencesEditor = ({
           <Button
             size="sm"
             onClick={handleSave}
-            disabled={isSubmitting || isSaving}
+            disabled={isSubmitting || isSaving || isReadOnly || validationErrors.length > 0}
             title="Save"
           >
             <Save className="h-4 w-4 mr-1" />

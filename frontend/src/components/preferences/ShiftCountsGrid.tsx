@@ -1,6 +1,24 @@
 import { Input } from "../ui/input";
 import { Card, CardContent } from "../ui/card";
 import { InfoTooltip } from "./InfoTooltip";
+import { type ValidationError, hasFieldError } from "./validation";
+import { cn } from "../../lib/utils";
+
+// Mapping of max fields to their corresponding target fields
+const MAX_TO_TARGET_MAP: Record<string, string> = {
+  max_onsite_total: "target_onsite_total",
+  max_onsite_weekends: "target_onsite_weekends",
+  max_oncall_total: "target_oncall_total",
+  max_oncall_weekends: "target_oncall_weekends",
+};
+
+// Mapping of target fields to their corresponding max fields
+const TARGET_TO_MAX_MAP: Record<string, string> = {
+  target_onsite_total: "max_onsite_total",
+  target_onsite_weekends: "max_onsite_weekends",
+  target_oncall_total: "max_oncall_total",
+  target_oncall_weekends: "max_oncall_weekends",
+};
 
 interface ShiftCountsGridProps {
   // On-site
@@ -17,6 +35,7 @@ interface ShiftCountsGridProps {
 
   onChange: (field: string, value: number | null) => void;
   disabled?: boolean;
+  errors?: ValidationError[];
 }
 
 export const ShiftCountsGrid = ({
@@ -30,9 +49,55 @@ export const ShiftCountsGrid = ({
   targetOncallWeekends,
   onChange,
   disabled = false,
+  errors = [],
 }: ShiftCountsGridProps) => {
+  // Get current values by field name
+  const getValueByField = (field: string): number | null => {
+    const fieldMap: Record<string, number | null> = {
+      max_onsite_total: maxOnsiteTotal,
+      target_onsite_total: targetOnsiteTotal,
+      max_onsite_weekends: maxOnsiteWeekends,
+      target_onsite_weekends: targetOnsiteWeekends,
+      max_oncall_total: maxOncallTotal,
+      target_oncall_total: targetOncallTotal,
+      max_oncall_weekends: maxOncallWeekends,
+      target_oncall_weekends: targetOncallWeekends,
+    };
+    return fieldMap[field] ?? null;
+  };
+
   const handleChange = (field: string, value: string) => {
-    onChange(field, value ? parseInt(value, 10) : null);
+    const parsedValue = value ? parseInt(value, 10) : null;
+
+    // If changing a max field, also clamp the corresponding target
+    if (field in MAX_TO_TARGET_MAP && parsedValue !== null) {
+      const targetField = MAX_TO_TARGET_MAP[field];
+      const currentTarget = getValueByField(targetField);
+      if (currentTarget !== null && currentTarget > parsedValue) {
+        // Clamp target to new max value
+        onChange(targetField, parsedValue);
+      }
+    }
+
+    // If changing a target field, clamp it to the corresponding max
+    if (field in TARGET_TO_MAX_MAP && parsedValue !== null) {
+      const maxField = TARGET_TO_MAX_MAP[field];
+      const currentMax = getValueByField(maxField);
+      if (currentMax !== null && parsedValue > currentMax) {
+        // Clamp to max value
+        onChange(field, currentMax);
+        return;
+      }
+    }
+
+    onChange(field, parsedValue);
+  };
+
+  const getInputClass = (field: string) => {
+    return cn(
+      "text-center",
+      hasFieldError(errors, field) && "border-red-500 focus:ring-red-500"
+    );
   };
 
   return (
@@ -64,7 +129,7 @@ export const ShiftCountsGrid = ({
                 onChange={(e) => handleChange("max_onsite_total", e.target.value)}
                 disabled={disabled}
                 placeholder=""
-                className="text-center"
+                className={getInputClass("max_onsite_total")}
               />
               <Input
                 type="number"
@@ -73,7 +138,7 @@ export const ShiftCountsGrid = ({
                 onChange={(e) => handleChange("max_onsite_weekends", e.target.value)}
                 disabled={disabled}
                 placeholder=""
-                className="text-center"
+                className={getInputClass("max_onsite_weekends")}
               />
 
               {/* I want row */}
@@ -85,7 +150,7 @@ export const ShiftCountsGrid = ({
                 onChange={(e) => handleChange("target_onsite_total", e.target.value)}
                 disabled={disabled}
                 placeholder=""
-                className="text-center"
+                className={getInputClass("target_onsite_total")}
               />
               <Input
                 type="number"
@@ -94,7 +159,7 @@ export const ShiftCountsGrid = ({
                 onChange={(e) => handleChange("target_onsite_weekends", e.target.value)}
                 disabled={disabled}
                 placeholder=""
-                className="text-center"
+                className={getInputClass("target_onsite_weekends")}
               />
             </div>
           </div>
@@ -117,7 +182,7 @@ export const ShiftCountsGrid = ({
                 onChange={(e) => handleChange("max_oncall_total", e.target.value)}
                 disabled={disabled}
                 placeholder=""
-                className="text-center"
+                className={getInputClass("max_oncall_total")}
               />
               <Input
                 type="number"
@@ -126,7 +191,7 @@ export const ShiftCountsGrid = ({
                 onChange={(e) => handleChange("max_oncall_weekends", e.target.value)}
                 disabled={disabled}
                 placeholder=""
-                className="text-center"
+                className={getInputClass("max_oncall_weekends")}
               />
 
               {/* I want row */}
@@ -138,7 +203,7 @@ export const ShiftCountsGrid = ({
                 onChange={(e) => handleChange("target_oncall_total", e.target.value)}
                 disabled={disabled}
                 placeholder=""
-                className="text-center"
+                className={getInputClass("target_oncall_total")}
               />
               <Input
                 type="number"
@@ -147,7 +212,7 @@ export const ShiftCountsGrid = ({
                 onChange={(e) => handleChange("target_oncall_weekends", e.target.value)}
                 disabled={disabled}
                 placeholder=""
-                className="text-center"
+                className={getInputClass("target_oncall_weekends")}
               />
             </div>
           </div>

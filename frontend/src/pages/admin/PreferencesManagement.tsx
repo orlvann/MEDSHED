@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import { Header } from "../../components/shared/Header";
 import { Button } from "../../components/ui/button";
@@ -22,6 +22,9 @@ import {
   AlertDialogTitle,
 } from "../../components/ui/alert-dialog";
 import { PreferencesEditor, getDefaultPreferences, MONTH_NAMES, formatDate, getTimeRemaining } from "../../components/preferences";
+import { validatePreferences, type ValidationError } from "../../components/preferences/validation";
+import { useUndoRedo } from "../../hooks/useUndoRedo";
+import { useLocalStorageDraft } from "../../hooks/useLocalStorageDraft";
 import { preferencesApi, doctorsApi } from "../../services/api";
 import type {
   Doctor,
@@ -29,6 +32,7 @@ import type {
   PreferencesDeadlineRead,
   PreferenceWorkingRead,
   PreferenceWorkingPut,
+  PreferenceRevertRead,
 } from "../../types";
 import {
   ArrowLeft,
@@ -42,6 +46,8 @@ import {
   Eye,
   X,
   AlertTriangle,
+  Search,
+  RotateCcw,
 } from "lucide-react";
 
 export const PreferencesManagement = () => {
@@ -61,6 +67,8 @@ export const PreferencesManagement = () => {
 
   // Filter state
   const [statusFilter, setStatusFilter] = useState<"all" | "submitted" | "missing">("all");
+  const [roleFilter, setRoleFilter] = useState<"all" | "specialist" | "resident">("all");
+  const [searchQuery, setSearchQuery] = useState("");
 
   // Deadline dialog state
   const [showDeadlineConfirm, setShowDeadlineConfirm] = useState(false);
@@ -72,9 +80,22 @@ export const PreferencesManagement = () => {
   const [selectedDoctor, setSelectedDoctor] = useState<Doctor | null>(null);
   const [editModalOpen, setEditModalOpen] = useState(false);
   const [preferenceData, setPreferenceData] = useState<PreferenceWorkingRead | null>(null);
-  const [formData, setFormData] = useState<PreferenceWorkingPut>(getDefaultPreferences());
   const [formLoading, setFormLoading] = useState(false);
   const [saveLoading, setSaveLoading] = useState(false);
+  const [validationErrors, setValidationErrors] = useState<ValidationError[]>([]);
+
+  // Client-side undo/redo (resets when modal closes)
+  const undoRedo = useUndoRedo<PreferenceWorkingPut>(getDefaultPreferences(), { maxHistory: 50 });
+
+  // LocalStorage draft management
+  const draft = useLocalStorageDraft(
+    year,
+    month,
+    deadline?.deadline ?? null
+  );
+
+  // Debounce timer ref for autosave
+  const autosaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Fetch all data for period
   const fetchData = async () => {
@@ -116,9 +137,19 @@ export const PreferencesManagement = () => {
   }, [doctors, summary]);
 
   const filteredDoctors = useMemo(() => {
-    if (statusFilter === "all") return doctorsWithStatus;
-    return doctorsWithStatus.filter((d) => d.preferenceStatus === statusFilter);
-  }, [doctorsWithStatus, statusFilter]);
+    return doctorsWithStatus.filter((d) => {
+      // Status filter
+      if (statusFilter !== "all" && d.preferenceStatus !== statusFilter) return false;
+      // Role filter
+      if (roleFilter !== "all" && d.role !== roleFilter) return false;
+      // Search filter
+      if (searchQuery) {
+        const fullName = `${d.first_name} ${d.last_name}`.toLowerCase();
+        if (!fullName.includes(searchQuery.toLowerCase())) return false;
+      }
+      return true;
+    });
+  }, [doctorsWithStatus, statusFilter, roleFilter, searchQuery]);
 
   // Month navigation
   const goToPrevMonth = () => {
@@ -138,6 +169,29 @@ export const PreferencesManagement = () => {
       setMonth(month + 1);
     }
   };
+
+  // Handle form data changes with validation and autosave
+  const handleFormDataChange = useCallback(
+    (newData: PreferenceWorkingPut) => {
+      // Update undo/redo stack
+      undoRedo.set(newData);
+
+      // Validate
+      const result = validatePreferences(newData);
+      setValidationErrors(result.errors);
+
+      // Debounced autosave to localStorage
+      if (autosaveTimerRef.current) {
+        clearTimeout(autosaveTimerRef.current);
+      }
+      autosaveTimerRef.current = setTimeout(() => {
+        if (selectedDoctor) {
+          draft.saveDraft(selectedDoctor.id, newData);
+        }
+      }, 1000);
+    },
+    [undoRedo, draft, selectedDoctor]
+  );
 
   // Deadline management
   const handleDeadlineChangeClick = () => {
@@ -168,38 +222,62 @@ export const PreferencesManagement = () => {
     }
   };
 
+  // Helper to convert API response to form data (accepts any type with editable fields)
+  const apiToFormData = (data: PreferenceWorkingRead | PreferenceRevertRead): PreferenceWorkingPut => ({
+    unavailable_onsite_days: data.unavailable_onsite_days,
+    unavailable_oncall_days: data.unavailable_oncall_days,
+    preferred_onsite_days: data.preferred_onsite_days,
+    preferred_oncall_days: data.preferred_oncall_days,
+    min_onsite_total: data.min_onsite_total,
+    max_onsite_total: data.max_onsite_total,
+    target_onsite_total: data.target_onsite_total,
+    min_oncall_total: data.min_oncall_total,
+    max_oncall_total: data.max_oncall_total,
+    target_oncall_total: data.target_oncall_total,
+    max_onsite_weekends: data.max_onsite_weekends,
+    target_onsite_weekends: data.target_onsite_weekends,
+    max_oncall_weekends: data.max_oncall_weekends,
+    target_oncall_weekends: data.target_oncall_weekends,
+    preferred_onsite_weekdays: data.preferred_onsite_weekdays,
+    preferred_oncall_weekdays: data.preferred_oncall_weekdays,
+    avoid_onsite_weekdays: data.avoid_onsite_weekdays,
+    avoid_oncall_weekdays: data.avoid_oncall_weekdays,
+    allow_weekend_consecutive_onsite_oncall: data.allow_weekend_consecutive_onsite_oncall,
+    preferred_partners: data.preferred_partners,
+    comments: data.comments,
+  });
+
   // Edit modal handlers
   const openEditModal = async (doctor: Doctor) => {
     setSelectedDoctor(doctor);
     setEditModalOpen(true);
     setFormLoading(true);
+    setValidationErrors([]);
 
     try {
       const data = await preferencesApi.getWorking(year, month, doctor.id);
       setPreferenceData(data);
-      setFormData({
-        unavailable_onsite_days: data.unavailable_onsite_days,
-        unavailable_oncall_days: data.unavailable_oncall_days,
-        preferred_onsite_days: data.preferred_onsite_days,
-        preferred_oncall_days: data.preferred_oncall_days,
-        min_onsite_total: data.min_onsite_total,
-        max_onsite_total: data.max_onsite_total,
-        target_onsite_total: data.target_onsite_total,
-        min_oncall_total: data.min_oncall_total,
-        max_oncall_total: data.max_oncall_total,
-        target_oncall_total: data.target_oncall_total,
-        max_onsite_weekends: data.max_onsite_weekends,
-        target_onsite_weekends: data.target_onsite_weekends,
-        max_oncall_weekends: data.max_oncall_weekends,
-        target_oncall_weekends: data.target_oncall_weekends,
-        preferred_onsite_weekdays: data.preferred_onsite_weekdays,
-        preferred_oncall_weekdays: data.preferred_oncall_weekdays,
-        avoid_onsite_weekdays: data.avoid_onsite_weekdays,
-        avoid_oncall_weekdays: data.avoid_oncall_weekdays,
-        allow_weekend_consecutive_onsite_oncall: data.allow_weekend_consecutive_onsite_oncall,
-        preferred_partners: data.preferred_partners,
-        comments: data.comments,
-      });
+
+      // Check for localStorage draft first (pass doctor.id directly)
+      const savedDraft = draft.loadDraft(doctor.id);
+      let initialData: PreferenceWorkingPut;
+
+      if (savedDraft) {
+        // Use saved draft
+        initialData = savedDraft;
+        draft.setRestoredFromDraft(true);
+      } else {
+        // Use server data
+        initialData = apiToFormData(data);
+        draft.setRestoredFromDraft(false);
+      }
+
+      // Initialize undo/redo stack with the initial data
+      undoRedo.reset(initialData);
+
+      // Validate initial data
+      const result = validatePreferences(initialData);
+      setValidationErrors(result.errors);
     } catch (err: any) {
       alert(err.response?.data?.detail?.detail || "Failed to load preferences");
       setEditModalOpen(false);
@@ -209,19 +287,37 @@ export const PreferencesManagement = () => {
   };
 
   const closeEditModal = () => {
+    // Clear autosave timer
+    if (autosaveTimerRef.current) {
+      clearTimeout(autosaveTimerRef.current);
+      autosaveTimerRef.current = null;
+    }
+
     setEditModalOpen(false);
     setSelectedDoctor(null);
     setPreferenceData(null);
-    setFormData(getDefaultPreferences());
+    setValidationErrors([]);
+
+    // Reset undo/redo stack
+    undoRedo.reset(getDefaultPreferences());
+
+    // Reset draft state
+    draft.setRestoredFromDraft(false);
   };
 
   const handleSaveCheckpoint = async () => {
     if (!selectedDoctor) return;
 
+    // Block save if validation errors
+    if (validationErrors.length > 0) {
+      alert("Please fix validation errors before saving");
+      return;
+    }
+
     try {
       setSaveLoading(true);
       // First save working copy
-      await preferencesApi.saveWorking(year, month, selectedDoctor.id, formData);
+      await preferencesApi.saveWorking(year, month, selectedDoctor.id, undoRedo.current);
       // Then create checkpoint
       const result = await preferencesApi.createCheckpoint(year, month, selectedDoctor.id);
       setPreferenceData((prev) =>
@@ -236,6 +332,11 @@ export const PreferencesManagement = () => {
             }
           : null
       );
+
+      // Clear localStorage draft on successful save
+      draft.clearDraft(selectedDoctor.id);
+      draft.setRestoredFromDraft(false);
+
       // Refresh summary
       fetchData();
     } catch (err: any) {
@@ -245,36 +346,21 @@ export const PreferencesManagement = () => {
     }
   };
 
-  const handleUndo = async () => {
+  // Server-side version navigation (Previous/Next)
+  const handlePreviousVersion = async () => {
     if (!selectedDoctor || !preferenceData?.can_undo) return;
 
     try {
       setSaveLoading(true);
       const result = await preferencesApi.revertLast(year, month, selectedDoctor.id);
-      // Update form data with reverted values
-      setFormData({
-        unavailable_onsite_days: result.unavailable_onsite_days,
-        unavailable_oncall_days: result.unavailable_oncall_days,
-        preferred_onsite_days: result.preferred_onsite_days,
-        preferred_oncall_days: result.preferred_oncall_days,
-        min_onsite_total: result.min_onsite_total,
-        max_onsite_total: result.max_onsite_total,
-        target_onsite_total: result.target_onsite_total,
-        min_oncall_total: result.min_oncall_total,
-        max_oncall_total: result.max_oncall_total,
-        target_oncall_total: result.target_oncall_total,
-        max_onsite_weekends: result.max_onsite_weekends,
-        target_onsite_weekends: result.target_onsite_weekends,
-        max_oncall_weekends: result.max_oncall_weekends,
-        target_oncall_weekends: result.target_oncall_weekends,
-        preferred_onsite_weekdays: result.preferred_onsite_weekdays,
-        preferred_oncall_weekdays: result.preferred_oncall_weekdays,
-        avoid_onsite_weekdays: result.avoid_onsite_weekdays,
-        avoid_oncall_weekdays: result.avoid_oncall_weekdays,
-        allow_weekend_consecutive_onsite_oncall: result.allow_weekend_consecutive_onsite_oncall,
-        preferred_partners: result.preferred_partners,
-        comments: result.comments,
-      });
+      // Update undo/redo stack with reverted values (resets local history)
+      const newFormData = apiToFormData(result);
+      undoRedo.reset(newFormData);
+
+      // Validate new data
+      const validationResult = validatePreferences(newFormData);
+      setValidationErrors(validationResult.errors);
+
       setPreferenceData((prev) =>
         prev
           ? {
@@ -286,42 +372,26 @@ export const PreferencesManagement = () => {
           : null
       );
     } catch (err: any) {
-      alert(err.response?.data?.detail?.detail || "Cannot undo");
+      alert(err.response?.data?.detail?.detail || "Cannot go to previous version");
     } finally {
       setSaveLoading(false);
     }
   };
 
-  const handleRedo = async () => {
+  const handleNextVersion = async () => {
     if (!selectedDoctor || !preferenceData?.can_redo) return;
 
     try {
       setSaveLoading(true);
       const result = await preferencesApi.revertNext(year, month, selectedDoctor.id);
-      // Update form data with reverted values
-      setFormData({
-        unavailable_onsite_days: result.unavailable_onsite_days,
-        unavailable_oncall_days: result.unavailable_oncall_days,
-        preferred_onsite_days: result.preferred_onsite_days,
-        preferred_oncall_days: result.preferred_oncall_days,
-        min_onsite_total: result.min_onsite_total,
-        max_onsite_total: result.max_onsite_total,
-        target_onsite_total: result.target_onsite_total,
-        min_oncall_total: result.min_oncall_total,
-        max_oncall_total: result.max_oncall_total,
-        target_oncall_total: result.target_oncall_total,
-        max_onsite_weekends: result.max_onsite_weekends,
-        target_onsite_weekends: result.target_onsite_weekends,
-        max_oncall_weekends: result.max_oncall_weekends,
-        target_oncall_weekends: result.target_oncall_weekends,
-        preferred_onsite_weekdays: result.preferred_onsite_weekdays,
-        preferred_oncall_weekdays: result.preferred_oncall_weekdays,
-        avoid_onsite_weekdays: result.avoid_onsite_weekdays,
-        avoid_oncall_weekdays: result.avoid_oncall_weekdays,
-        allow_weekend_consecutive_onsite_oncall: result.allow_weekend_consecutive_onsite_oncall,
-        preferred_partners: result.preferred_partners,
-        comments: result.comments,
-      });
+      // Update undo/redo stack with reverted values (resets local history)
+      const newFormData = apiToFormData(result);
+      undoRedo.reset(newFormData);
+
+      // Validate new data
+      const validationResult = validatePreferences(newFormData);
+      setValidationErrors(validationResult.errors);
+
       setPreferenceData((prev) =>
         prev
           ? {
@@ -333,7 +403,7 @@ export const PreferencesManagement = () => {
           : null
       );
     } catch (err: any) {
-      alert(err.response?.data?.detail?.detail || "Cannot redo");
+      alert(err.response?.data?.detail?.detail || "Cannot go to next version");
     } finally {
       setSaveLoading(false);
     }
@@ -419,21 +489,65 @@ export const PreferencesManagement = () => {
         {/* Filters */}
         <Card className="mb-6">
           <CardContent className="pt-6">
-            <div className="flex items-center space-x-4">
-              <Label>Filter by Status:</Label>
-              <select
-                value={statusFilter}
-                onChange={(e) => setStatusFilter(e.target.value as any)}
-                className="flex h-10 rounded-md border border-input bg-background px-3 py-2 text-sm"
-              >
-                <option value="all">All ({doctorsWithStatus.length})</option>
-                <option value="submitted">
-                  Submitted ({summary?.submitted.length ?? 0})
-                </option>
-                <option value="missing">
-                  Missing ({summary?.missing.length ?? 0})
-                </option>
-              </select>
+            <div className="flex flex-wrap items-center gap-4">
+              {/* Search */}
+              <div className="flex items-center space-x-2">
+                <Search className="h-4 w-4 text-muted-foreground" />
+                <Input
+                  placeholder="Search by name..."
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  className="w-48"
+                />
+              </div>
+
+              {/* Status filter */}
+              <div className="flex items-center space-x-2">
+                <Label>Status:</Label>
+                <select
+                  value={statusFilter}
+                  onChange={(e) => setStatusFilter(e.target.value as any)}
+                  className="flex h-10 rounded-md border border-input bg-background px-3 py-2 text-sm"
+                >
+                  <option value="all">All ({doctorsWithStatus.length})</option>
+                  <option value="submitted">
+                    Submitted ({summary?.submitted.length ?? 0})
+                  </option>
+                  <option value="missing">
+                    Missing ({summary?.missing.length ?? 0})
+                  </option>
+                </select>
+              </div>
+
+              {/* Role filter */}
+              <div className="flex items-center space-x-2">
+                <Label>Role:</Label>
+                <select
+                  value={roleFilter}
+                  onChange={(e) => setRoleFilter(e.target.value as any)}
+                  className="flex h-10 rounded-md border border-input bg-background px-3 py-2 text-sm"
+                >
+                  <option value="all">All</option>
+                  <option value="specialist">Specialist</option>
+                  <option value="resident">Resident</option>
+                </select>
+              </div>
+
+              {/* Clear filters */}
+              {(searchQuery || statusFilter !== "all" || roleFilter !== "all") && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => {
+                    setSearchQuery("");
+                    setStatusFilter("all");
+                    setRoleFilter("all");
+                  }}
+                >
+                  <RotateCcw className="h-4 w-4 mr-1" />
+                  Clear
+                </Button>
+              )}
             </div>
           </CardContent>
         </Card>
@@ -589,6 +703,11 @@ export const PreferencesManagement = () => {
                     </CardTitle>
                     <CardDescription>
                       {MONTH_NAMES[month - 1]} {year}
+                      {draft.isRestoredFromDraft && (
+                        <span className="ml-2 text-amber-600 font-medium">
+                          (Restored from draft)
+                        </span>
+                      )}
                     </CardDescription>
                   </div>
                   <Button variant="ghost" size="sm" onClick={closeEditModal}>
@@ -608,14 +727,20 @@ export const PreferencesManagement = () => {
                     month={month}
                     colleagues={doctors}
                     deadline={deadline}
-                    formData={formData}
-                    onFormDataChange={setFormData}
+                    formData={undoRedo.current}
+                    onFormDataChange={handleFormDataChange}
                     onSave={handleSaveCheckpoint}
-                    onUndo={handleUndo}
-                    onRedo={handleRedo}
-                    canUndo={preferenceData?.can_undo ?? false}
-                    canRedo={preferenceData?.can_redo ?? false}
+                    onUndo={undoRedo.undo}
+                    onRedo={undoRedo.redo}
+                    canUndo={undoRedo.canUndo}
+                    canRedo={undoRedo.canRedo}
+                    onPreviousVersion={handlePreviousVersion}
+                    onNextVersion={handleNextVersion}
+                    canPreviousVersion={preferenceData?.can_undo ?? false}
+                    canNextVersion={preferenceData?.can_redo ?? false}
                     status={preferenceData?.status ?? "missing"}
+                    periodStatus={preferenceData?.period_status}
+                    validationErrors={validationErrors}
                     isSaving={saveLoading}
                   />
                 )}
