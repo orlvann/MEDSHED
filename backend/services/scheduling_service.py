@@ -684,12 +684,16 @@ def _build_problem_data_for_generate(session: Session, req: ScheduleGenerateRequ
     # When there are no participants, 'preferences' stays empty dict (solver sees no doctors)
 
     # 5) Ignored days and slots from the request
-    ignore_days: set[int] = {int(day) for day in (req.ignore_days or [])}
+    # Keep only days that actually exist in this month (1..days_count).
+    raw_ignore_days: set[int] = {int(day) for day in (req.ignore_days or [])}
+    ignore_days: set[int] = {d for d in raw_ignore_days if 1 <= d <= days_count}
 
     ignore_slots: set[tuple[int, ShiftType]] = set()
     for slot in req.ignore_slots or []:
         # slot is IgnoreSlot DTO with day and ShiftType enum
-        ignore_slots.add((int(slot.day), slot.shift_type))
+        d = int(slot.day)
+        if 1 <= d <= days_count:
+            ignore_slots.add((d, slot.shift_type))
 
     # 6) Build and return ProblemData for the solver
     return ProblemData(
@@ -892,7 +896,7 @@ class SchedulingService:
                     {
                         "code": "ignored_day",
                         "day": d,
-                        "message": "Day was intentionally skipped by admin (ignore_days).",
+                        "justification": "Skipped by admin request (ignore_days).",
                     }
                 )
 
@@ -902,7 +906,7 @@ class SchedulingService:
                         "code": "ignored_slot",
                         "day": d,
                         "shift_type": st.value,
-                        "message": "Slot was intentionally skipped by admin (ignore_slots).",
+                        "justification": "Skipped by admin request (ignore_slots).",
                     }
                 )
 
@@ -913,7 +917,7 @@ class SchedulingService:
                         {
                             "code": i.code,
                             "day": i.day,
-                            "message": i.message,
+                            "justification": i.message,
                         }
                     )
 
