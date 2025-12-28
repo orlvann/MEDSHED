@@ -152,34 +152,35 @@ export interface VacationPeriod {
   endDay: number;
 }
 
-// Check if a day is in vacation period
-export const isDayInVacation = (day: number, vacation: VacationPeriod | null): boolean => {
-  if (!vacation || vacation.startDay <= 0 || vacation.endDay <= 0) return false;
-  return day >= vacation.startDay && day <= vacation.endDay;
+// Check if a day is in any vacation period
+export const isDayInVacation = (day: number, vacations: VacationPeriod[]): boolean => {
+  return vacations.some(v => v.startDay > 0 && v.endDay > 0 && day >= v.startDay && day <= v.endDay);
 };
 
-// Get all days in vacation period as array
-export const getVacationDays = (vacation: VacationPeriod | null): number[] => {
-  if (!vacation || vacation.startDay <= 0 || vacation.endDay <= 0) return [];
+// Get all days from all vacation periods as array
+export const getVacationDays = (vacations: VacationPeriod[]): number[] => {
   const days: number[] = [];
-  for (let d = vacation.startDay; d <= vacation.endDay; d++) {
-    days.push(d);
+  for (const vacation of vacations) {
+    if (vacation.startDay <= 0 || vacation.endDay <= 0) continue;
+    for (let d = vacation.startDay; d <= vacation.endDay; d++) {
+      days.push(d);
+    }
   }
-  return days;
+  return [...new Set(days)].sort((a, b) => a - b);
 };
 
-// Derive vacation period from unavailable days arrays
-// Vacation is the longest consecutive range of days that are in BOTH arrays
+// Derive all vacation periods from unavailable days arrays
+// Vacation periods are consecutive ranges of days that are in BOTH arrays
 export const deriveVacationFromDays = (
   unavailableOnsiteDays: number[],
   unavailableOncallDays: number[]
-): VacationPeriod | null => {
+): VacationPeriod[] => {
   // Find days that are in both arrays (intersection)
   const commonDays = unavailableOnsiteDays
     .filter((d) => unavailableOncallDays.includes(d))
     .sort((a, b) => a - b);
 
-  if (commonDays.length === 0) return null;
+  if (commonDays.length === 0) return [];
 
   // Find all consecutive ranges
   const ranges: VacationPeriod[] = [];
@@ -206,14 +207,7 @@ export const deriveVacationFromDays = (
     ranges.push({ startDay: rangeStart, endDay: rangeEnd });
   }
 
-  // Return the longest range (most likely to be vacation)
-  if (ranges.length === 0) return null;
-
-  return ranges.reduce((longest, current) =>
-    current.endDay - current.startDay > longest.endDay - longest.startDay
-      ? current
-      : longest
-  );
+  return ranges;
 };
 
 // Check if a specific day number in a month is a weekend
@@ -231,6 +225,24 @@ export const countDaysByType = (
   let weekdays = 0;
   let weekends = 0;
   for (const day of days) {
+    if (isDayWeekend(year, month, day)) {
+      weekends++;
+    } else {
+      weekdays++;
+    }
+  }
+  return { weekdays, weekends };
+};
+
+// Count total weekdays and weekends in a month
+export const getMonthDayCounts = (
+  year: number,
+  month: number
+): { weekdays: number; weekends: number } => {
+  const daysInMonth = getDaysInMonth(year, month);
+  let weekdays = 0;
+  let weekends = 0;
+  for (let day = 1; day <= daysInMonth; day++) {
     if (isDayWeekend(year, month, day)) {
       weekends++;
     } else {

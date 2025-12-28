@@ -26,8 +26,8 @@ interface IntegratedCalendarProps {
   preferredOncallDays: number[];
   onOncallDayClick: (day: number) => void;
 
-  // Vacation
-  vacation?: VacationPeriod | null;
+  // Vacation periods
+  vacations?: VacationPeriod[];
 
   disabled?: boolean;
 }
@@ -43,7 +43,7 @@ export const IntegratedCalendar = ({
   unavailableOncallDays,
   preferredOncallDays,
   onOncallDayClick,
-  vacation = null,
+  vacations = [],
   disabled = false,
 }: IntegratedCalendarProps) => {
   const weeks = getWeeksInMonth(year, month);
@@ -154,7 +154,7 @@ export const IntegratedCalendar = ({
                     />
                   );
                 }
-                const isVacation = isDayInVacation(day, vacation);
+                const isVacation = isDayInVacation(day, vacations);
                 const state = getDayState(day, unavailableOnsiteDays, preferredOnsiteDays);
                 const isClickable = !disabled && !isVacation;
 
@@ -189,7 +189,7 @@ export const IntegratedCalendar = ({
                     />
                   );
                 }
-                const isVacation = isDayInVacation(day, vacation);
+                const isVacation = isDayInVacation(day, vacations);
                 const state = getDayState(day, unavailableOncallDays, preferredOncallDays);
                 const isClickable = !disabled && !isVacation;
 

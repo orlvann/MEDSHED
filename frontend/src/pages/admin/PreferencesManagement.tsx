@@ -177,7 +177,7 @@ export const PreferencesManagement = () => {
       undoRedo.set(newData);
 
       // Validate
-      const result = validatePreferences(newData);
+      const result = validatePreferences(newData, year, month);
       setValidationErrors(result.errors);
 
       // Debounced autosave to localStorage
@@ -190,7 +190,7 @@ export const PreferencesManagement = () => {
         }
       }, 1000);
     },
-    [undoRedo, draft, selectedDoctor]
+    [undoRedo, draft, selectedDoctor, year, month]
   );
 
   // Deadline management
@@ -276,7 +276,7 @@ export const PreferencesManagement = () => {
       undoRedo.reset(initialData);
 
       // Validate initial data
-      const result = validatePreferences(initialData);
+      const result = validatePreferences(initialData, year, month);
       setValidationErrors(result.errors);
     } catch (err: any) {
       alert(err.response?.data?.detail?.detail || "Failed to load preferences");
@@ -358,7 +358,7 @@ export const PreferencesManagement = () => {
       undoRedo.reset(newFormData);
 
       // Validate new data
-      const validationResult = validatePreferences(newFormData);
+      const validationResult = validatePreferences(newFormData, year, month);
       setValidationErrors(validationResult.errors);
 
       setPreferenceData((prev) =>
@@ -389,7 +389,7 @@ export const PreferencesManagement = () => {
       undoRedo.reset(newFormData);
 
       // Validate new data
-      const validationResult = validatePreferences(newFormData);
+      const validationResult = validatePreferences(newFormData, year, month);
       setValidationErrors(validationResult.errors);
 
       setPreferenceData((prev) =>
@@ -509,13 +509,9 @@ export const PreferencesManagement = () => {
                   onChange={(e) => setStatusFilter(e.target.value as any)}
                   className="flex h-10 rounded-md border border-input bg-background px-3 py-2 text-sm"
                 >
-                  <option value="all">All ({doctorsWithStatus.length})</option>
-                  <option value="submitted">
-                    Submitted ({summary?.submitted.length ?? 0})
-                  </option>
-                  <option value="missing">
-                    Missing ({summary?.missing.length ?? 0})
-                  </option>
+                  <option value="all">All</option>
+                  <option value="submitted">Submitted</option>
+                  <option value="missing">Missing</option>
                 </select>
               </div>
 

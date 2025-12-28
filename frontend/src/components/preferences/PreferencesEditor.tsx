@@ -9,7 +9,7 @@ import { ColleagueSelector } from "./ColleagueSelector";
 import { AdditionalNote } from "./AdditionalNote";
 import { WeekendRuleSection } from "./WeekendRuleSection";
 import { VacationModal } from "./VacationModal";
-import { getDayState, getNextDayState, getDaysInMonth, deriveVacationFromDays, isDayWeekend, countDaysByType, type VacationPeriod } from "./types";
+import { getDayState, getNextDayState, getDaysInMonth, deriveVacationFromDays, isDayWeekend, type VacationPeriod } from "./types";
 import type { ValidationError } from "./validation";
 import type { Doctor, PreferenceWorkingPut, PreferenceStatus, PreferencesDeadlineRead, PeriodStatus } from "../../types";
 
@@ -115,8 +115,8 @@ export const PreferencesEditor = ({
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [vacationModalOpen, setVacationModalOpen] = useState(false);
 
-  // Derive vacation from formData so it's restored on undo/redo
-  const vacation = useMemo(
+  // Derive vacations from formData so it's restored on undo/redo
+  const vacations = useMemo(
     () => deriveVacationFromDays(formData.unavailable_onsite_days, formData.unavailable_oncall_days),
     [formData.unavailable_onsite_days, formData.unavailable_oncall_days]
   );
@@ -141,26 +141,7 @@ export const PreferencesEditor = ({
         formData.preferred_onsite_days
       );
       const nextState = getNextDayState(currentState);
-
-      // Check limits before allowing "want" state
-      if (nextState === "want") {
-        const isWeekendDay = isDayWeekend(year, month, day);
-        const currentCounts = countDaysByType(year, month, formData.preferred_onsite_days);
-
-        if (isWeekendDay) {
-          // Check weekend limit (null = no limit, 0 = none allowed, >0 = check against limit)
-          const maxWeekends = formData.max_onsite_weekends;
-          if (maxWeekends !== null && currentCounts.weekends >= maxWeekends) {
-            return; // Limit reached, don't add
-          }
-        } else {
-          // Check total/weekday limit (null = no limit, 0 = none allowed, >0 = check against limit)
-          const maxTotal = formData.max_onsite_total;
-          if (maxTotal !== null && currentCounts.weekdays >= maxTotal) {
-            return; // Limit reached, don't add
-          }
-        }
-      }
+      const isWeekendDay = isDayWeekend(year, month, day);
 
       let newUnavailable = [...formData.unavailable_onsite_days];
       let newPreferred = [...formData.preferred_onsite_days];
@@ -169,19 +150,63 @@ export const PreferencesEditor = ({
       newUnavailable = newUnavailable.filter((d) => d !== day);
       newPreferred = newPreferred.filter((d) => d !== day);
 
+      // Track max field changes
+      let newMaxTotal = formData.max_onsite_total;
+      let newMaxWeekends = formData.max_onsite_weekends;
+
+      // Count current preferred days by type (before modification)
+      let currentWeekdayCount = 0;
+      let currentWeekendCount = 0;
+      for (const d of formData.preferred_onsite_days) {
+        if (isDayWeekend(year, month, d)) {
+          currentWeekendCount++;
+        } else {
+          currentWeekdayCount++;
+        }
+      }
+
       // Add to appropriate array based on new state
       if (nextState === "cant") {
         newUnavailable.push(day);
         newUnavailable.sort((a, b) => a - b);
+        // Decrement max when leaving "want" state, but not below current count - 1
+        if (currentState === "want") {
+          if (isWeekendDay) {
+            newMaxWeekends = Math.max(currentWeekendCount - 1, 0);
+          } else {
+            newMaxTotal = Math.max(currentWeekdayCount - 1, 0);
+          }
+        }
       } else if (nextState === "want") {
         newPreferred.push(day);
         newPreferred.sort((a, b) => a - b);
+        // Increment max only if current count equals max (user hit the limit)
+        if (isWeekendDay) {
+          if (newMaxWeekends !== null && currentWeekendCount >= newMaxWeekends) {
+            newMaxWeekends = currentWeekendCount + 1;
+          }
+        } else {
+          if (newMaxTotal !== null && currentWeekdayCount >= newMaxTotal) {
+            newMaxTotal = currentWeekdayCount + 1;
+          }
+        }
+      } else {
+        // nextState === "can" - just decrement max to match new count
+        if (currentState === "want") {
+          if (isWeekendDay) {
+            newMaxWeekends = Math.max(currentWeekendCount - 1, 0);
+          } else {
+            newMaxTotal = Math.max(currentWeekdayCount - 1, 0);
+          }
+        }
       }
 
       onFormDataChange({
         ...formData,
         unavailable_onsite_days: newUnavailable,
         preferred_onsite_days: newPreferred,
+        max_onsite_total: newMaxTotal,
+        max_onsite_weekends: newMaxWeekends,
       });
     },
     [formData, onFormDataChange, year, month]
@@ -196,26 +221,7 @@ export const PreferencesEditor = ({
         formData.preferred_oncall_days
       );
       const nextState = getNextDayState(currentState);
-
-      // Check limits before allowing "want" state
-      if (nextState === "want") {
-        const isWeekendDay = isDayWeekend(year, month, day);
-        const currentCounts = countDaysByType(year, month, formData.preferred_oncall_days);
-
-        if (isWeekendDay) {
-          // Check weekend limit (null = no limit, 0 = none allowed, >0 = check against limit)
-          const maxWeekends = formData.max_oncall_weekends;
-          if (maxWeekends !== null && currentCounts.weekends >= maxWeekends) {
-            return; // Limit reached, don't add
-          }
-        } else {
-          // Check total/weekday limit (null = no limit, 0 = none allowed, >0 = check against limit)
-          const maxTotal = formData.max_oncall_total;
-          if (maxTotal !== null && currentCounts.weekdays >= maxTotal) {
-            return; // Limit reached, don't add
-          }
-        }
-      }
+      const isWeekendDay = isDayWeekend(year, month, day);
 
       let newUnavailable = [...formData.unavailable_oncall_days];
       let newPreferred = [...formData.preferred_oncall_days];
@@ -223,18 +229,63 @@ export const PreferencesEditor = ({
       newUnavailable = newUnavailable.filter((d) => d !== day);
       newPreferred = newPreferred.filter((d) => d !== day);
 
+      // Track max field changes
+      let newMaxTotal = formData.max_oncall_total;
+      let newMaxWeekends = formData.max_oncall_weekends;
+
+      // Count current preferred days by type (before modification)
+      let currentWeekdayCount = 0;
+      let currentWeekendCount = 0;
+      for (const d of formData.preferred_oncall_days) {
+        if (isDayWeekend(year, month, d)) {
+          currentWeekendCount++;
+        } else {
+          currentWeekdayCount++;
+        }
+      }
+
+      // Add to appropriate array based on new state
       if (nextState === "cant") {
         newUnavailable.push(day);
         newUnavailable.sort((a, b) => a - b);
+        // Decrement max when leaving "want" state, but not below current count - 1
+        if (currentState === "want") {
+          if (isWeekendDay) {
+            newMaxWeekends = Math.max(currentWeekendCount - 1, 0);
+          } else {
+            newMaxTotal = Math.max(currentWeekdayCount - 1, 0);
+          }
+        }
       } else if (nextState === "want") {
         newPreferred.push(day);
         newPreferred.sort((a, b) => a - b);
+        // Increment max only if current count equals max (user hit the limit)
+        if (isWeekendDay) {
+          if (newMaxWeekends !== null && currentWeekendCount >= newMaxWeekends) {
+            newMaxWeekends = currentWeekendCount + 1;
+          }
+        } else {
+          if (newMaxTotal !== null && currentWeekdayCount >= newMaxTotal) {
+            newMaxTotal = currentWeekdayCount + 1;
+          }
+        }
+      } else {
+        // nextState === "can" - just decrement max to match new count
+        if (currentState === "want") {
+          if (isWeekendDay) {
+            newMaxWeekends = Math.max(currentWeekendCount - 1, 0);
+          } else {
+            newMaxTotal = Math.max(currentWeekdayCount - 1, 0);
+          }
+        }
       }
 
       onFormDataChange({
         ...formData,
         unavailable_oncall_days: newUnavailable,
         preferred_oncall_days: newPreferred,
+        max_oncall_total: newMaxTotal,
+        max_oncall_weekends: newMaxWeekends,
       });
     },
     [formData, onFormDataChange, year, month]
@@ -267,30 +318,54 @@ export const PreferencesEditor = ({
     setVacationModalOpen(true);
   }, []);
 
-  // Save vacation period - applies vacation days to formData
-  const handleSaveVacation = useCallback((newVacation: VacationPeriod) => {
+  // Save vacation periods - applies vacation days to formData
+  const handleSaveVacation = useCallback((newVacations: VacationPeriod[]) => {
     setVacationModalOpen(false);
 
-    // Generate all days in vacation period
+    // Generate all days from all vacation periods
     const vacationDays: number[] = [];
-    for (let day = newVacation.startDay; day <= newVacation.endDay; day++) {
-      vacationDays.push(day);
+    for (const vacation of newVacations) {
+      for (let day = vacation.startDay; day <= vacation.endDay; day++) {
+        vacationDays.push(day);
+      }
     }
 
-    // Add vacation days to unavailable arrays (avoiding duplicates)
-    const newUnavailableOnsite = [
-      ...new Set([...formData.unavailable_onsite_days, ...vacationDays]),
-    ].sort((a, b) => a - b);
-    const newUnavailableOncall = [
-      ...new Set([...formData.unavailable_oncall_days, ...vacationDays]),
-    ].sort((a, b) => a - b);
+    // Get current vacation days to compare
+    const currentVacationDays = new Set<number>();
+    for (const v of vacations) {
+      for (let d = v.startDay; d <= v.endDay; d++) {
+        currentVacationDays.add(d);
+      }
+    }
+
+    // Days to add (new vacations)
+    const daysToAdd = vacationDays.filter(d => !currentVacationDays.has(d));
+    // Days to remove (no longer in vacation)
+    const daysToRemove = [...currentVacationDays].filter(d => !vacationDays.includes(d));
+
+    // Update unavailable arrays
+    let newUnavailableOnsite = [...formData.unavailable_onsite_days];
+    let newUnavailableOncall = [...formData.unavailable_oncall_days];
+
+    // Add new vacation days
+    newUnavailableOnsite = [...new Set([...newUnavailableOnsite, ...daysToAdd])];
+    newUnavailableOncall = [...new Set([...newUnavailableOncall, ...daysToAdd])];
+
+    // Remove days that are no longer vacation (from both arrays)
+    newUnavailableOnsite = newUnavailableOnsite.filter(d => !daysToRemove.includes(d));
+    newUnavailableOncall = newUnavailableOncall.filter(d => !daysToRemove.includes(d));
+
+    // Sort
+    newUnavailableOnsite.sort((a, b) => a - b);
+    newUnavailableOncall.sort((a, b) => a - b);
 
     // Remove vacation days from preferred arrays
+    const allVacationDays = new Set(vacationDays);
     const newPreferredOnsite = formData.preferred_onsite_days.filter(
-      (d) => !vacationDays.includes(d)
+      (d) => !allVacationDays.has(d)
     );
     const newPreferredOncall = formData.preferred_oncall_days.filter(
-      (d) => !vacationDays.includes(d)
+      (d) => !allVacationDays.has(d)
     );
 
     onFormDataChange({
@@ -300,7 +375,7 @@ export const PreferencesEditor = ({
       preferred_onsite_days: newPreferredOnsite,
       preferred_oncall_days: newPreferredOncall,
     });
-  }, [formData, onFormDataChange]);
+  }, [formData, onFormDataChange, vacations]);
 
   // Reset all preferences
   const handleResetAll = useCallback(() => {
@@ -430,7 +505,7 @@ export const PreferencesEditor = ({
             unavailableOncallDays={formData.unavailable_oncall_days}
             preferredOncallDays={formData.preferred_oncall_days}
             onOncallDayClick={handleOncallDayClick}
-            vacation={vacation}
+            vacations={vacations}
             disabled={isReadOnly}
           />
         </div>
@@ -569,7 +644,7 @@ export const PreferencesEditor = ({
         onSave={handleSaveVacation}
         year={year}
         month={month}
-        existingVacation={vacation}
+        existingVacations={vacations}
       />
     </div>
   );

@@ -1,23 +1,18 @@
-import { useState } from "react";
-import { X } from "lucide-react";
+import { useState, useEffect } from "react";
+import { X, Plus, Trash2 } from "lucide-react";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { Label } from "../ui/label";
 import { Card, CardContent, CardHeader, CardTitle } from "../ui/card";
-import { getDaysInMonth } from "./types";
-
-export interface VacationPeriod {
-  startDay: number;
-  endDay: number;
-}
+import { getDaysInMonth, type VacationPeriod } from "./types";
 
 interface VacationModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onSave: (vacation: VacationPeriod) => void;
+  onSave: (vacations: VacationPeriod[]) => void;
   year: number;
   month: number;
-  existingVacation?: VacationPeriod | null;
+  existingVacations?: VacationPeriod[];
 }
 
 export const VacationModal = ({
@@ -26,26 +21,53 @@ export const VacationModal = ({
   onSave,
   year,
   month,
-  existingVacation,
+  existingVacations = [],
 }: VacationModalProps) => {
   const daysInMonth = getDaysInMonth(year, month);
-  const [startDay, setStartDay] = useState<string>(
-    existingVacation?.startDay?.toString() ?? ""
-  );
-  const [endDay, setEndDay] = useState<string>(
-    existingVacation?.endDay?.toString() ?? ""
-  );
+  const [periods, setPeriods] = useState<VacationPeriod[]>([]);
+  const [newStart, setNewStart] = useState("");
+  const [newEnd, setNewEnd] = useState("");
   const [error, setError] = useState("");
+
+  // Initialize periods when modal opens
+  useEffect(() => {
+    if (isOpen) {
+      setPeriods(existingVacations.length > 0 ? [...existingVacations] : []);
+      setNewStart("");
+      setNewEnd("");
+      setError("");
+    }
+  }, [isOpen, existingVacations]);
 
   if (!isOpen) return null;
 
-  const handleSave = () => {
-    const start = parseInt(startDay, 10);
-    const end = parseInt(endDay, 10);
+  const validatePeriod = (start: number, end: number, excludeIndex?: number): string | null => {
+    if (start < 1 || start > daysInMonth || end < 1 || end > daysInMonth) {
+      return `Days must be between 1 and ${daysInMonth}`;
+    }
 
-    // Validation
-    if (!startDay || !endDay) {
-      setError("Please enter both start and end dates");
+    if (start > end) {
+      return "Start day must be before or equal to end day";
+    }
+
+    // Check overlap with other periods
+    for (let i = 0; i < periods.length; i++) {
+      if (i === excludeIndex) continue;
+      const other = periods[i];
+      if (!(end < other.startDay || start > other.endDay)) {
+        return `Overlaps with existing vacation (${other.startDay}-${other.endDay})`;
+      }
+    }
+
+    return null;
+  };
+
+  const handleAddPeriod = () => {
+    const start = parseInt(newStart, 10);
+    const end = parseInt(newEnd, 10);
+
+    if (!newStart || !newEnd) {
+      setError("Please enter both start and end days");
       return;
     }
 
@@ -54,23 +76,28 @@ export const VacationModal = ({
       return;
     }
 
-    if (start < 1 || start > daysInMonth || end < 1 || end > daysInMonth) {
-      setError(`Days must be between 1 and ${daysInMonth}`);
-      return;
-    }
-
-    if (start > end) {
-      setError("Start day must be before or equal to end day");
+    const validationError = validatePeriod(start, end);
+    if (validationError) {
+      setError(validationError);
       return;
     }
 
     setError("");
-    onSave({ startDay: start, endDay: end });
-    onClose();
+    setPeriods([...periods, { startDay: start, endDay: end }].sort((a, b) => a.startDay - b.startDay));
+    setNewStart("");
+    setNewEnd("");
   };
 
-  const handleClearVacation = () => {
-    onSave({ startDay: 0, endDay: 0 }); // Signal to clear vacation
+  const handleDeletePeriod = (index: number) => {
+    setPeriods(periods.filter((_, i) => i !== index));
+  };
+
+  const handleClearAll = () => {
+    setPeriods([]);
+  };
+
+  const handleSave = () => {
+    onSave(periods);
     onClose();
   };
 
@@ -78,41 +105,75 @@ export const VacationModal = ({
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[60]">
       <Card className="w-full max-w-md mx-4">
         <CardHeader className="flex flex-row items-center justify-between pb-2">
-          <CardTitle className="text-lg">Mark Vacation Period</CardTitle>
+          <CardTitle className="text-lg">Mark Vacation Periods</CardTitle>
           <Button variant="ghost" size="sm" onClick={onClose}>
             <X className="h-4 w-4" />
           </Button>
         </CardHeader>
         <CardContent className="space-y-4">
           <p className="text-sm text-muted-foreground">
-            Select the vacation period. Days in vacation will be marked as unavailable
-            for both on-site and on-call duties and cannot be modified.
+            Add vacation periods. Days in vacation will be marked as unavailable
+            for both on-site and on-call duties.
           </p>
 
-          <div className="grid grid-cols-2 gap-4">
+          {/* Existing periods */}
+          {periods.length > 0 && (
             <div className="space-y-2">
-              <Label htmlFor="startDay">From (day)</Label>
-              <Input
-                id="startDay"
-                type="number"
-                min={1}
-                max={daysInMonth}
-                value={startDay}
-                onChange={(e) => setStartDay(e.target.value)}
-                placeholder={`1-${daysInMonth}`}
-              />
+              <Label>Current vacation periods:</Label>
+              <div className="space-y-1">
+                {periods.map((period, index) => (
+                  <div
+                    key={index}
+                    className="flex items-center justify-between bg-purple-50 text-purple-700 px-3 py-2 rounded-md"
+                  >
+                    <span>
+                      Day {period.startDay} - {period.endDay}
+                    </span>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => handleDeletePeriod(index)}
+                      className="h-6 w-6 p-0 hover:bg-purple-100"
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </Button>
+                  </div>
+                ))}
+              </div>
             </div>
-            <div className="space-y-2">
-              <Label htmlFor="endDay">To (day)</Label>
-              <Input
-                id="endDay"
-                type="number"
-                min={1}
-                max={daysInMonth}
-                value={endDay}
-                onChange={(e) => setEndDay(e.target.value)}
-                placeholder={`1-${daysInMonth}`}
-              />
+          )}
+
+          {/* Add new period */}
+          <div className="space-y-2">
+            <Label>Add new period:</Label>
+            <div className="flex items-end gap-2">
+              <div className="flex-1">
+                <Label htmlFor="startDay" className="text-xs text-muted-foreground">From</Label>
+                <Input
+                  id="startDay"
+                  type="number"
+                  min={1}
+                  max={daysInMonth}
+                  value={newStart}
+                  onChange={(e) => setNewStart(e.target.value)}
+                  placeholder={`1-${daysInMonth}`}
+                />
+              </div>
+              <div className="flex-1">
+                <Label htmlFor="endDay" className="text-xs text-muted-foreground">To</Label>
+                <Input
+                  id="endDay"
+                  type="number"
+                  min={1}
+                  max={daysInMonth}
+                  value={newEnd}
+                  onChange={(e) => setNewEnd(e.target.value)}
+                  placeholder={`1-${daysInMonth}`}
+                />
+              </div>
+              <Button onClick={handleAddPeriod} size="sm" className="h-10">
+                <Plus className="h-4 w-4" />
+              </Button>
             </div>
           </div>
 
@@ -121,9 +182,9 @@ export const VacationModal = ({
           )}
 
           <div className="flex justify-between pt-2">
-            {existingVacation && existingVacation.startDay > 0 && (
-              <Button variant="outline" onClick={handleClearVacation}>
-                Clear Vacation
+            {periods.length > 0 && (
+              <Button variant="outline" onClick={handleClearAll}>
+                Clear All
               </Button>
             )}
             <div className="flex gap-2 ml-auto">

@@ -1,5 +1,8 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 import type { PreferenceWorkingPut } from "../types";
+
+const DRAFT_KEY_PREFIX = "preferences_draft_";
+const MAX_DRAFT_AGE_DAYS = 31;
 
 interface DraftMeta {
   savedAt: string;
@@ -13,18 +16,53 @@ interface DraftData {
 
 interface LocalStorageDraftResult {
   saveDraft: (doctorId: number, data: PreferenceWorkingPut) => void;
-  loadDraft: (doctorId: number) => PreferenceWorkingPut | null;
+  loadDraft: (doctorId: number, options?: { deleteIfExpired?: boolean }) => PreferenceWorkingPut | null;
   clearDraft: (doctorId: number) => void;
   isRestoredFromDraft: boolean;
   setRestoredFromDraft: (value: boolean) => void;
 }
 
 /**
+ * Clean up old preference drafts from localStorage.
+ * Removes drafts older than MAX_DRAFT_AGE_DAYS.
+ */
+function cleanupOldDrafts(): void {
+  const now = new Date();
+  const keysToRemove: string[] = [];
+
+  for (let i = 0; i < localStorage.length; i++) {
+    const key = localStorage.key(i);
+    if (!key || !key.startsWith(DRAFT_KEY_PREFIX)) continue;
+
+    try {
+      const stored = localStorage.getItem(key);
+      if (!stored) continue;
+
+      const parsed: DraftData = JSON.parse(stored);
+      const savedAt = new Date(parsed.meta.savedAt);
+      const ageInDays = (now.getTime() - savedAt.getTime()) / (1000 * 60 * 60 * 24);
+
+      if (ageInDays > MAX_DRAFT_AGE_DAYS) {
+        keysToRemove.push(key);
+      }
+    } catch {
+      // Invalid data, remove it
+      keysToRemove.push(key);
+    }
+  }
+
+  for (const key of keysToRemove) {
+    localStorage.removeItem(key);
+  }
+}
+
+/**
  * Hook for managing localStorage draft of preferences.
- * Automatically cleans up drafts when deadline passes.
  *
  * Functions accept doctorId as parameter to avoid timing issues
  * when opening/closing modals.
+ *
+ * Automatically cleans up drafts older than 31 days on mount.
  *
  * @param year - Year of the preference period
  * @param month - Month of the preference period
@@ -37,8 +75,13 @@ export function useLocalStorageDraft(
 ): LocalStorageDraftResult {
   const [isRestoredFromDraft, setRestoredFromDraft] = useState(false);
 
+  // Clean up old drafts on mount (once per session)
+  useEffect(() => {
+    cleanupOldDrafts();
+  }, []);
+
   const getKey = useCallback(
-    (doctorId: number) => `preferences_draft_${year}_${month}_${doctorId}`,
+    (doctorId: number) => `${DRAFT_KEY_PREFIX}${year}_${month}_${doctorId}`,
     [year, month]
   );
 
@@ -60,7 +103,7 @@ export function useLocalStorageDraft(
   );
 
   const loadDraft = useCallback(
-    (doctorId: number): PreferenceWorkingPut | null => {
+    (doctorId: number, options?: { deleteIfExpired?: boolean }): PreferenceWorkingPut | null => {
       if (!doctorId) return null;
 
       const key = getKey(doctorId);
@@ -69,8 +112,9 @@ export function useLocalStorageDraft(
         try {
           const parsed: DraftData = JSON.parse(stored);
 
-          // Check if deadline has passed - auto-delete
-          if (parsed.meta.deadline) {
+          // For doctor mode: delete draft if deadline has passed
+          // For admin mode: keep draft even after deadline
+          if (options?.deleteIfExpired && parsed.meta.deadline) {
             const deadlineDate = new Date(parsed.meta.deadline);
             if (deadlineDate < new Date()) {
               localStorage.removeItem(key);

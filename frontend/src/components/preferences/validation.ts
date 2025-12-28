@@ -1,4 +1,5 @@
 import type { PreferenceWorkingPut } from "../../types";
+import { countDaysByType, getMonthDayCounts } from "./types";
 
 export interface ValidationError {
   field: string;
@@ -15,12 +16,15 @@ export interface ValidationResult {
  *
  * Rules:
  * - No negative numbers
+ * - Preferred days count must not exceed max limits
  *
  * Note: Target values are auto-clamped to max in ShiftCountsGrid,
  * so we don't need to validate target <= max here.
  */
 export function validatePreferences(
-  data: PreferenceWorkingPut
+  data: PreferenceWorkingPut,
+  year: number,
+  month: number
 ): ValidationResult {
   const errors: ValidationError[] = [];
 
@@ -44,6 +48,81 @@ export function validatePreferences(
         message: `${label} cannot be negative`,
       });
     }
+  }
+
+  // Rule: Target (I want) cannot exceed max (I can)
+  const targetMaxPairs = [
+    { target: "target_onsite_total", max: "max_onsite_total", label: "on-site weekdays" },
+    { target: "target_onsite_weekends", max: "max_onsite_weekends", label: "on-site weekends" },
+    { target: "target_oncall_total", max: "max_oncall_total", label: "on-call weekdays" },
+    { target: "target_oncall_weekends", max: "max_oncall_weekends", label: "on-call weekends" },
+  ] as const;
+
+  for (const { target, max, label } of targetMaxPairs) {
+    const targetValue = data[target] as number | null;
+    const maxValue = data[max] as number | null;
+    if (targetValue !== null && maxValue !== null && targetValue > maxValue) {
+      errors.push({
+        field: target,
+        message: `"I want" (${targetValue}) cannot exceed "I can" (${maxValue}) for ${label}`,
+      });
+    }
+  }
+
+  // Rule: Values cannot exceed available days in month
+  const monthCounts = getMonthDayCounts(year, month);
+
+  const dayLimitFields = [
+    { field: "max_onsite_total", limit: monthCounts.weekdays, label: "on-site weekdays", type: "weekdays" },
+    { field: "target_onsite_total", limit: monthCounts.weekdays, label: "on-site weekdays", type: "weekdays" },
+    { field: "max_oncall_total", limit: monthCounts.weekdays, label: "on-call weekdays", type: "weekdays" },
+    { field: "target_oncall_total", limit: monthCounts.weekdays, label: "on-call weekdays", type: "weekdays" },
+    { field: "max_onsite_weekends", limit: monthCounts.weekends, label: "on-site weekends", type: "weekends" },
+    { field: "target_onsite_weekends", limit: monthCounts.weekends, label: "on-site weekends", type: "weekends" },
+    { field: "max_oncall_weekends", limit: monthCounts.weekends, label: "on-call weekends", type: "weekends" },
+    { field: "target_oncall_weekends", limit: monthCounts.weekends, label: "on-call weekends", type: "weekends" },
+  ] as const;
+
+  for (const { field, limit, type } of dayLimitFields) {
+    const value = data[field as keyof PreferenceWorkingPut] as number | null;
+    if (value !== null && value > limit) {
+      errors.push({
+        field,
+        message: `Cannot exceed ${limit} ${type} in this month`,
+      });
+    }
+  }
+
+  // Rule: Preferred days must not exceed max limits
+  const onsiteCounts = countDaysByType(year, month, data.preferred_onsite_days);
+  const oncallCounts = countDaysByType(year, month, data.preferred_oncall_days);
+
+  if (data.max_onsite_total !== null && onsiteCounts.weekdays > data.max_onsite_total) {
+    errors.push({
+      field: "max_onsite_total",
+      message: `You have ${onsiteCounts.weekdays} preferred weekdays but max is ${data.max_onsite_total}`,
+    });
+  }
+
+  if (data.max_onsite_weekends !== null && onsiteCounts.weekends > data.max_onsite_weekends) {
+    errors.push({
+      field: "max_onsite_weekends",
+      message: `You have ${onsiteCounts.weekends} preferred weekends but max is ${data.max_onsite_weekends}`,
+    });
+  }
+
+  if (data.max_oncall_total !== null && oncallCounts.weekdays > data.max_oncall_total) {
+    errors.push({
+      field: "max_oncall_total",
+      message: `You have ${oncallCounts.weekdays} preferred weekdays but max is ${data.max_oncall_total}`,
+    });
+  }
+
+  if (data.max_oncall_weekends !== null && oncallCounts.weekends > data.max_oncall_weekends) {
+    errors.push({
+      field: "max_oncall_weekends",
+      message: `You have ${oncallCounts.weekends} preferred weekends but max is ${data.max_oncall_weekends}`,
+    });
   }
 
   return {
