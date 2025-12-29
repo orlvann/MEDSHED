@@ -231,3 +231,47 @@ export interface PreferencesDeadlineRead {
   status: DeadlineStatus;
   org_timezone: string;
 }
+
+// Schedule types
+export type ShiftType = "onsite" | "oncall";
+
+export interface Assignment {
+  day: number;
+  shift_type: ShiftType;
+  doctor_id: number;
+}
+
+export interface SchedulePayload {
+  participant_doctor_ids: number[];
+  assignments: Assignment[];
+  meta: { labels: string[] };
+}
+
+export interface SchedulePublishedView {
+  version_id: string | null;
+  publications_count: number;
+  can_undo: boolean;
+  can_redo: boolean;
+  audit: Record<string, unknown> | null;
+  payload: SchedulePayload | null;
+}
+
+export interface SchedulePublishedRead {
+  year: number;
+  month: number;
+  org_timezone: string;
+  period_status: PeriodStatus;
+  published: SchedulePublishedView;
+}
+
+export interface MyAssignment {
+  day: number;
+  shift_type: ShiftType;
+}
+
+export interface MyAssignmentsRead {
+  doctor_id: number;
+  year: number;
+  month: number;
+  assignments: MyAssignment[];
+}

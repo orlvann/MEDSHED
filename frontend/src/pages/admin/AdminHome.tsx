@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "../../contexts/AuthContext";
-import { Header } from "../../components/shared/Header";
+import { AdminHeader } from "../../components/shared/AdminHeader";
 import {
   Card,
   CardContent,
@@ -185,7 +185,7 @@ export const AdminHome = () => {
 
   return (
     <div className="min-h-screen bg-gray-50">
-      <Header />
+      <AdminHeader />
       <main className="container mx-auto px-4 py-8">
         {/* Greeting */}
         <div className="mb-8">

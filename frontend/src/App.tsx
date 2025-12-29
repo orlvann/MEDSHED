@@ -11,6 +11,7 @@ import { AdminUsersManagement } from "./pages/admin/AdminUsersManagement";
 import { PendingDoctors } from "./pages/admin/PendingDoctors";
 import { PreferencesManagement } from "./pages/admin/PreferencesManagement";
 import { Unauthorized } from "./pages/Unauthorized";
+import { DoctorHome } from "./pages/doctor/DoctorHome";
 
 function App() {
   return (
@@ -104,10 +105,33 @@ function App() {
             path="/doctor"
             element={
               <ProtectedRoute requiredRole="doctor">
+                <DoctorHome />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/doctor/preferences"
+            element={
+              <ProtectedRoute requiredRole="doctor">
                 <div className="flex items-center justify-center min-h-screen">
                   <div className="text-center">
                     <h1 className="text-2xl font-bold mb-4">
-                      Doctor Dashboard
+                      My Preferences
+                    </h1>
+                    <p className="text-muted-foreground">Coming soon...</p>
+                  </div>
+                </div>
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/doctor/schedules"
+            element={
+              <ProtectedRoute requiredRole="doctor">
+                <div className="flex items-center justify-center min-h-screen">
+                  <div className="text-center">
+                    <h1 className="text-2xl font-bold mb-4">
+                      My Schedules
                     </h1>
                     <p className="text-muted-foreground">Coming soon...</p>
                   </div>

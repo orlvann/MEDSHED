@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import { useNavigate } from "react-router-dom";
-import { Header } from "../../components/shared/Header";
+import { AdminHeader } from "../../components/shared/AdminHeader";
 import { Button } from "../../components/ui/button";
 import { Input } from "../../components/ui/input";
 import { Label } from "../../components/ui/label";
@@ -414,7 +414,7 @@ export const PreferencesManagement = () => {
 
   return (
     <div className="min-h-screen bg-gray-50">
-      <Header />
+      <AdminHeader />
       <main className="container mx-auto px-4 py-8">
         {/* Header */}
         <div className="mb-6 flex items-center justify-between">

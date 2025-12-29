@@ -89,3 +89,26 @@ class UserAdminList(PageMeta):
     """Pagination envelope for admin users listing."""
 
     items: List[UserAdminRead] = Field(default_factory=list)
+
+
+# Profile Update Schemas
+
+
+class ProfileUpdate(BaseModel):
+    """Update current user's profile (name only)."""
+
+    first_name: Optional[str] = Field(None, min_length=1, max_length=100)
+    last_name: Optional[str] = Field(None, min_length=1, max_length=100)
+
+
+class ChangePasswordRequest(BaseModel):
+    """Request to change password."""
+
+    current_password: str = Field(..., min_length=1)
+    new_password: str = Field(..., min_length=8)
+
+
+class ChangePasswordResponse(BaseModel):
+    """Response after successful password change."""
+
+    message: str
