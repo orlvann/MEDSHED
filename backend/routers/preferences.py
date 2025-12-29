@@ -62,7 +62,16 @@ def _guard_doctor_preferences_locked(year: int, month: int, user: UserCtx) -> No
     Admin does NOT use this guard — admins can edit after deadline
     but still cannot change past periods (history lock via _guard_period_closed).
     """
-    if is_doctor_locked_for_period(year=year, month=month, doctor_id=user.user_id):
+    if user.doctor_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=make_error(
+                "no_linked_doctor",
+                detail="user has no linked doctor profile",
+                context={},
+            ),
+        )
+    if is_doctor_locked_for_period(year=year, month=month, doctor_id=user.doctor_id):
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=make_error(
@@ -196,8 +205,16 @@ def me_read_working(
     year: YearInt = Path(...),
     month: MonthInt = Path(...),
 ):
-    doctor_id = user.user_id
-    return get_working(year=year, month=month, doctor_id=doctor_id, actor=user)
+    if user.doctor_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=make_error(
+                "no_linked_doctor",
+                detail="user has no linked doctor profile",
+                context={},
+            ),
+        )
+    return get_working(year=year, month=month, doctor_id=user.doctor_id, actor=user)
 
 
 @router.put(
@@ -213,11 +230,11 @@ def me_put_working(
     month: MonthInt = Path(...),
     payload: PreferenceWorkingPut = Body(...),
 ):
-    # Doctor-specific lock: history + deadline.
+    # Doctor-specific lock: history + deadline (also checks user.doctor_id is not None).
     _guard_doctor_preferences_locked(year, month, user)
 
-    doctor_id = user.user_id
-    return save_working_autosave(year=year, month=month, doctor_id=doctor_id, payload=payload, actor=user)
+    # user.doctor_id is guaranteed non-None after _guard_doctor_preferences_locked
+    return save_working_autosave(year=year, month=month, doctor_id=user.doctor_id, payload=payload, actor=user)  # type: ignore[arg-type]
 
 
 @router.post(
@@ -234,11 +251,11 @@ def me_create_checkpoint(
     month: MonthInt = Path(...),
     body: dict = Body(default_factory=dict),
 ):
-    # Doctor-specific lock: history + deadline.
+    # Doctor-specific lock: history + deadline (also checks user.doctor_id is not None).
     _guard_doctor_preferences_locked(year, month, user)
 
-    doctor_id = user.user_id
-    return create_checkpoint(year=year, month=month, doctor_id=doctor_id, actor=user)
+    # user.doctor_id is guaranteed non-None after _guard_doctor_preferences_locked
+    return create_checkpoint(year=year, month=month, doctor_id=user.doctor_id, actor=user)  # type: ignore[arg-type]
 
 
 @router.post(
@@ -253,10 +270,11 @@ def me_revert_last(
     year: YearInt = Path(...),
     month: MonthInt = Path(...),
 ):
-    # Doctor-specific lock: history + deadline.
+    # Doctor-specific lock: history + deadline (also checks user.doctor_id is not None).
     _guard_doctor_preferences_locked(year, month, user)
 
-    doctor_id = user.user_id
+    # user.doctor_id is guaranteed non-None after _guard_doctor_preferences_locked
+    doctor_id = user.doctor_id  # type: ignore[assignment]
     try:
         # Service may raise ValueError("cannot_undo").
         return revert_last(year=year, month=month, doctor_id=doctor_id, actor=user)
@@ -276,10 +294,11 @@ def me_revert_next(
     year: YearInt = Path(...),
     month: MonthInt = Path(...),
 ):
-    # Doctor-specific lock: history + deadline.
+    # Doctor-specific lock: history + deadline (also checks user.doctor_id is not None).
     _guard_doctor_preferences_locked(year, month, user)
 
-    doctor_id = user.user_id
+    # user.doctor_id is guaranteed non-None after _guard_doctor_preferences_locked
+    doctor_id = user.doctor_id  # type: ignore[assignment]
     try:
         # Service may raise ValueError("cannot_redo").
         return revert_next(year=year, month=month, doctor_id=doctor_id, actor=user)

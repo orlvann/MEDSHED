@@ -121,8 +121,12 @@ export const PreferencesEditor = ({
     [formData.unavailable_onsite_days, formData.unavailable_oncall_days]
   );
 
-  // Derive read-only state from period status
-  const isReadOnly = periodStatus === "past";
+  // Derive read-only state from period status or deadline locked
+  // For doctor mode: locked deadline = read-only
+  // For admin mode: only past period = read-only (admin can edit after deadline)
+  const isReadOnly =
+    periodStatus === "past" ||
+    (mode === "doctor" && deadline?.status === "locked");
 
   // Update a single field
   const updateField = useCallback(
