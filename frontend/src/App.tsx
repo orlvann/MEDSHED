@@ -13,6 +13,7 @@ import { PreferencesManagement } from "./pages/admin/PreferencesManagement";
 import { Unauthorized } from "./pages/Unauthorized";
 import { DoctorHome } from "./pages/doctor/DoctorHome";
 import { DoctorPreferences } from "./pages/doctor/DoctorPreferences";
+import { DoctorSchedules } from "./pages/doctor/DoctorSchedules";
 
 function App() {
   return (
@@ -122,14 +123,7 @@ function App() {
             path="/doctor/schedules"
             element={
               <ProtectedRoute requiredRole="doctor">
-                <div className="flex items-center justify-center min-h-screen">
-                  <div className="text-center">
-                    <h1 className="text-2xl font-bold mb-4">
-                      My Schedules
-                    </h1>
-                    <p className="text-muted-foreground">Coming soon...</p>
-                  </div>
-                </div>
+                <DoctorSchedules />
               </ProtectedRoute>
             }
           />
