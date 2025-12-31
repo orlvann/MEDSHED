@@ -10,7 +10,7 @@ These are small, pure-Python data containers (dataclasses) that are:
 
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Dict, List, Set, Tuple
+from typing import Any, Dict, List, Set, Tuple
 
 from backend.models.common_enums import DoctorRole, ShiftType
 
@@ -50,7 +50,7 @@ class PreferencesInput:
     preferred_onsite_days: List[int] = field(default_factory=list)
     preferred_oncall_days: List[int] = field(default_factory=list)
 
-    # Monthly totals (soft constraints)
+    # Monthly totals (soft caps and targets)
     min_onsite_total: int | None = None  # not used in MVP
     max_onsite_total: int | None = None
     target_onsite_total: int | None = None
@@ -59,19 +59,19 @@ class PreferencesInput:
     max_oncall_total: int | None = None
     target_oncall_total: int | None = None
 
-    # Weekend refinement (Sat–Sun)
+    # Weekend-specific caps and targets (Sat–Sun)
     max_onsite_weekends: int | None = None
     target_onsite_weekends: int | None = None
     max_oncall_weekends: int | None = None
     target_oncall_weekends: int | None = None
 
-    # Weekday patterns (0=Monday..6=Sunday)
+    # Weekly pattern preferences (0=Monday..6=Sunday)
     preferred_onsite_weekdays: List[int] = field(default_factory=list)
     preferred_oncall_weekdays: List[int] = field(default_factory=list)
     avoid_onsite_weekdays: List[int] = field(default_factory=list)
     avoid_oncall_weekdays: List[int] = field(default_factory=list)
 
-    # Other preferences
+    # Flags and relationship preferences
     allow_weekend_consecutive_onsite_oncall: bool = False
     preferred_partners: List[int] = field(default_factory=list)
     comments: str | None = None  # informational only, ignored by solver
@@ -93,6 +93,9 @@ class ProblemData:
 
     # Calendar days of this period, as day numbers 1..31
     days: List[int]
+
+    # Map of day -> weekday (0=Mon .. 6=Sun), computed once in the service.
+    weekdays: Dict[int, int]
 
     # Mapping doctor_id -> DoctorInput
     doctors: Dict[int, DoctorInput]
@@ -127,16 +130,38 @@ class Slot:
 @dataclass
 class HardModel:
     """
-    Minimal hard-constraint model used by the solver engine.
+    Data wrapper for the hard-constraint phase.
 
-    For now it only contains:
-    - problem: original ProblemData for context,
-    - allowed_slots: all slots that are not blocked by hard filters
-    (ignore_days, ignore_slots, unavailable days from preferences).
+    ```
+    This object contains:
+    - a flat copy of the ProblemData fields needed by the solver core,
+    - allowed_slots: a precomputed "hard feasible" doctor list per (day, shift_type).
+
+    Note:
+    - days: full calendar days for this month (1..num_days),
+    - active_days: only days that are inside solver scope (days minus ignore_days,
+      and minus days where both slots are ignored).
     """
 
-    problem: ProblemData
-    allowed_slots: List[Slot]
+    # Base fields (copied from ProblemData so the core does not need to reach outside HardModel)
+    year: int
+    month: int
+    # Full calendar days of this period
+    days: List[int]
+    # Days solver must schedule (constraints iterate only over these)
+    active_days: List[int]
+    doctors: Dict[int, DoctorInput]
+    preferences: Dict[int, PreferencesInput]
+    participant_doctor_ids: Set[int]
+    ignore_days: Set[int] = field(default_factory=set)
+    ignore_slots: Set[Tuple[int, ShiftType]] = field(default_factory=set)
+
+    # HardModel-specific:
+    # For each (day, shift_type) store doctors that are allowed to work in this slot.
+    allowed_slots: Dict[Tuple[int, ShiftType], List[int]] = field(default_factory=dict)
+
+    # Optional: keep seed hints for later stages (not used yet).
+    seed_hints: Any | None = None
 
 
 @dataclass
@@ -174,13 +199,30 @@ class SolverStatus(str, Enum):
 
 
 @dataclass
+class FeasibilityIssue:
+    """
+    Single feasibility issue detected before or during solving.
+
+    This is a lightweight diagnostic describing why the problem
+    cannot be solved (or is very likely infeasible).
+    """
+
+    day: int  # calendar day number (1..31)
+    code: str  # short machine-readable code, e.g. "no_specialist"
+    message: str  # short human-readable explanation
+
+
+@dataclass
 class SolverSolution:
     """
     Full solver result for one month.
 
+    ```
     - status: high-level solver status,
-    - assignments: list of concrete SolverAssignment objects.
+    - assignments: list of concrete SolverAssignment objects,
+    - issues: feasibility issues detected before or during solving.
     """
 
     status: SolverStatus
     assignments: List[SolverAssignment] = field(default_factory=list)
+    issues: List[FeasibilityIssue] = field(default_factory=list)

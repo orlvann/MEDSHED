@@ -18,11 +18,11 @@ Policy:
 
 from __future__ import annotations
 
-from calendar import monthrange
 from typing import Dict, List, Set, Tuple
 
+from backend.core.issues import classify_availability_risk_with_reasons
 from backend.db.session import SessionLocal
-from backend.models.common_enums import DoctorRole, PeriodStatus, RiskLevel
+from backend.models.common_enums import DoctorRole, PeriodStatus
 from backend.models.orm.doctor import Doctor
 from backend.models.orm.preference import PreferencePointer, PreferenceVersion
 from backend.models.schemas.availability import (
@@ -32,19 +32,7 @@ from backend.models.schemas.availability import (
 )
 from backend.models.schemas.doctor import DoctorMini
 from backend.services.preference_service import ensure_latest_checkpoints_for_period
-from backend.utils.timez import ORG_TZ, get_period_status
-
-# Tunable thresholds for risk classification.
-# You can adjust these later after testing on real data.
-MIN_OK_DOCTORS_PER_CATEGORY = 2  # how many doctors per category is considered "safe"
-MIN_OK_SPECIALISTS_TOTAL = 2  # how many specialists per day is considered "safe enough"
-
-
-def _days_in_month(year: int, month: int) -> int:
-    """Return the real number of days in given month/year."""
-    # monthrange returns (weekday_of_first_day, number_of_days)
-    _, days = monthrange(year, month)
-    return days
+from backend.utils.timez import ORG_TZ, days_in_month, get_period_status
 
 
 def _compute_available_days_for_doctor(
@@ -67,8 +55,8 @@ def _compute_available_days_for_doctor(
         -> read payload from PreferenceVersion and use "unavailable_*" lists
            to mark days as unavailable; all other days are available.
     """
-    days_in_month = _days_in_month(year, month)
-    all_days = set(range(1, days_in_month + 1))
+    num_days = days_in_month(year, month)
+    all_days = set(range(1, num_days + 1))
 
     # Load pointer for this doctor+period.
     pointer: PreferencePointer | None = (
@@ -99,65 +87,9 @@ def _compute_available_days_for_doctor(
     return available_onsite, available_oncall
 
 
-def _compute_risk_for_day(
-    *,
-    spec_onsite: int,
-    res_onsite: int,
-    spec_oncall: int,
-    res_oncall: int,
-) -> RiskLevel:
-    """
-    Compute RiskLevel for a single day based on per-category counts.
-
-    Meaning of inputs:
-    - spec_onsite / res_onsite: how many specialists / residents are available for ONSITE.
-    - spec_oncall / res_oncall: how many specialists / residents are available for ONCALL.
-
-    Derived totals:
-    - total_specialists = all specialists available that day (duty + on_call).
-    - total_doctors     = all doctors available that day (specialists + residents).
-    - total_duty        = all doctors available for ON_DUTY.
-    - total_oncall      = all doctors available for ON_CALL.
-
-    Rules:
-    - critical:
-        * there are 0 or 1 doctors in total (almost nobody to choose from), OR
-        * there is no specialist at all (only residents).
-    - ok:
-        * there are enough doctors in BOTH categories:
-          - total_duty   >= MIN_OK_DOCTORS_PER_CATEGORY
-          - total_oncall >= MIN_OK_DOCTORS_PER_CATEGORY
-        * and there are enough specialists in total:
-          - total_specialists >= MIN_OK_SPECIALISTS_TOTAL
-    - alert:
-        * everything else (not critical and not ok).
-    """
-    total_specialists = spec_onsite + spec_oncall
-    total_residents = res_onsite + res_oncall
-
-    total_doctors = total_specialists + total_residents
-
-    # Critical if almost nobody is available (0 or 1 doctor total).
-    if total_doctors <= 1:
-        return RiskLevel.critical
-
-    # Critical if there is no specialist at all (only residents).
-    if total_specialists == 0:
-        return RiskLevel.critical
-
-    total_onsite = spec_onsite + res_onsite
-    total_oncall = spec_oncall + res_oncall
-
-    # "Ok" if both categories have "enough" doctors and specialists.
-    if (
-        total_onsite >= MIN_OK_DOCTORS_PER_CATEGORY
-        and total_oncall >= MIN_OK_DOCTORS_PER_CATEGORY
-        and total_specialists >= MIN_OK_SPECIALISTS_TOTAL
-    ):
-        return RiskLevel.ok
-
-    # All other cases are "alert" (feasible but risky).
-    return RiskLevel.alert
+# NOTE:
+# Risk classification is shared in backend/core/risk.py now (single source of truth).
+# Use classify_day_risk_for_availability(...) instead of a local helper.
 
 
 def get_month_availability(*, year: int, month: int, actor) -> AvailabilityOverviewRead:
@@ -175,13 +107,13 @@ def get_month_availability(*, year: int, month: int, actor) -> AvailabilityOverv
 
     period_status = PeriodStatus(get_period_status(year, month))
     org_tz = ORG_TZ
-    days_in_month = _days_in_month(year, month)
+    num_days = days_in_month(year, month)
 
     # Pre-initialize counters for each day.
-    spec_onsite_counts: Dict[int, int] = {d: 0 for d in range(1, days_in_month + 1)}
-    res_onsite_counts: Dict[int, int] = {d: 0 for d in range(1, days_in_month + 1)}
-    spec_oncall_counts: Dict[int, int] = {d: 0 for d in range(1, days_in_month + 1)}
-    res_oncall_counts: Dict[int, int] = {d: 0 for d in range(1, days_in_month + 1)}
+    spec_onsite_counts: Dict[int, int] = {d: 0 for d in range(1, num_days + 1)}
+    res_onsite_counts: Dict[int, int] = {d: 0 for d in range(1, num_days + 1)}
+    spec_oncall_counts: Dict[int, int] = {d: 0 for d in range(1, num_days + 1)}
+    res_oncall_counts: Dict[int, int] = {d: 0 for d in range(1, num_days + 1)}
 
     with SessionLocal() as session:
         # Step 2: get all active doctors.
@@ -193,7 +125,7 @@ def get_month_availability(*, year: int, month: int, actor) -> AvailabilityOverv
                 session, year=year, month=month, doctor_id=doc.id
             )
 
-            for day in range(1, days_in_month + 1):
+            for day in range(1, num_days + 1):
                 if day in available_onsite:
                     if doc.role == DoctorRole.specialist:
                         spec_onsite_counts[day] += 1
@@ -206,15 +138,16 @@ def get_month_availability(*, year: int, month: int, actor) -> AvailabilityOverv
                     else:
                         res_oncall_counts[day] += 1
 
-        # Step 4: build summaries with risk for each day.
+        # Step 4: build summaries with risk and issues for each day.
         day_summaries: List[AvailabilityDaySummary] = []
-        for day in range(1, days_in_month + 1):
+        for day in range(1, num_days + 1):
             spec_onsite = spec_onsite_counts[day]
             res_onsite = res_onsite_counts[day]
             spec_oncall = spec_oncall_counts[day]
             res_oncall = res_oncall_counts[day]
 
-            risk = _compute_risk_for_day(
+            # Use shared helper to compute risk and issues
+            details = classify_availability_risk_with_reasons(
                 spec_onsite=spec_onsite,
                 res_onsite=res_onsite,
                 spec_oncall=spec_oncall,
@@ -228,7 +161,8 @@ def get_month_availability(*, year: int, month: int, actor) -> AvailabilityOverv
                     available_residents_onsite=res_onsite,
                     available_specialists_oncall=spec_oncall,
                     available_residents_oncall=res_oncall,
-                    risk=risk,
+                    risk=details.risk,
+                    risk_issues=details.issues,
                 )
             )
 
@@ -249,8 +183,8 @@ def get_day_availability(*, year: int, month: int, day: int, actor) -> Availabil
         AvailabilityDayRead  -> if day is valid for this month.
         None                 -> if day is out of range (caller should return 404).
     """
-    days_in_month = _days_in_month(year, month)
-    if day < 1 or day > days_in_month:
+    num_days = days_in_month(year, month)
+    if day < 1 or day > num_days:
         return None
 
     # Ensure checkpoints are up-to-date before reading preferences.
@@ -286,8 +220,8 @@ def get_day_availability(*, year: int, month: int, day: int, actor) -> Availabil
                 else:
                     residents_oncall.append(mini)
 
-        # Compute risk based on counts for this single day.
-        risk = _compute_risk_for_day(
+        # Compute risk and issues based on counts for this single day.
+        details = classify_availability_risk_with_reasons(
             spec_onsite=len(specialists_onsite),
             res_onsite=len(residents_onsite),
             spec_oncall=len(specialists_oncall),
@@ -304,5 +238,6 @@ def get_day_availability(*, year: int, month: int, day: int, actor) -> Availabil
         residents_onsite=residents_onsite,
         specialists_oncall=specialists_oncall,
         residents_oncall=residents_oncall,
-        risk=risk,
+        risk=details.risk,
+        risk_issues=details.issues,
     )
