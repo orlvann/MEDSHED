@@ -313,6 +313,28 @@ export const doctorPreferencesApi = {
     );
     return response.data;
   },
+
+  revertMyLast: async (
+    year: number,
+    month: number
+  ): Promise<PreferenceRevertRead> => {
+    const response = await api.post<PreferenceRevertRead>(
+      `/api/v1/preferences/${year}/${month}/me/revert-last`,
+      {}
+    );
+    return response.data;
+  },
+
+  revertMyNext: async (
+    year: number,
+    month: number
+  ): Promise<PreferenceRevertRead> => {
+    const response = await api.post<PreferenceRevertRead>(
+      `/api/v1/preferences/${year}/${month}/me/revert-next`,
+      {}
+    );
+    return response.data;
+  },
 };
 
 // Schedules API (Doctor)

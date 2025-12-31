@@ -32,6 +32,7 @@ import type {
   PreferencesDeadlineRead,
   PreferenceWorkingRead,
   PreferenceWorkingPut,
+  PreferenceRevertRead,
 } from "../../types";
 import { ArrowLeft, ChevronLeft, ChevronRight, Clock } from "lucide-react";
 
@@ -235,6 +236,90 @@ export const DoctorPreferences = () => {
     }
   };
 
+  // Helper to convert API response to form data
+  const apiToRevertFormData = (data: PreferenceRevertRead): PreferenceWorkingPut => ({
+    unavailable_onsite_days: data.unavailable_onsite_days,
+    unavailable_oncall_days: data.unavailable_oncall_days,
+    preferred_onsite_days: data.preferred_onsite_days,
+    preferred_oncall_days: data.preferred_oncall_days,
+    min_onsite_total: data.min_onsite_total,
+    max_onsite_total: data.max_onsite_total,
+    target_onsite_total: data.target_onsite_total,
+    min_oncall_total: data.min_oncall_total,
+    max_oncall_total: data.max_oncall_total,
+    target_oncall_total: data.target_oncall_total,
+    max_onsite_weekends: data.max_onsite_weekends,
+    target_onsite_weekends: data.target_onsite_weekends,
+    max_oncall_weekends: data.max_oncall_weekends,
+    target_oncall_weekends: data.target_oncall_weekends,
+    preferred_onsite_weekdays: data.preferred_onsite_weekdays,
+    preferred_oncall_weekdays: data.preferred_oncall_weekdays,
+    avoid_onsite_weekdays: data.avoid_onsite_weekdays,
+    avoid_oncall_weekdays: data.avoid_oncall_weekdays,
+    allow_weekend_consecutive_onsite_oncall: data.allow_weekend_consecutive_onsite_oncall,
+    preferred_partners: data.preferred_partners,
+    comments: data.comments,
+  });
+
+  // Server-side version navigation (Previous/Next)
+  const handlePreviousVersion = async () => {
+    if (!preferenceData?.can_undo) return;
+
+    try {
+      setSaveLoading(true);
+      const result = await doctorPreferencesApi.revertMyLast(year, month);
+      const newFormData = apiToRevertFormData(result);
+      undoRedo.reset(newFormData);
+
+      const validationResult = validatePreferences(newFormData, year, month);
+      setValidationErrors(validationResult.errors);
+
+      setPreferenceData((prev) =>
+        prev
+          ? {
+              ...prev,
+              can_undo: result.can_undo,
+              can_redo: result.can_redo,
+              version_id: result.version_id,
+            }
+          : null
+      );
+    } catch (err: any) {
+      alert(err.response?.data?.detail?.detail || "Cannot go to previous version");
+    } finally {
+      setSaveLoading(false);
+    }
+  };
+
+  const handleNextVersion = async () => {
+    if (!preferenceData?.can_redo) return;
+
+    try {
+      setSaveLoading(true);
+      const result = await doctorPreferencesApi.revertMyNext(year, month);
+      const newFormData = apiToRevertFormData(result);
+      undoRedo.reset(newFormData);
+
+      const validationResult = validatePreferences(newFormData, year, month);
+      setValidationErrors(validationResult.errors);
+
+      setPreferenceData((prev) =>
+        prev
+          ? {
+              ...prev,
+              can_undo: result.can_undo,
+              can_redo: result.can_redo,
+              version_id: result.version_id,
+            }
+          : null
+      );
+    } catch (err: any) {
+      alert(err.response?.data?.detail?.detail || "Cannot go to next version");
+    } finally {
+      setSaveLoading(false);
+    }
+  };
+
   const timeRemaining = getTimeRemaining(deadline?.deadline ?? null);
   const isPast =
     deadline?.status === "locked" || (timeRemaining?.isPast ?? false);
@@ -375,9 +460,10 @@ export const DoctorPreferences = () => {
                 onRedo={undoRedo.redo}
                 canUndo={undoRedo.canUndo}
                 canRedo={undoRedo.canRedo}
-                // No server-side version navigation for doctor
-                canPreviousVersion={false}
-                canNextVersion={false}
+                onPreviousVersion={handlePreviousVersion}
+                onNextVersion={handleNextVersion}
+                canPreviousVersion={preferenceData?.can_undo ?? false}
+                canNextVersion={preferenceData?.can_redo ?? false}
                 status={preferenceData.status}
                 periodStatus={preferenceData.period_status}
                 validationErrors={validationErrors}
