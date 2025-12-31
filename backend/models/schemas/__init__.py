@@ -81,6 +81,9 @@ from .schedule import (
     ScheduleWorkingRead,
 )
 from .user import (
+    ChangePasswordRequest,
+    ChangePasswordResponse,
+    ProfileUpdate,
     UserAdminCreate,
     UserAdminList,
     UserAdminRead,
@@ -109,6 +112,9 @@ __all__ = [
     "UserAdminRead",
     "UserAdminUpdate",
     "UserAdminList",
+    "ProfileUpdate",
+    "ChangePasswordRequest",
+    "ChangePasswordResponse",
     # Doctor
     "DoctorCreate",
     "DoctorPut",

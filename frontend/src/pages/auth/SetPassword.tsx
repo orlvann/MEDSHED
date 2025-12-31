@@ -10,6 +10,7 @@ import {
   CardHeader,
   CardTitle,
 } from "../../components/ui/card";
+import { Eye, EyeOff, Check, X } from "lucide-react";
 import axios from "axios";
 
 const API_BASE_URL =
@@ -23,10 +24,18 @@ export const SetPassword = () => {
 
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
+  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [success, setSuccess] = useState(false);
   const [isExpired, setIsExpired] = useState(false);
+
+  const passwordRequirements = [
+    { label: "At least 8 characters", test: (p: string) => p.length >= 8 },
+    { label: "At least 1 uppercase letter", test: (p: string) => /[A-Z]/.test(p) },
+    { label: "At least 1 digit", test: (p: string) => /[0-9]/.test(p) },
+  ];
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -38,8 +47,9 @@ export const SetPassword = () => {
       return;
     }
 
-    if (newPassword.length < 8) {
-      setError("Password must be at least 8 characters long");
+    const failedRequirements = passwordRequirements.filter(req => !req.test(newPassword));
+    if (failedRequirements.length > 0) {
+      setError("Password does not meet all requirements");
       return;
     }
 
@@ -184,16 +194,26 @@ export const SetPassword = () => {
           <form onSubmit={handleSubmit} className="space-y-4">
             <div className="space-y-2">
               <Label htmlFor="new_password">New Password</Label>
-              <Input
-                id="new_password"
-                type="password"
-                placeholder="Enter your new password"
-                value={newPassword}
-                onChange={(e) => setNewPassword(e.target.value)}
-                required
-                disabled={loading}
-                minLength={8}
-              />
+              <div className="relative">
+                <Input
+                  id="new_password"
+                  type={showPassword ? "text" : "password"}
+                  placeholder="Enter your new password"
+                  value={newPassword}
+                  onChange={(e) => setNewPassword(e.target.value)}
+                  required
+                  disabled={loading}
+                  className="pr-10"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword(!showPassword)}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                  tabIndex={-1}
+                >
+                  {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                </button>
+              </div>
               {passwordStrength && (
                 <p
                   className={`text-xs ${getPasswordStrengthColor(
@@ -206,16 +226,26 @@ export const SetPassword = () => {
             </div>
             <div className="space-y-2">
               <Label htmlFor="confirm_password">Confirm Password</Label>
-              <Input
-                id="confirm_password"
-                type="password"
-                placeholder="Confirm your password"
-                value={confirmPassword}
-                onChange={(e) => setConfirmPassword(e.target.value)}
-                required
-                disabled={loading}
-                minLength={8}
-              />
+              <div className="relative">
+                <Input
+                  id="confirm_password"
+                  type={showConfirmPassword ? "text" : "password"}
+                  placeholder="Confirm your password"
+                  value={confirmPassword}
+                  onChange={(e) => setConfirmPassword(e.target.value)}
+                  required
+                  disabled={loading}
+                  className="pr-10"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowConfirmPassword(!showConfirmPassword)}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                  tabIndex={-1}
+                >
+                  {showConfirmPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                </button>
+              </div>
             </div>
             {error && (
               <div className="p-3 text-sm text-red-600 bg-red-50 border border-red-200 rounded-md">
@@ -247,9 +277,16 @@ export const SetPassword = () => {
                 </Button>
               </div>
             )}
-            <div className="text-xs text-muted-foreground space-y-1">
-              <p>• Password must be at least 8 characters</p>
-              <p>• Use a mix of letters, numbers, and symbols for security</p>
+            <div className="text-xs space-y-1">
+              {passwordRequirements.map((req, index) => {
+                const passed = req.test(newPassword);
+                return (
+                  <p key={index} className={`flex items-center gap-1 ${passed ? "text-green-600" : "text-muted-foreground"}`}>
+                    {passed ? <Check className="h-3 w-3" /> : <X className="h-3 w-3" />}
+                    {req.label}
+                  </p>
+                );
+              })}
             </div>
             {!isExpired && (
               <Button type="submit" className="w-full" disabled={loading}>

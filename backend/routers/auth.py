@@ -26,8 +26,11 @@ from sqlalchemy.orm import Session
 
 from backend.db.session import get_db
 from backend.models.schemas import (
+    ChangePasswordRequest,
+    ChangePasswordResponse,
     ErrorPayload,  # canonical error shape from common (code/detail/context)
     LoginRequest,
+    ProfileUpdate,
     SetPasswordRequest,
     SetPasswordResponse,
     TokenResponse,
@@ -286,11 +289,144 @@ def me(user: UserCtx = Depends(get_current_user), db: Session = Depends(get_db))
             detail=make_error("not_found", "User not found"),
         )
     
+    # Get first_name and last_name from linked Doctor if exists
+    first_name = None
+    last_name = None
+    if db_user.doctor:
+        first_name = db_user.doctor.first_name
+        last_name = db_user.doctor.last_name
+
     return UserRead(
         id=db_user.id,
         email=db_user.email,
         role=db_user.role,
         is_active=db_user.is_active,
+        first_name=first_name,
+        last_name=last_name,
         created_at=db_user.created_at,
         updated_at=db_user.updated_at,
     )
+
+
+@router.patch(
+    "/api/v1/auth/me",
+    response_model=UserRead,
+    summary="Update current user profile",
+    responses={
+        401: {
+            "model": ErrorPayload,
+            "description": "Invalid or expired token",
+        },
+        404: {
+            "model": ErrorPayload,
+            "description": "User or linked Doctor not found",
+        }
+    },
+)
+def update_profile(
+    payload: ProfileUpdate = Body(...),
+    user: UserCtx = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Update the current user's profile (first_name, last_name).
+
+    Since first_name and last_name come from the linked Doctor record,
+    this endpoint updates the Doctor model if the user has one linked.
+    """
+    from backend.models.orm.user import User
+
+    db_user = db.query(User).filter(User.id == user.user_id).first()
+
+    if not db_user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=make_error("not_found", "User not found"),
+        )
+
+    # Only update if user has a linked Doctor
+    if not db_user.doctor:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=make_error("no_doctor_linked", "No doctor profile linked to this user"),
+        )
+
+    # Update the doctor's name fields
+    if payload.first_name is not None:
+        db_user.doctor.first_name = payload.first_name
+    if payload.last_name is not None:
+        db_user.doctor.last_name = payload.last_name
+
+    db.commit()
+    db.refresh(db_user)
+
+    return UserRead(
+        id=db_user.id,
+        email=db_user.email,
+        role=db_user.role,
+        is_active=db_user.is_active,
+        first_name=db_user.doctor.first_name,
+        last_name=db_user.doctor.last_name,
+        created_at=db_user.created_at,
+        updated_at=db_user.updated_at,
+    )
+
+
+@router.post(
+    "/api/v1/auth/change-password",
+    response_model=ChangePasswordResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Change current user's password",
+    responses={
+        400: {
+            "model": ErrorPayload,
+            "description": "Current password is incorrect",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "code": "invalid_password",
+                        "detail": "Current password is incorrect",
+                        "context": None,
+                    }
+                }
+            },
+        },
+        401: {
+            "model": ErrorPayload,
+            "description": "Invalid or expired token",
+        }
+    },
+)
+def change_password(
+    payload: ChangePasswordRequest = Body(...),
+    user: UserCtx = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Change the current user's password.
+
+    Requires the current password for verification before setting the new one.
+    """
+    from backend.models.orm.user import User
+    from backend.utils.security import hash_password, verify_password
+
+    db_user = db.query(User).filter(User.id == user.user_id).first()
+
+    if not db_user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=make_error("not_found", "User not found"),
+        )
+
+    # Verify current password
+    if not verify_password(payload.current_password, db_user.password_hash):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=make_error("invalid_password", "Current password is incorrect"),
+        )
+
+    # Update password
+    db_user.password_hash = hash_password(payload.new_password)
+    db.commit()
+
+    return ChangePasswordResponse(message="Password changed successfully")

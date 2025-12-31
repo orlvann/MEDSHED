@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "../../contexts/AuthContext";
-import { Header } from "../../components/shared/Header";
+import { AdminHeader } from "../../components/shared/AdminHeader";
 import {
   Card,
   CardContent,
@@ -175,16 +175,17 @@ export const AdminHome = () => {
     });
   };
 
-  // Extract first name from email for greeting
+  // Get user's display name for greeting
   const getUserName = () => {
-    if (!user?.email) return "Admin";
-    const name = user.email.split("@")[0];
-    return name.charAt(0).toUpperCase() + name.slice(1);
+    if (user?.first_name) {
+      return user.first_name;
+    }
+    return "Admin";
   };
 
   return (
     <div className="min-h-screen bg-gray-50">
-      <Header />
+      <AdminHeader />
       <main className="container mx-auto px-4 py-8">
         {/* Greeting */}
         <div className="mb-8">

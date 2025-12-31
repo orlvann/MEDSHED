@@ -37,6 +37,8 @@ class UserRead(BaseModel):
     email: EmailStr
     role: UserRole
     is_active: bool = True
+    first_name: Optional[str] = None  # From linked Doctor if exists
+    last_name: Optional[str] = None   # From linked Doctor if exists
     created_at: datetime | None = None
     updated_at: datetime | None = None  # keep parity with other DTOs using created_at/updated_at
 
@@ -47,6 +49,8 @@ class UserRead(BaseModel):
                 "email": "admin@hospital.org",
                 "role": "admin",
                 "is_active": True,
+                "first_name": "John",
+                "last_name": "Doe",
                 "created_at": "2026-01-05T10:22:31Z",
                 "updated_at": "2026-01-12T15:44:10Z",
             }
@@ -85,3 +89,26 @@ class UserAdminList(PageMeta):
     """Pagination envelope for admin users listing."""
 
     items: List[UserAdminRead] = Field(default_factory=list)
+
+
+# Profile Update Schemas
+
+
+class ProfileUpdate(BaseModel):
+    """Update current user's profile (name only)."""
+
+    first_name: Optional[str] = Field(None, min_length=1, max_length=100)
+    last_name: Optional[str] = Field(None, min_length=1, max_length=100)
+
+
+class ChangePasswordRequest(BaseModel):
+    """Request to change password."""
+
+    current_password: str = Field(..., min_length=1)
+    new_password: str = Field(..., min_length=8)
+
+
+class ChangePasswordResponse(BaseModel):
+    """Response after successful password change."""
+
+    message: str

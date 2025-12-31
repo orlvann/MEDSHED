@@ -32,15 +32,17 @@ class UserCtx:
     Minimal user context propagated via Depends.
 
     Contains:
-    - user_id: Database ID of the authenticated user
-    - role: User role ("admin" | "doctor")
+    - user_id: Database ID of the authenticated user (User.id)
+    - role: User role ("admin" | "doctor" | "doctor_admin")
     - email: User email address
+    - doctor_id: Database ID of the linked Doctor (Doctor.id), or None for admins
     """
 
-    def __init__(self, user_id: int, role: str, email: str) -> None:
+    def __init__(self, user_id: int, role: str, email: str, doctor_id: int | None = None) -> None:
         self.user_id = user_id
-        self.role = role  # expected values: "admin" | "doctor"
+        self.role = role  # expected values: "admin" | "doctor" | "doctor_admin"
         self.email = email
+        self.doctor_id = doctor_id  # None for admin users, Doctor.id for doctor users
 
 
 def get_current_user(
@@ -67,7 +69,8 @@ def get_current_user(
         return UserCtx(
             user_id=user.id,
             role=user.role.value,
-            email=user.email
+            email=user.email,
+            doctor_id=user.doctor_id,  # None for admins, Doctor.id for doctor users
         )
     except auth_service.InvalidTokenError:
         raise HTTPException(
@@ -84,10 +87,10 @@ def get_current_user(
 
 def require_admin(user: UserCtx = Depends(get_current_user)) -> UserCtx:
     """
-    Enforce that only admins can access the endpoint.
+    Enforce that only admins and doctor_admins can access the endpoint.
     Returns the user context for downstream use (e.g., auditing).
     """
-    if user.role != "admin":
+    if user.role not in ("admin", "doctor_admin"):
         # Keep error shape consistent with the whole API.
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -98,10 +101,10 @@ def require_admin(user: UserCtx = Depends(get_current_user)) -> UserCtx:
 
 def require_doctor(user: UserCtx = Depends(get_current_user)) -> UserCtx:
     """
-    Enforce that doctors (and admins) can access the endpoint.
+    Enforce that only doctors and doctor_admins can access the endpoint.
     Useful for doctor-facing paths (/me, ICS, /published, exports).
     """
-    if user.role not in ("doctor", "admin"):
+    if user.role not in ("doctor", "doctor_admin"):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail=make_error("forbidden"),

@@ -14,6 +14,15 @@ import type {
   AdminUserCreate,
   AdminUserUpdate,
   AdminUserList,
+  PreferenceWorkingRead,
+  PreferenceWorkingPut,
+  PreferenceAutosaveAck,
+  PreferenceCheckpointCreated,
+  PreferenceRevertRead,
+  PreferencesSummaryRead,
+  PreferencesDeadlineRead,
+  SchedulePublishedRead,
+  MyAssignmentsRead,
 } from "../types";
 
 // Base API URL - can be overridden by environment variable
@@ -79,6 +88,25 @@ export const authApi = {
   ): Promise<SetPasswordResponse> => {
     const response = await api.post<SetPasswordResponse>(
       "/api/v1/auth/set-password",
+      data
+    );
+    return response.data;
+  },
+
+  updateProfile: async (data: {
+    first_name?: string;
+    last_name?: string;
+  }): Promise<User> => {
+    const response = await api.patch<User>("/api/v1/auth/me", data);
+    return response.data;
+  },
+
+  changePassword: async (data: {
+    current_password: string;
+    new_password: string;
+  }): Promise<{ message: string }> => {
+    const response = await api.post<{ message: string }>(
+      "/api/v1/auth/change-password",
       data
     );
     return response.data;
@@ -151,6 +179,184 @@ export const adminUsersApi = {
 
   delete: async (id: number): Promise<void> => {
     await api.delete(`/api/v1/admin/users/${id}`);
+  },
+};
+
+// Preferences API (Admin)
+export const preferencesApi = {
+  // Summary - who submitted vs missing
+  getSummary: async (
+    year: number,
+    month: number
+  ): Promise<PreferencesSummaryRead> => {
+    const response = await api.get<PreferencesSummaryRead>(
+      "/api/v1/preferences/summary",
+      { params: { year, month } }
+    );
+    return response.data;
+  },
+
+  // Deadline management
+  getDeadline: async (
+    year: number,
+    month: number
+  ): Promise<PreferencesDeadlineRead> => {
+    const response = await api.get<PreferencesDeadlineRead>(
+      `/api/v1/preferences/deadlines/${year}/${month}`
+    );
+    return response.data;
+  },
+
+  updateDeadline: async (
+    year: number,
+    month: number,
+    deadline: string
+  ): Promise<PreferencesDeadlineRead> => {
+    const response = await api.put<PreferencesDeadlineRead>(
+      `/api/v1/preferences/deadlines/${year}/${month}`,
+      { deadline }
+    );
+    return response.data;
+  },
+
+  // Admin operations for specific doctor
+  getWorking: async (
+    year: number,
+    month: number,
+    doctorId: number
+  ): Promise<PreferenceWorkingRead> => {
+    const response = await api.get<PreferenceWorkingRead>(
+      `/api/v1/preferences/${year}/${month}/${doctorId}`
+    );
+    return response.data;
+  },
+
+  saveWorking: async (
+    year: number,
+    month: number,
+    doctorId: number,
+    data: PreferenceWorkingPut
+  ): Promise<PreferenceAutosaveAck> => {
+    const response = await api.put<PreferenceAutosaveAck>(
+      `/api/v1/preferences/${year}/${month}/${doctorId}/working`,
+      data
+    );
+    return response.data;
+  },
+
+  createCheckpoint: async (
+    year: number,
+    month: number,
+    doctorId: number
+  ): Promise<PreferenceCheckpointCreated> => {
+    const response = await api.post<PreferenceCheckpointCreated>(
+      `/api/v1/preferences/${year}/${month}/${doctorId}/checkpoint`,
+      {}
+    );
+    return response.data;
+  },
+
+  revertLast: async (
+    year: number,
+    month: number,
+    doctorId: number
+  ): Promise<PreferenceRevertRead> => {
+    const response = await api.post<PreferenceRevertRead>(
+      `/api/v1/preferences/${year}/${month}/${doctorId}/revert-last`
+    );
+    return response.data;
+  },
+
+  revertNext: async (
+    year: number,
+    month: number,
+    doctorId: number
+  ): Promise<PreferenceRevertRead> => {
+    const response = await api.post<PreferenceRevertRead>(
+      `/api/v1/preferences/${year}/${month}/${doctorId}/revert-next`
+    );
+    return response.data;
+  },
+};
+
+// Doctor Preferences API (for /me endpoints)
+export const doctorPreferencesApi = {
+  getMyPreferences: async (
+    year: number,
+    month: number
+  ): Promise<PreferenceWorkingRead> => {
+    const response = await api.get<PreferenceWorkingRead>(
+      `/api/v1/preferences/${year}/${month}/me`
+    );
+    return response.data;
+  },
+
+  saveMyWorking: async (
+    year: number,
+    month: number,
+    data: PreferenceWorkingPut
+  ): Promise<PreferenceAutosaveAck> => {
+    const response = await api.put<PreferenceAutosaveAck>(
+      `/api/v1/preferences/${year}/${month}/me/working`,
+      data
+    );
+    return response.data;
+  },
+
+  createMyCheckpoint: async (
+    year: number,
+    month: number
+  ): Promise<PreferenceCheckpointCreated> => {
+    const response = await api.post<PreferenceCheckpointCreated>(
+      `/api/v1/preferences/${year}/${month}/me/checkpoint`,
+      {}
+    );
+    return response.data;
+  },
+
+  revertMyLast: async (
+    year: number,
+    month: number
+  ): Promise<PreferenceRevertRead> => {
+    const response = await api.post<PreferenceRevertRead>(
+      `/api/v1/preferences/${year}/${month}/me/revert-last`,
+      {}
+    );
+    return response.data;
+  },
+
+  revertMyNext: async (
+    year: number,
+    month: number
+  ): Promise<PreferenceRevertRead> => {
+    const response = await api.post<PreferenceRevertRead>(
+      `/api/v1/preferences/${year}/${month}/me/revert-next`,
+      {}
+    );
+    return response.data;
+  },
+};
+
+// Schedules API (Doctor)
+export const schedulesApi = {
+  getPublished: async (
+    year: number,
+    month: number
+  ): Promise<SchedulePublishedRead> => {
+    const response = await api.get<SchedulePublishedRead>(
+      `/api/v1/schedules/${year}/${month}/published`
+    );
+    return response.data;
+  },
+
+  getMyAssignments: async (
+    year: number,
+    month: number
+  ): Promise<MyAssignmentsRead> => {
+    const response = await api.get<MyAssignmentsRead>(
+      `/api/v1/schedules/${year}/${month}/my-assignments`
+    );
+    return response.data;
   },
 };
 

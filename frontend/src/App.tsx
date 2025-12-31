@@ -9,7 +9,11 @@ import { AdminHome } from "./pages/admin/AdminHome";
 import { DoctorsManagement } from "./pages/admin/DoctorsManagement";
 import { AdminUsersManagement } from "./pages/admin/AdminUsersManagement";
 import { PendingDoctors } from "./pages/admin/PendingDoctors";
+import { PreferencesManagement } from "./pages/admin/PreferencesManagement";
 import { Unauthorized } from "./pages/Unauthorized";
+import { DoctorHome } from "./pages/doctor/DoctorHome";
+import { DoctorPreferences } from "./pages/doctor/DoctorPreferences";
+import { DoctorSchedules } from "./pages/doctor/DoctorSchedules";
 
 function App() {
   return (
@@ -65,14 +69,7 @@ function App() {
             path="/admin/preferences"
             element={
               <ProtectedRoute requiredRole="admin">
-                <div className="flex items-center justify-center min-h-screen">
-                  <div className="text-center">
-                    <h1 className="text-2xl font-bold mb-4">
-                      Preferences Management
-                    </h1>
-                    <p className="text-muted-foreground">Coming soon...</p>
-                  </div>
-                </div>
+                <PreferencesManagement />
               </ProtectedRoute>
             }
           />
@@ -110,14 +107,23 @@ function App() {
             path="/doctor"
             element={
               <ProtectedRoute requiredRole="doctor">
-                <div className="flex items-center justify-center min-h-screen">
-                  <div className="text-center">
-                    <h1 className="text-2xl font-bold mb-4">
-                      Doctor Dashboard
-                    </h1>
-                    <p className="text-muted-foreground">Coming soon...</p>
-                  </div>
-                </div>
+                <DoctorHome />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/doctor/preferences"
+            element={
+              <ProtectedRoute requiredRole="doctor">
+                <DoctorPreferences />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/doctor/schedules"
+            element={
+              <ProtectedRoute requiredRole="doctor">
+                <DoctorSchedules />
               </ProtectedRoute>
             }
           />

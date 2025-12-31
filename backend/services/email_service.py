@@ -497,3 +497,173 @@ The MedShed Team
         logger.error(f"Failed to send password reset email to {to_email}: {str(e)}")
         raise  # Raise for password reset since it's user-initiated
 
+
+def send_deadline_changed_email(
+    *,
+    email: str,
+    first_name: str,
+    last_name: str,
+    year: int,
+    month: int,
+    new_deadline: str,
+) -> None:
+    """
+    Send notification email when preferences deadline is changed.
+
+    Args:
+        email: Recipient email address
+        first_name: Doctor's first name
+        last_name: Doctor's last name
+        year: Year of the period
+        month: Month of the period (1-12)
+        new_deadline: New deadline datetime string (ISO format)
+
+    Notes:
+        - Sent to all active doctors when admin changes deadline
+        - Email failures are logged but don't raise (non-blocking)
+    """
+    try:
+        from datetime import datetime
+
+        # Parse and format deadline for display
+        deadline_dt = datetime.fromisoformat(new_deadline.replace("Z", "+00:00"))
+        deadline_formatted = deadline_dt.strftime("%B %d, %Y at %H:%M")
+
+        # Month name
+        month_names = [
+            "January", "February", "March", "April", "May", "June",
+            "July", "August", "September", "October", "November", "December"
+        ]
+        month_name = month_names[month - 1]
+
+        # Create message
+        msg = MIMEMultipart("alternative")
+        msg["Subject"] = f"MedShed: Preferences Deadline Updated for {month_name} {year}"
+        msg["From"] = f"{settings.SMTP_FROM_NAME} <{settings.SMTP_FROM_EMAIL}>"
+        msg["To"] = email
+
+        # Plain text version
+        text_body = f"""
+Hello {first_name} {last_name},
+
+The deadline for submitting your scheduling preferences for {month_name} {year} has been updated.
+
+New Deadline: {deadline_formatted}
+
+Please ensure you submit your preferences before this deadline. You can access the preferences form by logging into MedShed.
+
+If you have already submitted your preferences, no further action is required.
+
+Best regards,
+The MedShed Team
+        """.strip()
+
+        # HTML version
+        html_body = f"""
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <style>
+        body {{
+            font-family: Arial, sans-serif;
+            line-height: 1.6;
+            color: #333;
+        }}
+        .container {{
+            max-width: 600px;
+            margin: 0 auto;
+            padding: 20px;
+        }}
+        .header {{
+            background-color: #3b82f6;
+            color: white;
+            padding: 20px;
+            text-align: center;
+            border-radius: 5px 5px 0 0;
+        }}
+        .content {{
+            background-color: #f9fafb;
+            padding: 30px;
+            border: 1px solid #e5e7eb;
+        }}
+        .deadline-box {{
+            background-color: #fef3c7;
+            border: 1px solid #f59e0b;
+            border-radius: 5px;
+            padding: 15px;
+            margin: 20px 0;
+            text-align: center;
+        }}
+        .deadline-label {{
+            color: #92400e;
+            font-size: 0.875rem;
+            margin-bottom: 5px;
+        }}
+        .deadline-value {{
+            color: #78350f;
+            font-size: 1.25rem;
+            font-weight: bold;
+        }}
+        .footer {{
+            color: #6b7280;
+            font-size: 0.875rem;
+            margin-top: 20px;
+            padding-top: 20px;
+            border-top: 1px solid #e5e7eb;
+        }}
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>Preferences Deadline Updated</h1>
+        </div>
+        <div class="content">
+            <p>Hello <strong>{first_name} {last_name}</strong>,</p>
+
+            <p>The deadline for submitting your scheduling preferences for <strong>{month_name} {year}</strong> has been updated.</p>
+
+            <div class="deadline-box">
+                <div class="deadline-label">New Deadline</div>
+                <div class="deadline-value">{deadline_formatted}</div>
+            </div>
+
+            <p>Please ensure you submit your preferences before this deadline. You can access the preferences form by logging into MedShed.</p>
+
+            <p>If you have already submitted your preferences, no further action is required.</p>
+
+            <div class="footer">
+                <p>Best regards,<br>The MedShed Team</p>
+            </div>
+        </div>
+    </div>
+</body>
+</html>
+        """.strip()
+
+        # Attach both versions
+        part1 = MIMEText(text_body, "plain")
+        part2 = MIMEText(html_body, "html")
+        msg.attach(part1)
+        msg.attach(part2)
+
+        # Send email
+        with smtplib.SMTP(settings.SMTP_HOST, settings.SMTP_PORT) as server:
+            # Use TLS if not using a local test server
+            if settings.SMTP_HOST not in ["localhost", "127.0.0.1", "mailhog", "maildev"]:
+                server.starttls()
+
+            # Authenticate if credentials provided
+            if settings.SMTP_USER and settings.SMTP_PASSWORD:
+                server.login(settings.SMTP_USER, settings.SMTP_PASSWORD)
+
+            # Send
+            server.sendmail(settings.SMTP_FROM_EMAIL, email, msg.as_string())
+
+        logger.info(f"Deadline change notification sent to {email}")
+
+    except Exception as e:
+        logger.error(f"Failed to send deadline notification to {email}: {str(e)}")
+        # Don't raise - email failures shouldn't block deadline updates
+
