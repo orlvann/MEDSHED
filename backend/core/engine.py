@@ -6,166 +6,130 @@ This is the ONLY place where we directly import OR-Tools.
 Everything else in core works with plain Python structures.
 """
 
-from typing import List
+from typing import Dict, List, Tuple
 
-from backend.models.common_enums import ShiftType
+from ortools.sat.python import cp_model
 
-from .types import HardModel, Slot, SolverAssignment, SolverSolution, SolverStatus
+from backend.models.common_enums import DoctorRole, ShiftType
 
-# def build_and_solve(model: HardModel) -> SolverSolution:
-#     """
-#     Build a simple greedy solution for the given hard model.
-
-#     ```
-#     For each day we try to choose at most one onsite doctor and at most one
-#     on-call doctor, never assigning the same doctor to both roles on the
-#     same day.
-#     """
-#     # If there are no allowed slots at all, we treat this as an empty model.
-#     if not model.allowed_slots:
-#         # We could also use SolverStatus.INFEASIBLE here; for now we keep EMPTY
-#         # to clearly signal that the solver had nothing to work with.
-#         return SolverSolution(status=SolverStatus.EMPTY, assignments=[])
-
-#     # This list will store all solver decisions for the whole month.
-#     assignments: List[SolverAssignment] = []
-
-#     # Index allowed slots by (day, shift_type) to make lookups fast and clear.
-#     slots_by_day_and_shift: dict[tuple[int, ShiftType], List[Slot]] = {}
-#     for slot in model.allowed_slots:
-#         key = (slot.day, slot.shift_type)
-#         # Create list for this (day, shift_type) if it does not exist yet.
-#         if key not in slots_by_day_and_shift:
-#             slots_by_day_and_shift[key] = []
-#         slots_by_day_and_shift[key].append(slot)
-
-#     # Iterate through days in a stable order (ascending day number).
-#     for day in sorted(model.problem.days):
-#         # Safety guard: days listed in ignore_days should stay empty.
-#         if day in model.problem.ignore_days:
-#             continue
-
-#         # Keep track of doctors already used on this day
-#         # so we never assign the same doctor twice.
-#         used_doctors_for_day: set[int] = set()
-
-#         onsite_assignment = None
-#         oncall_assignment = None
-
-#         # --- Choose onsite doctor (at most one) --------------------------------
-#         onsite_key = (day, ShiftType.onsite)
-#         onsite_slots = slots_by_day_and_shift.get(onsite_key, [])
-
-#         # Greedy rule: pick the first available slot.
-#         for slot in onsite_slots:
-#             if slot.doctor_id in used_doctors_for_day:
-#                 # This should not normally happen, but we keep the check for clarity.
-#                 continue
-#             onsite_assignment = SolverAssignment(
-#                 day=slot.day,
-#                 shift_type=slot.shift_type,
-#                 doctor_id=slot.doctor_id,
-#             )
-#             used_doctors_for_day.add(slot.doctor_id)
-#             break  # Only one onsite per day.
-
-#         # --- Choose on-call doctor (at most one) -------------------------------
-#         oncall_key = (day, ShiftType.oncall)
-#         oncall_slots = slots_by_day_and_shift.get(oncall_key, [])
-
-#         for slot in oncall_slots:
-#             # Do not assign the same doctor twice on the same day.
-#             if slot.doctor_id in used_doctors_for_day:
-#                 continue
-#             oncall_assignment = SolverAssignment(
-#                 day=slot.day,
-#                 shift_type=slot.shift_type,
-#                 doctor_id=slot.doctor_id,
-#             )
-#             used_doctors_for_day.add(slot.doctor_id)
-#             break  # Only one on-call per day.
-
-#         # --- Collect assignments for this day ----------------------------------
-#         if onsite_assignment is not None:
-#             assignments.append(onsite_assignment)
-
-#         if oncall_assignment is not None:
-#             assignments.append(oncall_assignment)
-
-#     # For MVP we treat any non-empty assignment set as a successful solution.
-#     status = SolverStatus.OK if assignments else SolverStatus.EMPTY
-#     return SolverSolution(status=status, assignments=assignments)
+from .types import HardModel, SolverAssignment, SolverSolution, SolverStatus
 
 
 def build_and_solve(model: HardModel) -> SolverSolution:
     """
-    Build a simple greedy solution for the given hard model.
+    Build a CP-SAT model for the given HardModel and solve it.
 
-    For each day we try to choose at most one onsite doctor and at most one
-    on-call doctor, never assigning the same doctor to both roles on the
-    same day.
+    ```
+    Hard constraints enforced:
+    - exactly one onsite and one oncall doctor per active day,
+    - at least one specialist per active day (in any role),
+    - no doctor can be onsite and oncall on the same day,
+    - no assignment outside allowed_slots (unavailability + ignore_* are already "cut out").
     """
-    # Debug: check how many allowed slots we have.
-    print(f"[DEBUG] allowed_slots count = {len(model.allowed_slots)}")
-
+    # If there are no allowed slots at all, the solver has nothing to work with.
     if not model.allowed_slots:
-        print("[DEBUG] No allowed slots, returning EMPTY solution")
         return SolverSolution(status=SolverStatus.EMPTY, assignments=[])
 
-    assignments: List[SolverAssignment] = []
+    # 1) Create CP-SAT model container.
+    cp = cp_model.CpModel()
 
-    slots_by_day_and_shift: dict[tuple[int, ShiftType], List[Slot]] = {}
-    for slot in model.allowed_slots:
-        key = (slot.day, slot.shift_type)
-        if key not in slots_by_day_and_shift:
-            slots_by_day_and_shift[key] = []
-        slots_by_day_and_shift[key].append(slot)
+    # 2) Create binary decision variables for each allowed (day, shift_type, doctor) slot.
+    #    We do NOT create variables for forbidden combinations.
+    x: Dict[Tuple[int, ShiftType, int], cp_model.IntVar] = {}
 
-    for day in sorted(model.problem.days):
-        if day in model.problem.ignore_days:
-            print(f"[DEBUG] Day {day} is in ignore_days, skipping")
+    for (day, shift_type), doctor_ids in model.allowed_slots.items():
+        for doctor_id in doctor_ids:
+            x[(day, shift_type, doctor_id)] = cp.NewBoolVar(f"x_d{day}_{shift_type.value}_doc{doctor_id}")
+
+    # 3) Hard constraints -------------------------------------------------------
+
+    # 3.1 Enforce exactly one onsite and one oncall doctor per active day.
+    for day in model.active_days:
+        # Onsite coverage (only if not ignored)
+        if (day, ShiftType.onsite) not in model.ignore_slots:
+            onsite_vars = [
+                x[(day, ShiftType.onsite, doc_id)]
+                for doc_id in model.allowed_slots.get((day, ShiftType.onsite), [])
+                if (day, ShiftType.onsite, doc_id) in x
+            ]
+            if onsite_vars:
+                cp.Add(sum(onsite_vars) == 1)
+            else:
+                cp.Add(0 == 1)  # required slot but no candidates -> infeasible
+
+        # Oncall coverage (only if not ignored)
+        if (day, ShiftType.oncall) not in model.ignore_slots:
+            oncall_vars = [
+                x[(day, ShiftType.oncall, doc_id)]
+                for doc_id in model.allowed_slots.get((day, ShiftType.oncall), [])
+                if (day, ShiftType.oncall, doc_id) in x
+            ]
+            if oncall_vars:
+                cp.Add(sum(oncall_vars) == 1)
+            else:
+                cp.Add(0 == 1)  # required slot but no candidates -> infeasible
+
+    # 3.2 Enforce that each active day has at least one specialist among REQUIRED shifts (onsite OR oncall).
+    for day in model.active_days:
+        required_shifts = [st for st in (ShiftType.onsite, ShiftType.oncall) if (day, st) not in model.ignore_slots]
+        if not required_shifts:
+            # both shifts ignored -> nothing to enforce on this day
             continue
 
-        used_doctors_for_day: set[int] = set()
-        onsite_assignment = None
-        oncall_assignment = None
+        specialist_vars: List[cp_model.IntVar] = []
+        for shift_type in required_shifts:
+            for doc_id in model.allowed_slots.get((day, shift_type), []):
+                doctor = model.doctors.get(doc_id)
+                if doctor and doctor.role == DoctorRole.specialist:
+                    var = x.get((day, shift_type, doc_id))
+                    if var is not None:
+                        specialist_vars.append(var)
 
-        onsite_key = (day, ShiftType.onsite)
-        onsite_slots = slots_by_day_and_shift.get(onsite_key, [])
+        if specialist_vars:
+            cp.Add(sum(specialist_vars) >= 1)
+        else:
+            cp.Add(0 >= 1)  # required day but no specialist candidate -> infeasible
 
-        for slot in onsite_slots:
-            if slot.doctor_id in used_doctors_for_day:
-                continue
-            onsite_assignment = SolverAssignment(
-                day=slot.day,
-                shift_type=slot.shift_type,
-                doctor_id=slot.doctor_id,
+    # 3.3 Enforce that the same doctor cannot be onsite AND oncall on the same day.
+    for day in model.active_days:
+        for doc_id in model.participant_doctor_ids:
+            v_ons = x.get((day, ShiftType.onsite, doc_id))
+            v_onc = x.get((day, ShiftType.oncall, doc_id))
+            if v_ons is not None and v_onc is not None:
+                cp.Add(v_ons + v_onc <= 1)
+
+    # 4) Objective placeholder: we only need any feasible solution in this stage.
+    cp.Minimize(0)
+
+    # 5) Solve -----------------------------------------------------------------
+    solver = cp_model.CpSolver()
+    status = solver.Solve(cp)
+
+    if status in (cp_model.OPTIMAL, cp_model.FEASIBLE):
+        status_enum = SolverStatus.OK
+    elif status == cp_model.INFEASIBLE:
+        status_enum = SolverStatus.INFEASIBLE
+    else:
+        # For example: UNKNOWN, MODEL_INVALID, etc.
+        status_enum = SolverStatus.NOT_SOLVED
+
+    if status_enum is not SolverStatus.OK:
+        return SolverSolution(status=status_enum, assignments=[])
+
+    # 6) Build SolverAssignment list from chosen Boolean variables.
+    assignments: List[SolverAssignment] = []
+
+    for (day, shift_type, doc_id), var in x.items():
+        if solver.BooleanValue(var):
+            assignments.append(
+                SolverAssignment(
+                    day=day,
+                    shift_type=shift_type,
+                    doctor_id=doc_id,
+                )
             )
-            used_doctors_for_day.add(slot.doctor_id)
-            break
 
-        oncall_key = (day, ShiftType.oncall)
-        oncall_slots = slots_by_day_and_shift.get(oncall_key, [])
+    # Deterministic ordering (helps tests and stable API payloads).
+    assignments.sort(key=lambda a: (a.day, a.shift_type.value, a.doctor_id))
 
-        for slot in oncall_slots:
-            if slot.doctor_id in used_doctors_for_day:
-                continue
-            oncall_assignment = SolverAssignment(
-                day=slot.day,
-                shift_type=slot.shift_type,
-                doctor_id=slot.doctor_id,
-            )
-            used_doctors_for_day.add(slot.doctor_id)
-            break
-
-        print(f"[DEBUG] Day {day}: onsite={onsite_assignment}, oncall={oncall_assignment}")
-
-        if onsite_assignment is not None:
-            assignments.append(onsite_assignment)
-        if oncall_assignment is not None:
-            assignments.append(oncall_assignment)
-
-    print(f"[DEBUG] Total assignments produced = {len(assignments)}")
-    status = SolverStatus.OK if assignments else SolverStatus.EMPTY
-    print(f"[DEBUG] Solver status = {status}")
-    return SolverSolution(status=status, assignments=assignments)
+    return SolverSolution(status=SolverStatus.OK, assignments=assignments)

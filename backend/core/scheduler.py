@@ -13,78 +13,103 @@ This module:
 
 from typing import List
 
+from pydantic import BaseModel
+
 from backend.models.schemas.schedule import Assignment
 
 from . import (
     constraint_builder,
     engine,
-    heuristics,  # will be used later
-    objective_builder,
     seeding,
 )
-from .types import ProblemData, SolverAssignment, SolverSolution, SolverStatus
+from .feasibility import analyze_problem
+from .types import HardModel, ProblemData, SolverAssignment, SolverSolution, SolverStatus
 
 
-def generate_schedule(problem: ProblemData) -> List[Assignment]:
+class ScheduleResult(BaseModel):
     """
-    Entry point for the solver core.
-
-    Services are responsible for:
-    - loading doctors, preferences, and schedule settings from the DB,
-    - filtering to participant_doctor_ids,
-    - building a ProblemData instance.
-
-    This function:
-    1. Generates warm-start hints (seeding).
-    2. Builds hard-constraint model.
-    3. Adds soft constraints and objectives.
-    4. Calls the OR-Tools engine to solve the model.
-    5. (Optionally) applies heuristic polishing.
-    6. Converts the solver solution into Assignment DTOs.
+    Bundle of raw solver solution and finalized Assignment DTOs.
     """
 
-    # 1) Warm-start hints (may be empty for MVP)
+    solution: SolverSolution
+    assignments: List[Assignment]
+
+
+def generate_schedule(problem: ProblemData) -> ScheduleResult:
+    """
+    High-level entry point for schedule generation.
+
+    Input:
+    - ProblemData (already built by services from DB data).
+
+    Output:
+    - List[Assignment] (API-level DTOs returned to services).
+
+    Steps:
+    1) Build optional warm-start hints (seeding).
+    MVP: hints are just a placeholder (can be empty).
+    2) Build a HardModel (allowed_slots + structural data).
+    allowed_slots already respect:
+    - ignore_days / ignore_slots,
+    - unavailable_*_days from preferences.
+    3) (Later) attach soft constraints / objective weights.
+    MVP: we skip objectives and solve only hard constraints.
+    4) Call the CP-SAT engine to get a SolverSolution.
+    5) (Later) optional heuristic polishing.
+    6) Map SolverSolution -> Assignment via _solution_to_assignments.
+    """
+
+    # 0) Feasibility pre-check (cheap, deterministic)
+    issues = analyze_problem(problem)
+    if issues:
+        solution = SolverSolution(
+            status=SolverStatus.INFEASIBLE,
+            assignments=[],
+            issues=issues,
+        )
+        return ScheduleResult(solution=solution, assignments=[])
+
+    # 1) Warm-start hints (MVP: placeholder).
     #    Example hints:
     #    - heads (is_head=True) on their preferred days,
     #    - hardest slots (few available doctors),
     #    - weekend onsite+oncall combos for doctors who allow it.
     seed_hints = seeding.generate_initial_hints(problem)
 
-    # 2) Build the hard-constraint structure (no solver calls yet)
+    # 2) Build the hard-constraint model (no OR-Tools calls here).
     #    This step defines the decision variables and all "must-have" rules:
     #    - exactly 1 onsite and 1 oncall per day,
     #    - at least one specialist per day,
     #    - no double-role for the same doctor on the same day,
     #    - no assignments on unavailable days,
     #    - respect ignore_days / ignore_slots.
-    hard_model = constraint_builder.build_hard_model(problem, seed_hints)
+    hard_model: HardModel = constraint_builder.build_hard_model(problem, seed_hints)
 
-    # 3) Attach soft constraints and objective function
-    #    Here we use preferences and fairness:
+    # 3) Soft constraints/objectives will be implemented here in later stages.
+    #    For this stage we solve ONLY the hard model.
+    #    Here we will use preferences and fairness:
     #    - strong preferences for heads > specialists > residents,
     #    - rest rules between shifts,
     #    - max/target totals and weekend loads,
     #    - weekday patterns, partner preferences, etc.
-    full_model = objective_builder.attach_objectives(hard_model, problem)
+    model_for_solver = hard_model
 
     # 4) Solve using OR-Tools CP-SAT (engine is the only place that imports OR-Tools)
-    raw_solution = engine.build_and_solve(full_model)
+    solution: SolverSolution = engine.build_and_solve(model_for_solver)
 
-    # 5) Optional: run heuristics to polish the solution (phase 3)
-    #    For MVP this can simply return the original solution.
-    improved_solution = heuristics.post_process(raw_solution, problem)
+    # 5) Heuristics polishing will be added later (keep the pipeline simple for now).
+    #    For MVP this returns the original solution.
+    final_solution = solution
 
-    # 6) Convert the final solution into a list of Assignment DTOs
-    assignments = _solution_to_assignments(improved_solution, problem)
-
-    return assignments
+    # 6) Convert the final solution into API-level Assignment DTOs.
+    assignments = _solution_to_assignments(final_solution, problem)
+    return ScheduleResult(solution=final_solution, assignments=assignments)
 
 
 def _solution_to_assignments(solution: SolverSolution, problem: ProblemData) -> List[Assignment]:
     """
     Convert the low-level solver solution into a list of Assignment DTOs.
 
-    ```
     This helper keeps the mapping logic in one place, so that:
     - services see only clean Assignment objects,
     - engine/constraint_builder can work with more technical structures.
