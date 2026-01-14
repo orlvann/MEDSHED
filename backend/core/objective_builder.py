@@ -58,18 +58,7 @@ def attach_rest_objective(
 ) -> cp_model.IntVar:
     """
     Add rest-rule penalties to the CP-SAT model objective.
-
-    ```
-    Rest rules implemented (as soft penalties):
-    - onsite -> onsite (day d and day d+1)
-    - oncall -> oncall
-    - cross-shift: onsite -> oncall and oncall -> onsite
-    (with higher weight for specialists than residents)
-
-    Weekend exception (Sat->Sun only):
-    - if doctor.allow_weekend_consecutive_onsite_oncall is True,
-    then we do NOT penalize cross-shift patterns for that Sat->Sun pair.
-    (ons->ons and oncall->oncall are still penalized normally in 3A)
+    ...
     """
     penalty_terms: List[cp_model.LinearExpr] = []
     ub: int = 0  # correct upper bound for total_penalty
@@ -106,13 +95,13 @@ def attach_rest_objective(
             if ons_d is not None and ons_dn is not None:
                 v = _add_pair_violation(cp, ons_d, ons_dn, f"rest_ons_ons_d{d}_doc{doc_id}")
                 penalty_terms.append(scoring.REST_ONS_ONS_WEIGHT * v)
-                ub += scoring.REST_ONS_ONS_WEIGHT
+                ub += int(scoring.REST_ONS_ONS_WEIGHT)
 
             # oncall -> oncall
             if oncall_d is not None and oncall_dn is not None:
                 v = _add_pair_violation(cp, oncall_d, oncall_dn, f"rest_oncall_oncall_d{d}_doc{doc_id}")
                 penalty_terms.append(scoring.REST_ONCALL_ONCALL_WEIGHT * v)
-                ub += scoring.REST_ONCALL_ONCALL_WEIGHT
+                ub += int(scoring.REST_ONCALL_ONCALL_WEIGHT)
 
             # cross-shift (ons->oncall, oncall->ons)
             # Weekend exception: Sat->Sun cross-shift is allowed without penalty if flag=True.
@@ -121,20 +110,21 @@ def attach_rest_objective(
             if not skip_weekend_cross:
                 if ons_d is not None and oncall_dn is not None:
                     v = _add_pair_violation(cp, ons_d, oncall_dn, f"rest_ons_oncall_d{d}_doc{doc_id}")
-                    penalty_terms.append(weight_cross * v)
-                    ub += weight_cross
+                    penalty_terms.append(int(weight_cross) * v)
+                    ub += int(weight_cross)
 
                 if oncall_d is not None and ons_dn is not None:
                     v = _add_pair_violation(cp, oncall_d, ons_dn, f"rest_oncall_ons_d{d}_doc{doc_id}")
-                    penalty_terms.append(weight_cross * v)
-                    ub += weight_cross
+                    penalty_terms.append(int(weight_cross) * v)
+                    ub += int(weight_cross)
 
-            # Build a single IntVar that equals the sum of all penalty terms.
-            # CP-SAT likes having a concrete variable minimized.
-            if penalty_terms:
-                total_penalty = cp.NewIntVar(0, ub, "total_rest_penalty")
-                cp.Add(total_penalty == sum(penalty_terms))
-            else:
-                total_penalty = cp.NewIntVar(0, 0, "total_rest_penalty")
-                cp.Add(total_penalty == 0)
+    # Build a single IntVar that equals the sum of all penalty terms.
+    # CP-SAT likes having a concrete variable minimized.
+    if penalty_terms:
+        total_penalty = cp.NewIntVar(0, int(ub), "total_rest_penalty")
+        cp.Add(total_penalty == sum(penalty_terms))
+    else:
+        total_penalty = cp.NewIntVar(0, 0, "total_rest_penalty")
+        cp.Add(total_penalty == 0)
+
     return total_penalty
