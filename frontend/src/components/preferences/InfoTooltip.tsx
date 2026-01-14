@@ -44,7 +44,7 @@ export const InfoTooltip = ({ content, className = "" }: InfoTooltipProps) => {
       {isVisible && (
         <div
           ref={tooltipRef}
-          className={`absolute z-50 px-3 py-2 text-sm bg-popover text-popover-foreground border border-border rounded-md shadow-md min-w-[280px] max-w-sm whitespace-normal ${
+          className={`absolute z-50 px-3 py-2 text-[14px] leading-normal font-normal bg-popover text-popover-foreground border border-border rounded-md shadow-md min-w-[280px] max-w-sm whitespace-normal ${
             position === "top"
               ? "bottom-full mb-2 left-1/2 -translate-x-1/2"
               : "top-full mt-2 left-1/2 -translate-x-1/2"

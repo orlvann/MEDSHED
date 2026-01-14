@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { useAuth } from "../../contexts/AuthContext";
 import { Header } from "../../components/shared/Header";
 import { Card, CardContent } from "../../components/ui/card";
+import { Button } from "../../components/ui/button";
 import { ScheduleCalendar } from "../../components/doctor/ScheduleCalendar";
 import {
   Calendar,
@@ -50,6 +51,20 @@ interface WeatherData {
   windSpeed: number;
 }
 
+// Get next month for preferences (preferences are always for NEXT month)
+const getNextMonth = () => {
+  const now = new Date();
+  let year = now.getFullYear();
+  let month = now.getMonth() + 2; // +2 because getMonth() is 0-based and we need NEXT month
+
+  if (month > 12) {
+    month = 1;
+    year += 1;
+  }
+
+  return { year, month };
+};
+
 export const DoctorHome = () => {
   const navigate = useNavigate();
   const { user } = useAuth();
@@ -59,7 +74,9 @@ export const DoctorHome = () => {
   const [myScheduleYear, setMyScheduleYear] = useState(now.getFullYear());
   const [myScheduleMonth, setMyScheduleMonth] = useState(now.getMonth() + 1);
   const [teamScheduleYear, setTeamScheduleYear] = useState(now.getFullYear());
-  const [teamScheduleMonth, setTeamScheduleMonth] = useState(now.getMonth() + 1);
+  const [teamScheduleMonth, setTeamScheduleMonth] = useState(
+    now.getMonth() + 1
+  );
 
   // Data states
   const [deadline, setDeadline] = useState<PreferencesDeadlineRead | null>(
@@ -147,17 +164,20 @@ export const DoctorHome = () => {
     const loadData = async () => {
       setLoading(true);
       try {
-        // Load deadline for current month
+        // Get next month - preferences are always for NEXT month
+        const nextPeriod = getNextMonth();
+
+        // Load deadline for next month
         const deadlineData = await preferencesApi.getDeadline(
-          now.getFullYear(),
-          now.getMonth() + 1
+          nextPeriod.year,
+          nextPeriod.month
         );
         setDeadline(deadlineData);
 
-        // Load my preferences to get status and doctor_id
+        // Load my preferences for next month to get status and doctor_id
         const prefsData = await doctorPreferencesApi.getMyPreferences(
-          now.getFullYear(),
-          now.getMonth() + 1
+          nextPeriod.year,
+          nextPeriod.month
         );
         setPreferences(prefsData);
 
@@ -206,6 +226,13 @@ export const DoctorHome = () => {
 
   // Get deadline info
   const deadlineInfo = deadline ? getTimeRemaining(deadline.deadline) : null;
+
+  // Show warning banner if preferences not submitted and deadline is <= 7 days away
+  const shouldShowWarning =
+    preferences?.status !== "submitted" &&
+    deadlineInfo &&
+    !deadlineInfo.isPast &&
+    deadlineInfo.days <= 7;
 
   // Create doctor names map
   const doctorNamesMap = new Map<number, string>();
@@ -282,6 +309,32 @@ export const DoctorHome = () => {
           </CardContent>
         </Card>
 
+        {/* Warning Banner */}
+        {shouldShowWarning && (
+          <Card className="mb-6 border-orange-300 bg-orange-50">
+            <CardContent className="py-4 flex items-center gap-3">
+              <AlertCircle className="h-5 w-5 text-orange-600 flex-shrink-0" />
+              <div className="flex-1">
+                <p className="text-sm font-medium text-orange-800">
+                  Deadline approaching! Only {deadlineInfo?.days} day
+                  {deadlineInfo?.days !== 1 ? "s" : ""} left.
+                </p>
+                <p className="text-xs text-orange-600">
+                  Please submit your preferences before the deadline.
+                </p>
+              </div>
+              <Button
+                size="sm"
+                variant="outline"
+                className="border-orange-300 text-orange-700 hover:bg-orange-100"
+                onClick={() => navigate("/doctor/preferences")}
+              >
+                Fill Now
+              </Button>
+            </CardContent>
+          </Card>
+        )}
+
         {/* Main content grid */}
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
           {/* Left column - Info cards */}
@@ -320,8 +373,8 @@ export const DoctorHome = () => {
                       {weather.condition}
                     </p>
                     <p className="text-xs text-muted-foreground">
-                      Humidity: {weather.humidity}% | Wind:{" "}
-                      {weather.windSpeed} km/h
+                      Humidity: {weather.humidity}% | Wind: {weather.windSpeed}{" "}
+                      km/h
                     </p>
                   </>
                 ) : (
@@ -348,9 +401,7 @@ export const DoctorHome = () => {
                     {!deadlineInfo.isPast ? (
                       <div className="flex items-center gap-1.5 text-green-600">
                         <CheckCircle className="h-3.5 w-3.5" />
-                        <span className="text-xs">
-                          you still have time!
-                        </span>
+                        <span className="text-xs">you still have time!</span>
                       </div>
                     ) : (
                       <div className="flex items-center gap-1.5 text-red-600">
@@ -389,9 +440,7 @@ export const DoctorHome = () => {
                     </p>
                     <div className="flex items-center gap-1.5 text-red-600">
                       <AlertCircle className="h-3.5 w-3.5" />
-                      <span className="text-xs">
-                        prepare your schedule!
-                      </span>
+                      <span className="text-xs">prepare your schedule!</span>
                     </div>
                   </>
                 )}

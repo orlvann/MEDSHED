@@ -46,7 +46,10 @@ export const WeekdayPatterns = ({
       );
     } else {
       // CAN'T -> CAN (neutral)
-      onChange(preferredWeekdays, avoidWeekdays.filter((d) => d !== weekday));
+      onChange(
+        preferredWeekdays,
+        avoidWeekdays.filter((d) => d !== weekday)
+      );
     }
   };
 
@@ -66,18 +69,24 @@ export const WeekdayPatterns = ({
       <CardContent className="pt-4">
         <div className="space-y-4">
           <div className="flex items-center gap-2">
-            <h3 className="text-base font-semibold">Preferred days of the week</h3>
-            <InfoTooltip
-              content="Click to cycle: Available (gray) → Preferred (green) → Avoid (red)"
-            />
+            <h3 className="text-base font-semibold">
+              Preferred days of the week
+            </h3>
+            <InfoTooltip content="Set your preferred weekday patterns. Click to cycle: Available (gray) → Preferred (green) → Avoid (red). This affects weekly recurring patterns, not specific dates." />
           </div>
 
           {/* On-site */}
           <div>
-            <h4 className="text-sm font-medium text-muted-foreground mb-2">on-site</h4>
+            <h4 className="text-sm font-semibold text-gray-900 mb-2">
+              on-site
+            </h4>
             <div className="flex flex-wrap gap-2">
               {WEEKDAY_NAMES.map((name, idx) => {
-                const state = getWeekdayState(idx, preferredOnsiteWeekdays, avoidOnsiteWeekdays);
+                const state = getWeekdayState(
+                  idx,
+                  preferredOnsiteWeekdays,
+                  avoidOnsiteWeekdays
+                );
                 return (
                   <button
                     key={idx}
@@ -105,10 +114,16 @@ export const WeekdayPatterns = ({
 
           {/* On-call */}
           <div>
-            <h4 className="text-sm font-medium text-muted-foreground mb-2">on-call</h4>
+            <h4 className="text-sm font-semibold text-gray-900 mb-2">
+              on-call
+            </h4>
             <div className="flex flex-wrap gap-2">
               {WEEKDAY_NAMES.map((name, idx) => {
-                const state = getWeekdayState(idx, preferredOncallWeekdays, avoidOncallWeekdays);
+                const state = getWeekdayState(
+                  idx,
+                  preferredOncallWeekdays,
+                  avoidOncallWeekdays
+                );
                 return (
                   <button
                     key={idx}

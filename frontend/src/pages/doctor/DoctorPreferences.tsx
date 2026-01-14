@@ -35,14 +35,29 @@ import type {
   PreferenceRevertRead,
 } from "../../types";
 import { ArrowLeft, ChevronLeft, ChevronRight, Clock } from "lucide-react";
+import { InfoTooltip } from "../../components/preferences/InfoTooltip";
+
+// Calculate next month for preferences (preferences are always for NEXT month)
+const getInitialPeriod = () => {
+  const now = new Date();
+  let year = now.getFullYear();
+  let month = now.getMonth() + 2; // +2 because getMonth() is 0-based and we need NEXT month
+
+  if (month > 12) {
+    month = 1;
+    year += 1;
+  }
+
+  return { year, month };
+};
 
 export const DoctorPreferences = () => {
   const navigate = useNavigate();
 
-  // Period state
-  const now = new Date();
-  const [year, setYear] = useState(now.getFullYear());
-  const [month, setMonth] = useState(now.getMonth() + 1);
+  // Period state - start with NEXT month
+  const initialPeriod = getInitialPeriod();
+  const [year, setYear] = useState(initialPeriod.year);
+  const [month, setMonth] = useState(initialPeriod.month);
 
   // Data state
   const [preferenceData, setPreferenceData] =
@@ -70,7 +85,9 @@ export const DoctorPreferences = () => {
   const autosaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Helper to convert API response to form data
-  const apiToFormData = (data: PreferenceWorkingRead): PreferenceWorkingPut => ({
+  const apiToFormData = (
+    data: PreferenceWorkingRead
+  ): PreferenceWorkingPut => ({
     unavailable_onsite_days: data.unavailable_onsite_days,
     unavailable_oncall_days: data.unavailable_oncall_days,
     preferred_onsite_days: data.preferred_onsite_days,
@@ -237,7 +254,9 @@ export const DoctorPreferences = () => {
   };
 
   // Helper to convert API response to form data
-  const apiToRevertFormData = (data: PreferenceRevertRead): PreferenceWorkingPut => ({
+  const apiToRevertFormData = (
+    data: PreferenceRevertRead
+  ): PreferenceWorkingPut => ({
     unavailable_onsite_days: data.unavailable_onsite_days,
     unavailable_oncall_days: data.unavailable_oncall_days,
     preferred_onsite_days: data.preferred_onsite_days,
@@ -256,7 +275,8 @@ export const DoctorPreferences = () => {
     preferred_oncall_weekdays: data.preferred_oncall_weekdays,
     avoid_onsite_weekdays: data.avoid_onsite_weekdays,
     avoid_oncall_weekdays: data.avoid_oncall_weekdays,
-    allow_weekend_consecutive_onsite_oncall: data.allow_weekend_consecutive_onsite_oncall,
+    allow_weekend_consecutive_onsite_oncall:
+      data.allow_weekend_consecutive_onsite_oncall,
     preferred_partners: data.preferred_partners,
     comments: data.comments,
   });
@@ -285,7 +305,9 @@ export const DoctorPreferences = () => {
           : null
       );
     } catch (err: any) {
-      alert(err.response?.data?.detail?.detail || "Cannot go to previous version");
+      alert(
+        err.response?.data?.detail?.detail || "Cannot go to previous version"
+      );
     } finally {
       setSaveLoading(false);
     }
@@ -364,9 +386,7 @@ export const DoctorPreferences = () => {
         {deadline && (
           <Card
             className={`mb-6 ${
-              isPast
-                ? "bg-red-50 border-red-200"
-                : "bg-blue-50 border-blue-200"
+              isPast ? "bg-red-50 border-red-200" : "bg-blue-50 border-blue-200"
             }`}
           >
             <CardContent className="py-4">
@@ -383,8 +403,7 @@ export const DoctorPreferences = () => {
                         isPast ? "text-red-700" : "text-blue-700"
                       }`}
                     >
-                      Status:{" "}
-                      {deadline.status === "locked" ? "Locked" : "Open"}
+                      Status: {deadline.status === "locked" ? "Locked" : "Open"}
                     </span>
                     {deadline.deadline && (
                       <span className="ml-4 text-gray-600">
@@ -425,10 +444,11 @@ export const DoctorPreferences = () => {
         {/* Main Content */}
         <Card>
           <CardHeader>
-            <CardTitle>
+            <CardTitle className="flex items-center gap-2">
               Preferences for {MONTH_NAMES[month - 1]} {year}
+              <InfoTooltip content="Click cells to set your availability. Click to cycle: Available (gray) → Preferred (green) → Unavailable (red). Each row shows on-site and on-call separately." />
               {draft.isRestoredFromDraft && (
-                <span className="ml-2 text-amber-600 text-sm font-normal">
+                <span className="text-amber-600 text-sm font-normal">
                   (Restored from draft)
                 </span>
               )}

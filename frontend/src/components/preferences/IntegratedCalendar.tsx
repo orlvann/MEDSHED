@@ -1,5 +1,6 @@
 import { ChevronLeft, ChevronRight, Flag } from "lucide-react";
 import { Button } from "../ui/button";
+import { InfoTooltip } from "./InfoTooltip";
 import {
   MONTH_NAMES,
   WEEKDAY_NAMES_SHORT,
@@ -84,7 +85,7 @@ export const IntegratedCalendar = ({
     <div className="border border-gray-200 rounded-lg overflow-hidden">
       {/* Month navigation header */}
       {showNavigation && (
-        <div className="flex items-center justify-center py-3 border-b border-gray-200 bg-white">
+        <div className="flex items-center justify-center py-3 border-b border-gray-200 bg-white gap-2">
           <Button
             variant="ghost"
             size="sm"
@@ -106,6 +107,7 @@ export const IntegratedCalendar = ({
           >
             <ChevronRight className="h-4 w-4" />
           </Button>
+          <InfoTooltip content="Click cells to set your availability. Click to cycle: Available (gray) → Preferred (green) → Aviod (red). Each row shows on-site and on-call separately." />
         </div>
       )}
 
@@ -126,7 +128,10 @@ export const IntegratedCalendar = ({
 
         {/* Weeks */}
         {weeks.map((week) => (
-          <div key={week.weekNumber} className="border-b border-gray-200 last:border-b-0">
+          <div
+            key={week.weekNumber}
+            className="border-b border-gray-200 last:border-b-0"
+          >
             {/* Day numbers row */}
             <div className="grid grid-cols-8 border-b border-gray-100">
               <div className="p-2 text-xs font-medium text-gray-400 border-r border-gray-200"></div>
@@ -155,7 +160,11 @@ export const IntegratedCalendar = ({
                   );
                 }
                 const isVacation = isDayInVacation(day, vacations);
-                const state = getDayState(day, unavailableOnsiteDays, preferredOnsiteDays);
+                const state = getDayState(
+                  day,
+                  unavailableOnsiteDays,
+                  preferredOnsiteDays
+                );
                 const isClickable = !disabled && !isVacation;
 
                 return (
@@ -167,7 +176,9 @@ export const IntegratedCalendar = ({
                     className={`p-1 h-8 text-sm font-medium border-r border-gray-100 last:border-r-0 transition-colors flex items-center justify-center ${getDayCellStyle(
                       state,
                       isVacation
-                    )} ${!isClickable ? "cursor-not-allowed" : "cursor-pointer"}`}
+                    )} ${
+                      !isClickable ? "cursor-not-allowed" : "cursor-pointer"
+                    }`}
                   >
                     {isVacation && <Flag className="h-3 w-3" />}
                   </button>
@@ -190,7 +201,11 @@ export const IntegratedCalendar = ({
                   );
                 }
                 const isVacation = isDayInVacation(day, vacations);
-                const state = getDayState(day, unavailableOncallDays, preferredOncallDays);
+                const state = getDayState(
+                  day,
+                  unavailableOncallDays,
+                  preferredOncallDays
+                );
                 const isClickable = !disabled && !isVacation;
 
                 return (
@@ -202,7 +217,9 @@ export const IntegratedCalendar = ({
                     className={`p-1 h-8 text-sm font-medium border-r border-gray-100 last:border-r-0 transition-colors flex items-center justify-center ${getDayCellStyle(
                       state,
                       isVacation
-                    )} ${!isClickable ? "cursor-not-allowed" : "cursor-pointer"}`}
+                    )} ${
+                      !isClickable ? "cursor-not-allowed" : "cursor-pointer"
+                    }`}
                   >
                     {isVacation && <Flag className="h-3 w-3" />}
                   </button>
