@@ -27,6 +27,7 @@ def build_and_solve(model: HardModel) -> SolverSolution:
     - at least one specialist per active day (in any role),
     - no doctor can be onsite and oncall on the same day,
     - no assignment outside allowed_slots (unavailability + ignore_* are already "cut out").
+    ```
     """
     # If there are no allowed slots at all, the solver has nothing to work with.
     if not model.allowed_slots:
@@ -102,8 +103,8 @@ def build_and_solve(model: HardModel) -> SolverSolution:
 
     # 4) Objective (soft constraints) ------------------------------------------
     # Build a ProblemData "view" from the HardModel.
-    # For ETAP 3A rest rules only need year/month/days + doctors/preferences,
-    # but ProblemData requires weekdays, so we compute it here.
+    # Rest rules and ETAP 3B objectives need year/month/days + doctors/preferences.
+    # ProblemData also requires weekdays, so we compute it here.
     problem_view = ProblemData(
         year=model.year,
         month=model.month,
@@ -116,14 +117,34 @@ def build_and_solve(model: HardModel) -> SolverSolution:
         ignore_slots=model.ignore_slots,
     )
 
-    # Add rest-rule penalties and minimize them.
+    # Add rest-rule penalties (ETAP 3A).
     total_rest_penalty = objective_builder.attach_rest_objective(
         cp=cp,
         x=x,
         model=model,
         problem=problem_view,
     )
-    cp.Minimize(total_rest_penalty)
+
+    # Add preferred concrete days penalties (ETAP 3B).
+    total_preferred_days_penalty = objective_builder.attach_preferred_days_objective(
+        cp=cp,
+        x=x,
+        model=model,
+        problem=problem_view,
+    )
+
+    # Add totals penalties: monthly + weekend max/target (ETAP 3B).
+    total_totals_penalty = objective_builder.attach_totals_objective(
+        cp=cp,
+        x=x,
+        model=model,
+        problem=problem_view,
+    )
+
+    # Combined objective:
+    # - rest rules have strong weights (from scoring.py),
+    # - preferred days and totals are additional soft goals.
+    cp.Minimize(total_rest_penalty + total_preferred_days_penalty + total_totals_penalty)
 
     # 5) Solve -----------------------------------------------------------------
     solver = cp_model.CpSolver()
