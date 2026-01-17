@@ -141,52 +141,10 @@ def build_and_solve(model: HardModel) -> SolverSolution:
         problem=problem_view,
     )
 
-    # Add fairness penalties by role groups (ETAP 3C).
-    total_fairness_penalty = objective_builder.attach_fairness_objective(
-        cp=cp,
-        x=x,
-        model=model,
-        problem=problem_view,
-    )
-
-    # Add weekday pattern objective (ETAP 4A).
-    total_weekday_patterns_penalty = objective_builder.attach_weekday_patterns_objective(
-        cp=cp,
-        x=x,
-        model=model,
-        problem=problem_view,
-    )
-
-    # Add preferred partners objective (lower-priority tie-breaker).
-    total_preferred_partners_penalty = objective_builder.attach_preferred_partners_objective(
-        cp=cp,
-        x=x,
-        model=model,
-        problem=problem_view,
-    )
-
-    # Add "avoid Friday if weekend off" objective (very low-priority tie-breaker).
-    total_friday_free_weekend_penalty = objective_builder.attach_avoid_friday_if_weekend_off_objective(
-        cp=cp,
-        x=x,
-        model=model,
-        problem=problem_view,
-    )
-
     # Combined objective:
     # - rest rules have strong weights (from scoring.py),
-    # - preferred days and totals are additional soft goals,
-    # - fairness tries to balance load inside role groups,
-    # - weekday patterns are a lower-priority tie-breaker.
-    cp.Minimize(
-        total_rest_penalty
-        + total_preferred_days_penalty
-        + total_totals_penalty
-        + total_fairness_penalty
-        + total_weekday_patterns_penalty
-        + total_preferred_partners_penalty
-        + total_friday_free_weekend_penalty
-    )
+    # - preferred days and totals are additional soft goals.
+    cp.Minimize(total_rest_penalty + total_preferred_days_penalty + total_totals_penalty)
 
     # 5) Solve -----------------------------------------------------------------
     solver = cp_model.CpSolver()
