@@ -8,7 +8,7 @@ This module defines:
 - small helper functions to keep objective_builder readable.
 """
 
-from backend.models.common_enums import DoctorRole, ShiftType
+from backend.models.common_enums import DoctorRole
 
 # ---------------------------------------------------------------------------
 # Preference weights (generic "priority multipliers")
@@ -59,7 +59,7 @@ def rest_cross_shift_weight(*, role: DoctorRole) -> int:
 
 
 # ---------------------------------------------------------------------------
-# Preferred days + totals penalties (MVP)
+# ETAP 3B: Preferred days + totals penalties (MVP)
 # ---------------------------------------------------------------------------
 
 # Preferred concrete day missing penalty (per preferred day that is not assigned).
@@ -108,29 +108,3 @@ def preferred_day_miss_weight_for_doctor(*, is_head: bool, role: DoctorRole) -> 
         weight += PREF_DAY_HEAD_MISS_WEIGHT
 
     return weight
-
-
-# ---------------------------------------------------------------------------
-# Fairness by groups (specialists vs residents)
-# ---------------------------------------------------------------------------
-
-# MVP weights: a bit lower than rest rules, comparable or slightly lower than totals.
-# Weekends are slightly more important because they are usually less preferred.
-
-FAIRNESS_WEEKDAY_ONSITE_WEIGHT = 10
-FAIRNESS_WEEKEND_ONSITE_WEIGHT = 14
-FAIRNESS_WEEKDAY_ONCALL_WEIGHT = 8
-FAIRNESS_WEEKEND_ONCALL_WEIGHT = 12
-
-
-def fairness_weight(*, shift_type: ShiftType, is_weekend: bool) -> int:
-    """
-    Return the fairness weight for a given category.
-
-    ```
-    This helper exists only to keep objective_builder readable.
-    It maps (shift_type + weekday/weekend) to the correct constant weight.
-    """
-    if shift_type == ShiftType.onsite:
-        return FAIRNESS_WEEKEND_ONSITE_WEIGHT if is_weekend else FAIRNESS_WEEKDAY_ONSITE_WEIGHT
-    return FAIRNESS_WEEKEND_ONCALL_WEIGHT if is_weekend else FAIRNESS_WEEKDAY_ONCALL_WEIGHT
