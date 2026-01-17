@@ -8,7 +8,7 @@ This module defines:
 - small helper functions to keep objective_builder readable.
 """
 
-from backend.models.common_enums import DoctorRole, ShiftType
+from backend.models.common_enums import DoctorRole
 
 # ---------------------------------------------------------------------------
 # Preference weights (generic "priority multipliers")
@@ -38,7 +38,7 @@ def preference_weight_for_doctor(*, is_head: bool, role: DoctorRole) -> float:
 
 
 # ---------------------------------------------------------------------------
-# 1. Rest-rule penalties
+# Rest-rule penalties (ETAP 3A)
 # ---------------------------------------------------------------------------
 # Bigger = stronger preference to avoid the pattern.
 
@@ -59,7 +59,7 @@ def rest_cross_shift_weight(*, role: DoctorRole) -> int:
 
 
 # ---------------------------------------------------------------------------
-# 2. Preferred days + totals penalties
+# ETAP 3B: Preferred days + totals penalties (MVP)
 # ---------------------------------------------------------------------------
 
 # Preferred concrete day missing penalty (per preferred day that is not assigned).
@@ -83,7 +83,7 @@ def preferred_day_miss_weight_for_doctor(*, is_head: bool, role: DoctorRole) -> 
     Return the penalty weight for missing a preferred concrete day
     (preferred_onsite_days / preferred_oncall_days) for a given doctor.
 
-    Rules:
+    Rules (MVP):
     - base part depends on role:
         * specialist -> PREF_DAY_SPECIALIST_MISS_WEIGHT
         * resident   -> PREF_DAY_RESIDENT_MISS_WEIGHT
@@ -108,66 +108,3 @@ def preferred_day_miss_weight_for_doctor(*, is_head: bool, role: DoctorRole) -> 
         weight += PREF_DAY_HEAD_MISS_WEIGHT
 
     return weight
-
-
-# ---------------------------------------------------------------------------
-# 3. Fairness by groups (specialists vs residents)
-# ---------------------------------------------------------------------------
-
-# MVP weights: a bit lower than rest rules, comparable or slightly lower than totals.
-# Weekends are slightly more important because they are usually less preferred.
-
-FAIRNESS_WEEKDAY_ONSITE_WEIGHT = 10
-FAIRNESS_WEEKEND_ONSITE_WEIGHT = 14
-FAIRNESS_WEEKDAY_ONCALL_WEIGHT = 8
-FAIRNESS_WEEKEND_ONCALL_WEIGHT = 12
-
-
-def fairness_weight(*, shift_type: ShiftType, is_weekend: bool) -> int:
-    """
-    Return the fairness weight for a given category.
-
-    ```
-    This helper exists only to keep objective_builder readable.
-    It maps (shift_type + weekday/weekend) to the correct constant weight.
-    """
-    if shift_type == ShiftType.onsite:
-        return FAIRNESS_WEEKEND_ONSITE_WEIGHT if is_weekend else FAIRNESS_WEEKDAY_ONSITE_WEIGHT
-    return FAIRNESS_WEEKEND_ONCALL_WEIGHT if is_weekend else FAIRNESS_WEEKDAY_ONCALL_WEIGHT
-
-
-# ---------------------------------------------------------------------------
-# 4. Weekday pattern preferences
-# ---------------------------------------------------------------------------
-
-# Small weights (lower priority than rest/totals/fairness).
-# Preferred weekdays give a small BONUS (negative term in objective),
-# avoid weekdays give a small PENALTY (positive term in objective).
-
-WEEKDAY_PREFERRED_BONUS_WEIGHT = 3
-WEEKDAY_AVOID_PENALTY_WEIGHT = 4
-
-
-def weekday_pattern_weight(*, kind: str) -> int:
-    """
-    kind: "preferred" | "avoid"
-    Returns the weight used for weekday patterns.
-    """
-    if kind == "preferred":
-        return WEEKDAY_PREFERRED_BONUS_WEIGHT
-    if kind == "avoid":
-        return WEEKDAY_AVOID_PENALTY_WEIGHT
-    raise ValueError(f"Unknown weekday pattern kind: {kind}")
-
-
-# ---------------------------------------------------------------------------
-# 5. Preferred partners
-# ---------------------------------------------------------------------------
-
-# Small bonus (lower priority than rest/totals/fairness).
-PREFERRED_PARTNER_BONUS_WEIGHT = 2
-
-
-def preferred_partner_bonus_weight() -> int:
-    """Return small bonus weight for preferred partners working the same day."""
-    return PREFERRED_PARTNER_BONUS_WEIGHT
