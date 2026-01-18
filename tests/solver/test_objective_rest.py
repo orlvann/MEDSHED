@@ -48,6 +48,8 @@ from ._helpers import (
     solution_snapshot,
 )
 
+pytestmark = [pytest.mark.solver]
+
 
 def _snapshot(model, solution) -> str:
     """
@@ -65,7 +67,6 @@ def _snapshot(model, solution) -> str:
 # --------------------------------------------------------------------------------------
 
 
-@pytest.mark.integration
 def test_solver_prefers_lower_rest_penalty_solution(make_hard_model, make_doctors, make_preferences):
     """
     INTEGRATION TEST.
@@ -367,7 +368,6 @@ def test_weekend_exception_false_applies_cross_penalty(make_doctors, make_prefer
 # --------------------------------------------------------------------------------------
 
 
-@pytest.mark.integration
 def test_objective_builder_is_defensive_when_x_missing_in_inactive_days(
     make_hard_model, make_doctors, make_preferences
 ):

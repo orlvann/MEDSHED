@@ -62,26 +62,58 @@ It only uses `allowed_slots`, `active_days`, and `ignore_slots`.
 Soft constraints do NOT make the solver fail.
 They only tell the solver which valid solution is "better".
 
-So far we added **rest rules** as a soft objective:
+So far we added these soft objectives:
+
+1) **Rest rules**
 - The solver tries to avoid giving the same doctor duties on **two consecutive days**.
 
-We test these soft rules:
+We test these rest rules:
 
-1. **onsite -> onsite on consecutive days** should be avoided (highest penalty)
-2. **oncall -> oncall on consecutive days** should be avoided (lower penalty)
-3. **cross-shift between days** should be avoided:
-   - onsite day d -> oncall day d+1
-   - oncall day d -> onsite day d+1
-   - cross-shift penalty is **higher for specialists** than for residents
+- **onsite -> onsite on consecutive days** should be avoided (highest penalty)
+- **oncall -> oncall on consecutive days** should be avoided (lower penalty)
+- **cross-shift between days** should be avoided:
+  - onsite day d -> oncall day d+1
+  - oncall day d -> onsite day d+1
+  - cross-shift penalty is **higher for specialists** than for residents
 
-4. **Weekend exception (Sat -> Sun only, cross-shift only)**
-   - If a doctor has `allow_weekend_consecutive_onsite_oncall=True`,
-     then cross-shift Sat->Sun for that doctor is **NOT penalized**.
-   - This exception applies only to cross-shift.
+Weekend exception (Sat -> Sun only, cross-shift only):
+- If a doctor has `allow_weekend_consecutive_onsite_oncall=True`,
+  then cross-shift Sat->Sun for that doctor is **NOT penalized**.
+- This exception applies only to cross-shift.
 
-Pewnie — dopisałem gotową sekcję do wklejenia, z Twoimi markerami (`unit`, `integration`) i praktycznymi komendami.
+2) **Preferred concrete days**
+- The solver tries to satisfy:
+  - `preferred_onsite_days`
+  - `preferred_oncall_days`
+- If a preferred slot is impossible (missing `x` variable / forbidden slot),
+  we skip the penalty (MVP rule).
+- Missing a preferred day is weighted by doctor importance:
+  a doctor who is both **head** and **specialist** has a higher miss penalty
+  than a plain specialist.
 
-````md
+3) **Totals**
+The solver tries to match per-doctor totals using:
+
+- monthly totals:
+  - `max_*_total`
+  - `target_*_total`
+- weekend totals:
+  - `max_*_weekends`
+  - `target_*_weekends`
+
+Important:
+- Max and target penalties are quadratic (escalating): `deviation^2` / `excess^2`.
+  This encourages spreading unavoidable violations across doctors instead of concentrating them.
+- Totals objective is defensive:
+  - if a day/slot has no `x` variables (e.g. ignored day), it must not crash
+  - if `participant_doctor_ids` is empty, it returns a valid `0` IntVar
+
+4) **Role-group fairness**
+- If multiple feasible schedules exist and other objectives do not differentiate them,
+  the solver prefers a more even distribution of shifts **inside each role group**
+  (specialists compared with specialists, residents compared with residents).
+- This is tested on **non-consecutive weekdays** to avoid rest-rule influence.
+
 ### How to run the tests (simple commands)
 
 You run tests using `pytest` (a Python test runner).
@@ -141,12 +173,30 @@ Soft objective (rest rules):
 pytest tests/solver/test_objective_rest.py -vv
 ```
 
-#### 7) Run tests by marker (unit vs integration)
+Soft objective (preferred days):
+
+```bash
+pytest tests/solver/test_objective_preferred_days.py -vv
+```
+
+Soft objective (totals):
+
+```bash
+pytest tests/solver/test_objective_totals.py -vv
+```
+
+Soft objective (fairness):
+
+```bash
+pytest tests/solver/test_objective_fairness.py -vv
+```
+
+#### 7) Run tests by marker (unit vs solver)
 
 We use pytest markers to group tests:
 
-* `unit`: fast tests that do NOT run the OR-Tools solver
-* `integration`: tests that DO run the OR-Tools solver (still no DB / no API)
+* `unit`: fast tests that do NOT run the OR-Tools solver (pure logic checks)
+* `solver`: tests that DO run the OR-Tools solver (no DB / no API)
 
 Run only unit tests:
 
@@ -154,16 +204,16 @@ Run only unit tests:
 pytest -m unit -vv
 ```
 
-Run only integration tests:
+Run only solver tests:
 
 ```bash
-pytest -m integration -vv
+pytest -m solver -vv
 ```
 
-Run everything except integration tests:
+Run everything except solver tests:
 
 ```bash
-pytest -m "not integration" -vv
+pytest -m "not solver" -vv
 ```
 
 Note:
