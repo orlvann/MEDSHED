@@ -64,7 +64,7 @@ They only tell the solver which valid solution is "better".
 
 So far we added these soft objectives:
 
-1. **Rest rules**
+1) **Rest rules**
 - The solver tries to avoid giving the same doctor duties on **two consecutive days**.
 
 We test these rest rules:
@@ -81,7 +81,7 @@ Weekend exception (Sat -> Sun only, cross-shift only):
   then cross-shift Sat->Sun for that doctor is **NOT penalized**.
 - This exception applies only to cross-shift.
 
-2. **Preferred concrete days**
+2) **Preferred concrete days**
 - The solver tries to satisfy:
   - `preferred_onsite_days`
   - `preferred_oncall_days`
@@ -91,7 +91,7 @@ Weekend exception (Sat -> Sun only, cross-shift only):
   a doctor who is both **head** and **specialist** has a higher miss penalty
   than a plain specialist.
 
-3. **Totals**
+3) **Totals**
 The solver tries to match per-doctor totals using:
 
 - monthly totals:
@@ -108,44 +108,11 @@ Important:
   - if a day/slot has no `x` variables (e.g. ignored day), it must not crash
   - if `participant_doctor_ids` is empty, it returns a valid `0` IntVar
 
-4. **Role-group fairness**
+4) **Role-group fairness**
 - If multiple feasible schedules exist and other objectives do not differentiate them,
   the solver prefers a more even distribution of shifts **inside each role group**
   (specialists compared with specialists, residents compared with residents).
 - This is tested on **non-consecutive weekdays** to avoid rest-rule influence.
-
-5. **Weekday patterns (ETAP 4A)**
-
-* Lower-priority tie-breaker based on weekday preferences (0=Mon .. 6=Sun).
-* The solver adds:
-
-  * a small **bonus** for assigning a doctor on their `preferred_*_weekdays`
-  * a small **penalty** for assigning a doctor on their `avoid_*_weekdays`
-* This objective is defensive:
-
-  * if the slot variable does not exist (forbidden / filtered), the term is skipped (no crash)
-* This is tested on a **single day** scenario, so rest rules do not matter:
-
-  * `tests/solver/test_objective_weekday_patterns.py`
-
-    * preferred weekday breaks tie
-    * avoid weekday breaks tie
-
-6. **Preferred partners**
-
-* Lower-priority tie-breaker based on `preferred_partners: list[int]`.
-* The solver adds a small **bonus** when two preferred partners work on the **same day**
-  (any combination of shifts: onsite/oncall).
-* Defensive behavior:
-
-  * if a slot variable does not exist (forbidden / filtered), the term is skipped (no crash)
-  * pairs are counted only once (`doc_id < partner_id`)
-* Tests:
-
-  * `tests/solver/test_objective_preferred_partners.py`
-
-    * partner bonus pushes partners to work on the same days
-    * with partner >= without partner (together count)
 
 ### How to run the tests (simple commands)
 
@@ -223,17 +190,6 @@ Soft objective (fairness):
 ```bash
 pytest tests/solver/test_objective_fairness.py -vv
 ```
-
-Soft objective (weekday patterns):
-
-```bash
-pytest tests/solver/test_objective_weekday_patterns.py -vv
-```
-
-Soft objective (preferred partners):
- 
- ```bash
- ```
 
 #### 7) Run tests by marker (unit vs solver)
 
