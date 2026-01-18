@@ -22,8 +22,11 @@ from backend.core import engine, scoring
 from backend.core.types import DoctorInput, SolverStatus
 from backend.models.common_enums import DoctorRole, ShiftType
 
+<<<<<<< HEAD
 pytestmark = [pytest.mark.solver]
 
+=======
+>>>>>>> beae0ea (test(solver): add objective tests for preferred days and totals)
 
 def _get_assigned_doctor(solution, *, day: int, shift_type: ShiftType) -> int | None:
     """Return doctor_id assigned to (day, shift_type), or None if not present."""
@@ -45,6 +48,10 @@ def test_preferred_day_weight_sums_for_head_specialist():
     assert w == scoring.PREF_DAY_HEAD_MISS_WEIGHT + scoring.PREF_DAY_SPECIALIST_MISS_WEIGHT
 
 
+<<<<<<< HEAD
+=======
+@pytest.mark.integration
+>>>>>>> beae0ea (test(solver): add objective tests for preferred days and totals)
 def test_solver_prefers_satisfying_preferred_onsite_day(make_hard_model, make_doctors, make_preferences):
     """
     Integration test.
@@ -96,6 +103,10 @@ def test_solver_prefers_satisfying_preferred_onsite_day(make_hard_model, make_do
     )
 
 
+<<<<<<< HEAD
+=======
+@pytest.mark.integration
+>>>>>>> beae0ea (test(solver): add objective tests for preferred days and totals)
 def test_solver_prefers_head_specialist_when_both_prefer_same_day(make_hard_model, make_preferences):
     """
     Integration test.
