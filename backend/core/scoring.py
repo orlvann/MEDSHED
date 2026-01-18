@@ -38,7 +38,7 @@ def preference_weight_for_doctor(*, is_head: bool, role: DoctorRole) -> float:
 
 
 # ---------------------------------------------------------------------------
-# Rest-rule penalties (ETAP 3A)
+# 1. Rest-rule penalties
 # ---------------------------------------------------------------------------
 # Bigger = stronger preference to avoid the pattern.
 
@@ -59,7 +59,7 @@ def rest_cross_shift_weight(*, role: DoctorRole) -> int:
 
 
 # ---------------------------------------------------------------------------
-# Preferred days + totals penalties (MVP)
+# 2. Preferred days + totals penalties
 # ---------------------------------------------------------------------------
 
 # Preferred concrete day missing penalty (per preferred day that is not assigned).
@@ -83,7 +83,7 @@ def preferred_day_miss_weight_for_doctor(*, is_head: bool, role: DoctorRole) -> 
     Return the penalty weight for missing a preferred concrete day
     (preferred_onsite_days / preferred_oncall_days) for a given doctor.
 
-    Rules (MVP):
+    Rules:
     - base part depends on role:
         * specialist -> PREF_DAY_SPECIALIST_MISS_WEIGHT
         * resident   -> PREF_DAY_RESIDENT_MISS_WEIGHT
@@ -111,7 +111,7 @@ def preferred_day_miss_weight_for_doctor(*, is_head: bool, role: DoctorRole) -> 
 
 
 # ---------------------------------------------------------------------------
-# Fairness by groups (specialists vs residents)
+# 3. Fairness by groups (specialists vs residents)
 # ---------------------------------------------------------------------------
 
 # MVP weights: a bit lower than rest rules, comparable or slightly lower than totals.
@@ -134,3 +134,27 @@ def fairness_weight(*, shift_type: ShiftType, is_weekend: bool) -> int:
     if shift_type == ShiftType.onsite:
         return FAIRNESS_WEEKEND_ONSITE_WEIGHT if is_weekend else FAIRNESS_WEEKDAY_ONSITE_WEIGHT
     return FAIRNESS_WEEKEND_ONCALL_WEIGHT if is_weekend else FAIRNESS_WEEKDAY_ONCALL_WEIGHT
+
+
+# ---------------------------------------------------------------------------
+# 4. Weekday pattern preferences
+# ---------------------------------------------------------------------------
+
+# Small weights (lower priority than rest/totals/fairness).
+# Preferred weekdays give a small BONUS (negative term in objective),
+# avoid weekdays give a small PENALTY (positive term in objective).
+
+WEEKDAY_PREFERRED_BONUS_WEIGHT = 3
+WEEKDAY_AVOID_PENALTY_WEIGHT = 4
+
+
+def weekday_pattern_weight(*, kind: str) -> int:
+    """
+    kind: "preferred" | "avoid"
+    Returns the weight used for weekday patterns.
+    """
+    if kind == "preferred":
+        return WEEKDAY_PREFERRED_BONUS_WEIGHT
+    if kind == "avoid":
+        return WEEKDAY_AVOID_PENALTY_WEIGHT
+    raise ValueError(f"Unknown weekday pattern kind: {kind}")
