@@ -20,7 +20,7 @@ Data model guidance:
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Optional, cast
+from typing import TYPE_CHECKING, Any, Optional, cast
 from zoneinfo import ZoneInfo
 
 from backend.db.session import SessionLocal
@@ -42,7 +42,13 @@ from backend.models.schemas import (
     PreferenceWorkingPut,
     PreferenceWorkingRead,
 )
-from backend.routers.deps import UserCtx
+
+if TYPE_CHECKING:
+    from backend.routers.deps import UserCtx
+else:
+    # Runtime: avoid importing deps/auth/config stack for scripts/smoke tests.
+    UserCtx = Any  # type: ignore[assignment]
+
 from backend.utils.timez import ORG_TZ, get_period_status, now_utc
 
 # How many checkpoints we keep per (doctor_id, year, month).
@@ -368,6 +374,34 @@ def get_working(*, year: int, month: int, doctor_id: int, actor: UserCtx) -> Pre
             session.query(PreferencePointer).filter_by(doctor_id=doctor_id, year=year, month=month).one_or_none()
         )
 
+        # 3) Compute UNDO/REDO flags for initial GET (form load).
+        #    We base this ONLY on the versions history + current pointer position.
+        if pointer is not None and pointer.current_version_id is not None:
+            versions = (
+                session.query(PreferenceVersion)
+                .filter_by(year=year, month=month, doctor_id=doctor_id)
+                .order_by(PreferenceVersion.id.asc())
+                .all()
+            )
+            version_ids = [int(v.id) for v in versions]
+            current_version_id_int = int(pointer.current_version_id)
+
+            try:
+                idx = version_ids.index(current_version_id_int)
+            except ValueError:
+                # Inconsistent state: pointer points to a version that is not in the list.
+                idx = None
+
+            if idx is None:
+                can_undo = False
+                can_redo = False
+            else:
+                can_undo = idx > 0
+                can_redo = idx < len(version_ids) - 1
+        else:
+            can_undo = False
+            can_redo = False
+
     # 3) Derive status from pointer: submitted if there is a checkpoint.
     if pointer and pointer.current_version_id:
         pref_status = PreferenceStatus.submitted
@@ -450,12 +484,7 @@ def get_working(*, year: int, month: int, doctor_id: int, actor: UserCtx) -> Pre
         submitted_by_role = None
         submitted_by_user_id = None
 
-    # 6) UNDO/REDO flags for this view:
-    #    We do not inspect history here; the UI can rely on flags returned
-    #    from checkpoint/undo/redo endpoints instead.
-
-    can_undo = False
-    can_redo = False
+    # 6) UNDO/REDO flags are computed from DB history on initial GET (see SessionLocal block above).
 
     return PreferenceWorkingRead(
         doctor_id=doctor_id,
