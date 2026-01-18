@@ -24,8 +24,6 @@ from backend.core import engine, objective_builder
 from backend.core.types import ProblemData, SolverStatus
 from backend.models.common_enums import DoctorRole, ShiftType
 
-pytestmark = [pytest.mark.solver]
-
 
 def _count_assignments(solution, *, doctor_id: int, shift_type: ShiftType) -> int:
     """Count how many assignments a doctor has for a given shift type."""
@@ -40,6 +38,7 @@ def _get_assigned_doctor(solution, *, day: int, shift_type: ShiftType) -> int | 
     return None
 
 
+@pytest.mark.integration
 def test_solver_avoids_exceeding_max_onsite_total_when_possible(make_hard_model, make_doctors, make_preferences):
     """
     Integration test (basic max behavior).
@@ -95,6 +94,7 @@ def test_solver_avoids_exceeding_max_onsite_total_when_possible(make_hard_model,
     )
 
 
+@pytest.mark.integration
 def test_quadratic_max_penalty_prefers_spreading_excess(make_hard_model, make_doctors, make_preferences):
     """
     Integration test: quadratic (escalating) MAX penalty.
@@ -156,6 +156,7 @@ def test_quadratic_max_penalty_prefers_spreading_excess(make_hard_model, make_do
     )
 
 
+@pytest.mark.integration
 def test_quadratic_target_penalty_prefers_spreading_deviation(make_hard_model, make_doctors, make_preferences):
     """
     Integration test: quadratic (escalating) TARGET penalty.
@@ -219,6 +220,7 @@ def test_quadratic_target_penalty_prefers_spreading_deviation(make_hard_model, m
     )
 
 
+@pytest.mark.integration
 def test_solver_avoids_weekend_onsite_when_max_weekends_zero(make_hard_model, make_doctors, make_preferences):
     """
     Integration test (weekend max).
@@ -275,6 +277,7 @@ def test_solver_avoids_weekend_onsite_when_max_weekends_zero(make_hard_model, ma
     )
 
 
+@pytest.mark.integration
 def test_totals_objective_is_defensive_when_x_missing_in_ignored_day(make_hard_model, make_doctors, make_preferences):
     """
     Defensive integration test.
