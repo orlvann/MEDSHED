@@ -417,3 +417,177 @@ def attach_rest_objective(
         cp.Add(total_penalty == 0)
 
     return total_penalty
+
+
+def attach_fairness_objective(
+    cp: cp_model.CpModel,
+    x: Dict[Tuple[int, ShiftType, int], cp_model.IntVar],
+    model: HardModel,
+    problem: ProblemData,
+) -> cp_model.IntVar:
+    """
+    Add fairness penalties across doctors within the same role group.
+
+    ```
+    Groups (MVP):
+    - Heads are included in the 'specialist' fairness group.
+    - specialists (DoctorRole.specialist)
+    - residents (DoctorRole.resident)
+
+    Counts considered:
+    - onsite weekdays, onsite weekends,
+    - oncall weekdays, oncall weekends.
+
+    For each group and count type:
+    - compute per-doctor totals,
+    - compute an integer "average" (floor),
+    - penalize absolute deviations from that average.
+
+    Returns:
+        total_fairness_penalty: IntVar
+    """
+    penalty_terms: List[cp_model.LinearExpr] = []
+
+    # 1) Split days into weekend vs weekday (local helper, no dependency on utils/timez.py).
+    weekend_days: Set[int] = {
+        d for d in model.days if datetime(model.year, model.month, d).weekday() in (5, 6)  # 5=Sat, 6=Sun
+    }
+    weekday_days: List[int] = [d for d in model.days if d not in weekend_days]
+
+    # 2) Build doctor groups by role.
+    group_to_doctors: Dict[str, List[int]] = {
+        "specialist": [],
+        "resident": [],
+    }
+
+    for doc_id in sorted(problem.participant_doctor_ids):
+        doctor = problem.doctors.get(doc_id)
+        if not doctor:
+            continue
+
+        if doctor.role == DoctorRole.specialist:
+            # Heads are included in the 'specialist' fairness group.
+            group_to_doctors["specialist"].append(doc_id)
+        else:
+            group_to_doctors["resident"].append(doc_id)
+
+    def _add_fairness_for_category(
+        *,
+        group_name: str,
+        group_doctors: List[int],
+        category_name: str,
+        days: List[int],
+        shift_type: ShiftType,
+        max_per_doctor: int,
+        weight: int,
+    ) -> None:
+        """
+        Add fairness penalty terms for one category (e.g. onsite weekday in specialists).
+
+        We compute:
+        - total shifts for each doctor in this category,
+        - sum of totals across the group,
+        - average_total as an integer FLOOR:
+            n * average_total <= sum_totals <= n * average_total + (n - 1)
+        (This avoids forcing divisibility, which could accidentally make the model infeasible.)
+        - abs deviation per doctor from average_total,
+        - weighted sum of abs deviations goes to the objective.
+        """
+        n = len(group_doctors)
+        if n <= 1:
+            # Fairness does not make sense for a group of size 0 or 1.
+            return
+
+        totals: List[cp_model.IntVar] = []
+        for doc_id in group_doctors:
+            total = cp.NewIntVar(0, max_per_doctor, f"fair_tot_{group_name}_{category_name}_doc{doc_id}")
+
+            terms = [x[(d, shift_type, doc_id)] for d in days if (d, shift_type, doc_id) in x]
+
+            if terms:
+                cp.Add(total == sum(terms))
+            else:
+                cp.Add(total == 0)
+
+            totals.append(total)
+
+        sum_totals = cp.NewIntVar(0, n * max_per_doctor, f"fair_sum_{group_name}_{category_name}")
+        cp.Add(sum_totals == sum(totals))
+
+        average_total = cp.NewIntVar(0, max_per_doctor, f"fair_avg_{group_name}_{category_name}")
+        cp.Add(n * average_total <= sum_totals)
+        cp.Add(sum_totals <= n * average_total + (n - 1))
+
+        for idx, doc_id in enumerate(group_doctors):
+            deviation_pos = cp.NewIntVar(0, max_per_doctor, f"fair_dev_pos_{group_name}_{category_name}_doc{doc_id}")
+            deviation_neg = cp.NewIntVar(0, max_per_doctor, f"fair_dev_neg_{group_name}_{category_name}_doc{doc_id}")
+
+            cp.Add(deviation_pos >= totals[idx] - average_total)
+            cp.Add(deviation_pos >= 0)
+            cp.Add(deviation_neg >= average_total - totals[idx])
+            cp.Add(deviation_neg >= 0)
+
+            abs_dev = cp.NewIntVar(0, max_per_doctor, f"fair_abs_dev_{group_name}_{category_name}_doc{doc_id}")
+            cp.Add(abs_dev == deviation_pos + deviation_neg)
+
+            penalty_terms.append(int(weight) * abs_dev)
+
+    # 3) Add fairness per group, per (shift_type x weekday/weekend).
+    for group_name, group_doctors in group_to_doctors.items():
+        if len(group_doctors) <= 1:
+            continue
+
+        # Onsite weekdays
+        _add_fairness_for_category(
+            group_name=group_name,
+            group_doctors=group_doctors,
+            category_name="onsite_weekday",
+            days=weekday_days,
+            shift_type=ShiftType.onsite,
+            max_per_doctor=len(weekday_days),
+            weight=scoring.fairness_weight(shift_type=ShiftType.onsite, is_weekend=False),
+        )
+
+        # Onsite weekends
+        _add_fairness_for_category(
+            group_name=group_name,
+            group_doctors=group_doctors,
+            category_name="onsite_weekend",
+            days=list(weekend_days),
+            shift_type=ShiftType.onsite,
+            max_per_doctor=len(weekend_days),
+            weight=scoring.fairness_weight(shift_type=ShiftType.onsite, is_weekend=True),
+        )
+
+        # Oncall weekdays
+        _add_fairness_for_category(
+            group_name=group_name,
+            group_doctors=group_doctors,
+            category_name="oncall_weekday",
+            days=weekday_days,
+            shift_type=ShiftType.oncall,
+            max_per_doctor=len(weekday_days),
+            weight=scoring.fairness_weight(shift_type=ShiftType.oncall, is_weekend=False),
+        )
+
+        # Oncall weekends
+        _add_fairness_for_category(
+            group_name=group_name,
+            group_doctors=group_doctors,
+            category_name="oncall_weekend",
+            days=list(weekend_days),
+            shift_type=ShiftType.oncall,
+            max_per_doctor=len(weekend_days),
+            weight=scoring.fairness_weight(shift_type=ShiftType.oncall, is_weekend=True),
+        )
+
+    # 4) Wrap terms into a single IntVar.
+    if penalty_terms:
+        max_penalty = 1_000_000
+        total_penalty = cp.NewIntVar(0, max_penalty, "total_fairness_penalty")
+        cp.Add(total_penalty == sum(penalty_terms))
+    else:
+        total_penalty = cp.NewIntVar(0, 0, "total_fairness_penalty")
+        cp.Add(total_penalty == 0)
+
+    return total_penalty
