@@ -2,11 +2,11 @@
 """
 Attach soft constraints and objective to the hard model.
 
-ETAP 3A:
+STAGE 1:
 * Add ONLY rest-rule penalties as soft constraints (objective terms).
 * Hard constraints remain in engine.py.
 
-ETAP 3B:
+STAGE 2:
 * Add preferred-days penalties + totals penalties as additional soft terms.
 * We keep weights centralized in backend/core/scoring.py.
 """
@@ -27,10 +27,8 @@ def _is_weekend_pair(year: int, month: int, d: int, d_next: int) -> bool:
     """
     Return True only for Saturday -> Sunday pairs.
 
-    ```
     We intentionally use plain datetime.weekday() without time zones:
     - weekday(): 0=Mon ... 5=Sat, 6=Sun
-    ```
     """
     wd = datetime(year, month, d).weekday()
     wd_next = datetime(year, month, d_next).weekday()
@@ -46,10 +44,8 @@ def _add_pair_violation(
     """
     Create a BoolVar v that becomes 1 when BOTH a==1 and b==1.
 
-    ```
     AND encoding for binary vars:
     v >= a + b - 1
-    ```
     """
     v = cp.NewBoolVar(name)
     cp.Add(v >= a + b - 1)
@@ -84,7 +80,7 @@ def attach_preferred_days_objective(
         if prefs is None:
             continue
 
-        # Decide weight for missing preferred concrete days (head > specialist > resident).
+        # Decide weight for missing preferred concrete days (head + role combined in scoring).
         is_head = bool(doctor.is_head) if doctor else False
         role = doctor.role if doctor else DoctorRole.resident
         miss_weight = scoring.preferred_day_miss_weight_for_doctor(is_head=is_head, role=role)
@@ -136,6 +132,11 @@ def attach_totals_objective(
     - monthly totals (max/target for onsite/oncall),
     - weekend totals (max/target for onsite/oncall weekends).
 
+    Notes:
+    - "max_*" uses linear excess (each shift above max costs the same).
+    - "target_*" uses an escalating (quadratic) penalty: deviation^2.
+      This discourages concentrating a large deviation on one doctor.
+
     Returns:
         total_penalty: IntVar with the sum of totals penalties.
     """
@@ -144,6 +145,9 @@ def attach_totals_objective(
 
     # Weekend days set (calendar days where weekday is Sat (5) or Sun (6)).
     weekend_days: Set[int] = {d for d in model.days if datetime(model.year, model.month, d).weekday() in (5, 6)}
+
+    max_dev = len(model.days)
+    max_w_dev = len(weekend_days)
 
     for doc_id in model.participant_doctor_ids:
         prefs = problem.preferences.get(doc_id)
@@ -159,53 +163,83 @@ def attach_totals_objective(
         onsite_terms = [x[(d, ShiftType.onsite, doc_id)] for d in model.days if (d, ShiftType.onsite, doc_id) in x]
         oncall_terms = [x[(d, ShiftType.oncall, doc_id)] for d in model.days if (d, ShiftType.oncall, doc_id) in x]
 
-        total_onsite = cp.NewIntVar(0, len(model.days), f"tot_ons_doc{doc_id}")
-        total_oncall = cp.NewIntVar(0, len(model.days), f"tot_oncall_doc{doc_id}")
+        total_onsite = cp.NewIntVar(0, max_dev, f"tot_ons_doc{doc_id}")
+        total_oncall = cp.NewIntVar(0, max_dev, f"tot_oncall_doc{doc_id}")
 
         cp.Add(total_onsite == (sum(onsite_terms) if onsite_terms else 0))
         cp.Add(total_oncall == (sum(oncall_terms) if oncall_terms else 0))
 
-        # max totals -> penalize excess above max
+        # max totals ->
+        # penalize excess above max with escalating (quadratic) penalty for fair distribution among doctors
         if prefs.max_onsite_total is not None:
             max_ons = int(prefs.max_onsite_total)
-            excess_ons = cp.NewIntVar(0, len(model.days), f"excess_ons_doc{doc_id}")
+
+            excess_ons = cp.NewIntVar(0, max_dev, f"excess_ons_doc{doc_id}")
             cp.Add(excess_ons >= total_onsite - max_ons)
             cp.Add(excess_ons >= 0)
-            penalty_terms.append(scoring.MAX_TOTAL_EXCESS_WEIGHT * excess_ons)
-            ub += int(scoring.MAX_TOTAL_EXCESS_WEIGHT) * len(model.days)
+
+            # Escalating (quadratic) penalty: excess^2 so bigger max violations hurt much more.
+            excess_ons_sq = cp.NewIntVar(0, max_dev * max_dev, f"excess_ons_sq_doc{doc_id}")
+            cp.AddMultiplicationEquality(excess_ons_sq, excess_ons, excess_ons)
+
+            penalty_terms.append(int(scoring.MAX_TOTAL_EXCESS_WEIGHT) * excess_ons_sq)
+            ub += int(scoring.MAX_TOTAL_EXCESS_WEIGHT) * (max_dev * max_dev)
 
         if prefs.max_oncall_total is not None:
             max_onc = int(prefs.max_oncall_total)
-            excess_onc = cp.NewIntVar(0, len(model.days), f"excess_oncall_doc{doc_id}")
+
+            excess_onc = cp.NewIntVar(0, max_dev, f"excess_oncall_doc{doc_id}")
             cp.Add(excess_onc >= total_oncall - max_onc)
             cp.Add(excess_onc >= 0)
-            penalty_terms.append(scoring.MAX_TOTAL_EXCESS_WEIGHT * excess_onc)
-            ub += int(scoring.MAX_TOTAL_EXCESS_WEIGHT) * len(model.days)
 
-        # target totals -> penalize deviation (over + under)
+            # Escalating (quadratic) penalty: excess^2 so bigger max violations hurt much more.
+            excess_onc_sq = cp.NewIntVar(0, max_dev * max_dev, f"excess_oncall_sq_doc{doc_id}")
+            cp.AddMultiplicationEquality(excess_onc_sq, excess_onc, excess_onc)
+
+            penalty_terms.append(int(scoring.MAX_TOTAL_EXCESS_WEIGHT) * excess_onc_sq)
+            ub += int(scoring.MAX_TOTAL_EXCESS_WEIGHT) * (max_dev * max_dev)
+
+        # target totals ->
+        # penalize deviation (over + under) with escalating (quadratic) penalty for fair distribution among doctors
         if prefs.target_onsite_total is not None:
             tgt_ons = int(prefs.target_onsite_total)
-            over = cp.NewIntVar(0, len(model.days), f"tgt_over_ons_doc{doc_id}")
-            under = cp.NewIntVar(0, len(model.days), f"tgt_under_ons_doc{doc_id}")
+
+            over = cp.NewIntVar(0, max_dev, f"tgt_over_ons_doc{doc_id}")
+            under = cp.NewIntVar(0, max_dev, f"tgt_under_ons_doc{doc_id}")
+
             cp.Add(over >= total_onsite - tgt_ons)
             cp.Add(over >= 0)
             cp.Add(under >= tgt_ons - total_onsite)
             cp.Add(under >= 0)
-            penalty_terms.append(scoring.TARGET_TOTAL_DEVIATION_WEIGHT * over)
-            penalty_terms.append(scoring.TARGET_TOTAL_DEVIATION_WEIGHT * under)
-            ub += int(scoring.TARGET_TOTAL_DEVIATION_WEIGHT) * len(model.days) * 2
+
+            over_sq = cp.NewIntVar(0, max_dev * max_dev, f"tgt_over_ons_sq_doc{doc_id}")
+            under_sq = cp.NewIntVar(0, max_dev * max_dev, f"tgt_under_ons_sq_doc{doc_id}")
+            cp.AddMultiplicationEquality(over_sq, over, over)
+            cp.AddMultiplicationEquality(under_sq, under, under)
+
+            penalty_terms.append(int(scoring.TARGET_TOTAL_DEVIATION_WEIGHT) * over_sq)
+            penalty_terms.append(int(scoring.TARGET_TOTAL_DEVIATION_WEIGHT) * under_sq)
+            ub += int(scoring.TARGET_TOTAL_DEVIATION_WEIGHT) * (max_dev * max_dev) * 2
 
         if prefs.target_oncall_total is not None:
             tgt_onc = int(prefs.target_oncall_total)
-            over = cp.NewIntVar(0, len(model.days), f"tgt_over_oncall_doc{doc_id}")
-            under = cp.NewIntVar(0, len(model.days), f"tgt_under_oncall_doc{doc_id}")
+
+            over = cp.NewIntVar(0, max_dev, f"tgt_over_oncall_doc{doc_id}")
+            under = cp.NewIntVar(0, max_dev, f"tgt_under_oncall_doc{doc_id}")
+
             cp.Add(over >= total_oncall - tgt_onc)
             cp.Add(over >= 0)
             cp.Add(under >= tgt_onc - total_oncall)
             cp.Add(under >= 0)
-            penalty_terms.append(scoring.TARGET_TOTAL_DEVIATION_WEIGHT * over)
-            penalty_terms.append(scoring.TARGET_TOTAL_DEVIATION_WEIGHT * under)
-            ub += int(scoring.TARGET_TOTAL_DEVIATION_WEIGHT) * len(model.days) * 2
+
+            over_sq = cp.NewIntVar(0, max_dev * max_dev, f"tgt_over_oncall_sq_doc{doc_id}")
+            under_sq = cp.NewIntVar(0, max_dev * max_dev, f"tgt_under_oncall_sq_doc{doc_id}")
+            cp.AddMultiplicationEquality(over_sq, over, over)
+            cp.AddMultiplicationEquality(under_sq, under, under)
+
+            penalty_terms.append(int(scoring.TARGET_TOTAL_DEVIATION_WEIGHT) * over_sq)
+            penalty_terms.append(int(scoring.TARGET_TOTAL_DEVIATION_WEIGHT) * under_sq)
+            ub += int(scoring.TARGET_TOTAL_DEVIATION_WEIGHT) * (max_dev * max_dev) * 2
 
         # -----------------------------
         # 2) Weekend totals (onsite/oncall)
@@ -214,8 +248,8 @@ def attach_totals_objective(
         onsite_w_terms = [x[(d, ShiftType.onsite, doc_id)] for d in weekend_days if (d, ShiftType.onsite, doc_id) in x]
         oncall_w_terms = [x[(d, ShiftType.oncall, doc_id)] for d in weekend_days if (d, ShiftType.oncall, doc_id) in x]
 
-        total_onsite_weekends = cp.NewIntVar(0, len(weekend_days), f"tot_ons_w_doc{doc_id}")
-        total_oncall_weekends = cp.NewIntVar(0, len(weekend_days), f"tot_oncall_w_doc{doc_id}")
+        total_onsite_weekends = cp.NewIntVar(0, max_w_dev, f"tot_ons_w_doc{doc_id}")
+        total_oncall_weekends = cp.NewIntVar(0, max_w_dev, f"tot_oncall_w_doc{doc_id}")
 
         cp.Add(total_onsite_weekends == (sum(onsite_w_terms) if onsite_w_terms else 0))
         cp.Add(total_oncall_weekends == (sum(oncall_w_terms) if oncall_w_terms else 0))
@@ -223,44 +257,72 @@ def attach_totals_objective(
         # max weekend totals -> penalize excess above max
         if prefs.max_onsite_weekends is not None:
             max_ons_w = int(prefs.max_onsite_weekends)
-            excess_ons_w = cp.NewIntVar(0, len(weekend_days), f"excess_ons_w_doc{doc_id}")
+
+            excess_ons_w = cp.NewIntVar(0, max_w_dev, f"excess_ons_w_doc{doc_id}")
             cp.Add(excess_ons_w >= total_onsite_weekends - max_ons_w)
             cp.Add(excess_ons_w >= 0)
-            penalty_terms.append(scoring.MAX_WEEKEND_EXCESS_WEIGHT * excess_ons_w)
-            ub += int(scoring.MAX_WEEKEND_EXCESS_WEIGHT) * len(weekend_days)
+
+            # Escalating (quadratic) penalty: excess^2 so bigger weekend-max violations hurt much more.
+            excess_ons_w_sq = cp.NewIntVar(0, max_w_dev * max_w_dev, f"excess_ons_w_sq_doc{doc_id}")
+            cp.AddMultiplicationEquality(excess_ons_w_sq, excess_ons_w, excess_ons_w)
+
+            penalty_terms.append(int(scoring.MAX_WEEKEND_EXCESS_WEIGHT) * excess_ons_w_sq)
+            ub += int(scoring.MAX_WEEKEND_EXCESS_WEIGHT) * (max_w_dev * max_w_dev)
 
         if prefs.max_oncall_weekends is not None:
             max_onc_w = int(prefs.max_oncall_weekends)
-            excess_onc_w = cp.NewIntVar(0, len(weekend_days), f"excess_oncall_w_doc{doc_id}")
+
+            excess_onc_w = cp.NewIntVar(0, max_w_dev, f"excess_oncall_w_doc{doc_id}")
             cp.Add(excess_onc_w >= total_oncall_weekends - max_onc_w)
             cp.Add(excess_onc_w >= 0)
-            penalty_terms.append(scoring.MAX_WEEKEND_EXCESS_WEIGHT * excess_onc_w)
-            ub += int(scoring.MAX_WEEKEND_EXCESS_WEIGHT) * len(weekend_days)
 
-        # target weekend totals -> penalize deviation (over + under)
+            # Escalating (quadratic) penalty: excess^2 so bigger weekend-max violations hurt much more.
+            excess_onc_w_sq = cp.NewIntVar(0, max_w_dev * max_w_dev, f"excess_oncall_w_sq_doc{doc_id}")
+            cp.AddMultiplicationEquality(excess_onc_w_sq, excess_onc_w, excess_onc_w)
+
+            penalty_terms.append(int(scoring.MAX_WEEKEND_EXCESS_WEIGHT) * excess_onc_w_sq)
+            ub += int(scoring.MAX_WEEKEND_EXCESS_WEIGHT) * (max_w_dev * max_w_dev)
+
+        # target weekend totals -> penalize deviation (over + under) with escalating (quadratic) penalty
         if prefs.target_onsite_weekends is not None:
             tgt_ons_w = int(prefs.target_onsite_weekends)
-            over = cp.NewIntVar(0, len(weekend_days), f"tgt_over_ons_w_doc{doc_id}")
-            under = cp.NewIntVar(0, len(weekend_days), f"tgt_under_ons_w_doc{doc_id}")
+
+            over = cp.NewIntVar(0, max_w_dev, f"tgt_over_ons_w_doc{doc_id}")
+            under = cp.NewIntVar(0, max_w_dev, f"tgt_under_ons_w_doc{doc_id}")
+
             cp.Add(over >= total_onsite_weekends - tgt_ons_w)
             cp.Add(over >= 0)
             cp.Add(under >= tgt_ons_w - total_onsite_weekends)
             cp.Add(under >= 0)
-            penalty_terms.append(scoring.TARGET_WEEKEND_DEVIATION_WEIGHT * over)
-            penalty_terms.append(scoring.TARGET_WEEKEND_DEVIATION_WEIGHT * under)
-            ub += int(scoring.TARGET_WEEKEND_DEVIATION_WEIGHT) * len(weekend_days) * 2
+
+            over_sq = cp.NewIntVar(0, max_w_dev * max_w_dev, f"tgt_over_ons_w_sq_doc{doc_id}")
+            under_sq = cp.NewIntVar(0, max_w_dev * max_w_dev, f"tgt_under_ons_w_sq_doc{doc_id}")
+            cp.AddMultiplicationEquality(over_sq, over, over)
+            cp.AddMultiplicationEquality(under_sq, under, under)
+
+            penalty_terms.append(int(scoring.TARGET_WEEKEND_DEVIATION_WEIGHT) * over_sq)
+            penalty_terms.append(int(scoring.TARGET_WEEKEND_DEVIATION_WEIGHT) * under_sq)
+            ub += int(scoring.TARGET_WEEKEND_DEVIATION_WEIGHT) * (max_w_dev * max_w_dev) * 2
 
         if prefs.target_oncall_weekends is not None:
             tgt_onc_w = int(prefs.target_oncall_weekends)
-            over = cp.NewIntVar(0, len(weekend_days), f"tgt_over_oncall_w_doc{doc_id}")
-            under = cp.NewIntVar(0, len(weekend_days), f"tgt_under_oncall_w_doc{doc_id}")
+
+            over = cp.NewIntVar(0, max_w_dev, f"tgt_over_oncall_w_doc{doc_id}")
+            under = cp.NewIntVar(0, max_w_dev, f"tgt_under_oncall_w_doc{doc_id}")
+
             cp.Add(over >= total_oncall_weekends - tgt_onc_w)
             cp.Add(over >= 0)
             cp.Add(under >= tgt_onc_w - total_oncall_weekends)
             cp.Add(under >= 0)
-            penalty_terms.append(scoring.TARGET_WEEKEND_DEVIATION_WEIGHT * over)
-            penalty_terms.append(scoring.TARGET_WEEKEND_DEVIATION_WEIGHT * under)
-            ub += int(scoring.TARGET_WEEKEND_DEVIATION_WEIGHT) * len(weekend_days) * 2
+
+            over_sq = cp.NewIntVar(0, max_w_dev * max_w_dev, f"tgt_over_oncall_w_sq_doc{doc_id}")
+            under_sq = cp.NewIntVar(0, max_w_dev * max_w_dev, f"tgt_under_oncall_w_sq_doc{doc_id}")
+            cp.AddMultiplicationEquality(over_sq, over, over)
+            cp.AddMultiplicationEquality(under_sq, under, under)
+
+            penalty_terms.append(int(scoring.TARGET_WEEKEND_DEVIATION_WEIGHT) * over_sq)
+            penalty_terms.append(int(scoring.TARGET_WEEKEND_DEVIATION_WEIGHT) * under_sq)
+            ub += int(scoring.TARGET_WEEKEND_DEVIATION_WEIGHT) * (max_w_dev * max_w_dev) * 2
 
     if penalty_terms:
         total_penalty = cp.NewIntVar(0, int(ub), "total_totals_penalty")
@@ -280,17 +342,23 @@ def attach_rest_objective(
 ) -> cp_model.IntVar:
     """
     Add rest-rule penalties to the CP-SAT model objective.
-    ...
+
+    Current rules:
+    - avoid onsite -> onsite on consecutive days
+    - avoid oncall -> oncall on consecutive days
+    - avoid cross-shifts across consecutive days (onsite->oncall or oncall->onsite)
+      with a stronger penalty for specialists than residents
+    - weekend exception: Sat->Sun cross-shift is NOT penalized if
+      allow_weekend_consecutive_onsite_oncall=True
     """
     penalty_terms: List[cp_model.LinearExpr] = []
     ub: int = 0  # correct upper bound for total_penalty
 
-    # We loop over doctors in the participant pool.
     for doc_id in model.participant_doctor_ids:
         doctor = model.doctors.get(doc_id)
         prefs = problem.preferences.get(doc_id)
 
-        # Defensive defaults (should not happen in normal flow, but keeps solver robust)
+        # Defensive defaults (keeps solver robust)
         role: DoctorRole = doctor.role if doctor else DoctorRole.resident
         allow_weekend_consecutive = bool(prefs.allow_weekend_consecutive_onsite_oncall) if prefs else False
 
@@ -316,13 +384,13 @@ def attach_rest_objective(
             # onsite -> onsite
             if ons_d is not None and ons_dn is not None:
                 v = _add_pair_violation(cp, ons_d, ons_dn, f"rest_ons_ons_d{d}_doc{doc_id}")
-                penalty_terms.append(scoring.REST_ONS_ONS_WEIGHT * v)
+                penalty_terms.append(int(scoring.REST_ONS_ONS_WEIGHT) * v)
                 ub += int(scoring.REST_ONS_ONS_WEIGHT)
 
             # oncall -> oncall
             if oncall_d is not None and oncall_dn is not None:
                 v = _add_pair_violation(cp, oncall_d, oncall_dn, f"rest_oncall_oncall_d{d}_doc{doc_id}")
-                penalty_terms.append(scoring.REST_ONCALL_ONCALL_WEIGHT * v)
+                penalty_terms.append(int(scoring.REST_ONCALL_ONCALL_WEIGHT) * v)
                 ub += int(scoring.REST_ONCALL_ONCALL_WEIGHT)
 
             # cross-shift (ons->oncall, oncall->ons)
@@ -341,7 +409,6 @@ def attach_rest_objective(
                     ub += int(weight_cross)
 
     # Build a single IntVar that equals the sum of all penalty terms.
-    # CP-SAT likes having a concrete variable minimized.
     if penalty_terms:
         total_penalty = cp.NewIntVar(0, int(ub), "total_rest_penalty")
         cp.Add(total_penalty == sum(penalty_terms))
