@@ -114,23 +114,6 @@ Important:
   (specialists compared with specialists, residents compared with residents).
 - This is tested on **non-consecutive weekdays** to avoid rest-rule influence.
 
-5. **Weekday patterns (ETAP 4A)**
-
-* Lower-priority tie-breaker based on weekday preferences (0=Mon .. 6=Sun).
-* The solver adds:
-
-  * a small **bonus** for assigning a doctor on their `preferred_*_weekdays`
-  * a small **penalty** for assigning a doctor on their `avoid_*_weekdays`
-* This objective is defensive:
-
-  * if the slot variable does not exist (forbidden / filtered), the term is skipped (no crash)
-* This is tested on a **single day** scenario, so rest rules do not matter:
-
-  * `tests/solver/test_objective_weekday_patterns.py`
-
-    * preferred weekday breaks tie
-    * avoid weekday breaks tie
-
 ### How to run the tests (simple commands)
 
 You run tests using `pytest` (a Python test runner).
@@ -206,12 +189,6 @@ Soft objective (fairness):
 
 ```bash
 pytest tests/solver/test_objective_fairness.py -vv
-```
-
-Soft objective (weekday patterns):
-
-```bash
-pytest tests/solver/test_objective_weekday_patterns.py -vv
 ```
 
 #### 7) Run tests by marker (unit vs solver)
