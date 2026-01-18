@@ -133,8 +133,9 @@ def attach_totals_objective(
     - weekend totals (max/target for onsite/oncall weekends).
 
     Notes:
-    - "max_*" uses linear excess (each shift above max costs the same).
-    - "target_*" uses an escalating (quadratic) penalty: deviation^2.
+    - "max_*" uses an escalating (quadratic) penalty: excess^2.
+      This discourages concentrating a large max-violation on one doctor.
+    - "target_*" uses an escalating (quadratic) penalty: deviation^2 (over and under separately).
       This discourages concentrating a large deviation on one doctor.
 
     Returns:
@@ -441,12 +442,16 @@ def attach_fairness_objective(
     For each group and count type:
     - compute per-doctor totals,
     - compute an integer "average" (floor),
-    - penalize absolute deviations from that average.
+    - for each doctor choose expected:
+        * if target_* is set -> expected = target (weekday uses total-minus-weekends if both exist),
+        * else -> expected = group average,
+    - penalize squared deviation: (abs(total - expected))^2 (escalating).
 
     Returns:
         total_fairness_penalty: IntVar
     """
     penalty_terms: List[cp_model.LinearExpr] = []
+    ub: int = 0  # upper bound for total_fairness_penalty
 
     # 1) Split days into weekend vs weekday (local helper, no dependency on utils/timez.py).
     weekend_days: Set[int] = {
@@ -460,8 +465,8 @@ def attach_fairness_objective(
         "resident": [],
     }
 
-    for doc_id in sorted(problem.participant_doctor_ids):
-        doctor = problem.doctors.get(doc_id)
+    for doc_id in sorted(model.participant_doctor_ids):
+        doctor = model.doctors.get(doc_id)
         if not doctor:
             continue
 
@@ -493,6 +498,7 @@ def attach_fairness_objective(
         - abs deviation per doctor from average_total,
         - weighted sum of abs deviations goes to the objective.
         """
+        nonlocal ub
         n = len(group_doctors)
         if n <= 1:
             # Fairness does not make sense for a group of size 0 or 1.
@@ -519,18 +525,75 @@ def attach_fairness_objective(
         cp.Add(sum_totals <= n * average_total + (n - 1))
 
         for idx, doc_id in enumerate(group_doctors):
+            # Expected per doctor:
+            # - if the doctor has a target for this category -> expected = target
+            # - else -> expected = group average (fairness)
+            #
+            # NOTE:
+            # Our PreferenceInput has targets for:
+            # - monthly totals: target_onsite_total / target_oncall_total
+            # - weekend totals: target_onsite_weekends / target_oncall_weekends
+            #
+            # For fairness categories:
+            # - weekend category uses target_*_weekends
+            # - weekday category uses target_*_total (and if weekend target exists, we use: total - weekend_target)
+            # This keeps "I want more total duties" compatible with fairness (expected is shifted).
+            prefs = problem.preferences.get(doc_id)
+
+            is_weekend_category = "weekend" in category_name
+            expected_value: int | None = None
+
+            if prefs is not None:
+                if shift_type == ShiftType.onsite:
+                    if is_weekend_category:
+                        if prefs.target_onsite_weekends is not None:
+                            expected_value = int(prefs.target_onsite_weekends)
+                    else:
+                        if prefs.target_onsite_total is not None:
+                            expected_value = int(prefs.target_onsite_total)
+                            # If weekend target exists, interpret total target as (weekday + weekend).
+                            if prefs.target_onsite_weekends is not None:
+                                expected_value = expected_value - int(prefs.target_onsite_weekends)
+                else:
+                    if is_weekend_category:
+                        if prefs.target_oncall_weekends is not None:
+                            expected_value = int(prefs.target_oncall_weekends)
+                    else:
+                        if prefs.target_oncall_total is not None:
+                            expected_value = int(prefs.target_oncall_total)
+                            if prefs.target_oncall_weekends is not None:
+                                expected_value = expected_value - int(prefs.target_oncall_weekends)
+
+            # Keep expected inside [0..max_per_doctor] to avoid invalid bounds.
+            if expected_value is not None:
+                expected_value = max(0, min(int(expected_value), int(max_per_doctor)))
+
+            expected_total = cp.NewIntVar(0, max_per_doctor, f"fair_expected_{group_name}_{category_name}_doc{doc_id}")
+            if expected_value is not None:
+                cp.Add(expected_total == int(expected_value))
+            else:
+                cp.Add(expected_total == average_total)
+
             deviation_pos = cp.NewIntVar(0, max_per_doctor, f"fair_dev_pos_{group_name}_{category_name}_doc{doc_id}")
             deviation_neg = cp.NewIntVar(0, max_per_doctor, f"fair_dev_neg_{group_name}_{category_name}_doc{doc_id}")
 
-            cp.Add(deviation_pos >= totals[idx] - average_total)
+            cp.Add(deviation_pos >= totals[idx] - expected_total)
             cp.Add(deviation_pos >= 0)
-            cp.Add(deviation_neg >= average_total - totals[idx])
+            cp.Add(deviation_neg >= expected_total - totals[idx])
             cp.Add(deviation_neg >= 0)
 
             abs_dev = cp.NewIntVar(0, max_per_doctor, f"fair_abs_dev_{group_name}_{category_name}_doc{doc_id}")
             cp.Add(abs_dev == deviation_pos + deviation_neg)
 
-            penalty_terms.append(int(weight) * abs_dev)
+            # Escalating penalty: abs_dev^2.
+            # This makes "2 away for one doctor" worse than "1 away for two doctors".
+            abs_dev_sq = cp.NewIntVar(
+                0, max_per_doctor * max_per_doctor, f"fair_abs_dev_sq_{group_name}_{category_name}_doc{doc_id}"
+            )
+            cp.AddMultiplicationEquality(abs_dev_sq, abs_dev, abs_dev)
+
+            penalty_terms.append(int(weight) * abs_dev_sq)
+            ub += int(weight) * (int(max_per_doctor) * int(max_per_doctor))
 
     # 3) Add fairness per group, per (shift_type x weekday/weekend).
     for group_name, group_doctors in group_to_doctors.items():
@@ -583,8 +646,7 @@ def attach_fairness_objective(
 
     # 4) Wrap terms into a single IntVar.
     if penalty_terms:
-        max_penalty = 1_000_000
-        total_penalty = cp.NewIntVar(0, max_penalty, "total_fairness_penalty")
+        total_penalty = cp.NewIntVar(0, int(ub), "total_fairness_penalty")
         cp.Add(total_penalty == sum(penalty_terms))
     else:
         total_penalty = cp.NewIntVar(0, 0, "total_fairness_penalty")
