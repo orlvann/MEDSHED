@@ -653,3 +653,80 @@ def attach_fairness_objective(
         cp.Add(total_penalty == 0)
 
     return total_penalty
+
+
+def attach_weekday_patterns_objective(
+    cp: cp_model.CpModel,
+    x: Dict[Tuple[int, ShiftType, int], cp_model.IntVar],
+    model: HardModel,
+    problem: ProblemData,
+) -> cp_model.IntVar:
+    """
+    Add lower-priority weekday-pattern terms:
+    - preferred_**weekdays -> small bonus
+    - avoid**_weekdays -> small penalty
+
+    ```
+    Returns:
+        total_weekday_patterns_penalty: IntVar (can be negative because of bonuses)
+    """
+    terms: List[cp_model.LinearExpr] = []
+
+    ub_penalty: int = 0  # sum of all possible avoid penalties
+    ub_bonus: int = 0  # sum of all possible preferred bonuses
+
+    preferred_w = int(scoring.weekday_pattern_weight(kind="preferred"))
+    avoid_w = int(scoring.weekday_pattern_weight(kind="avoid"))
+
+    for doc_id in model.participant_doctor_ids:
+        prefs = problem.preferences.get(doc_id)
+        if prefs is None:
+            continue
+
+        # Use sets for fast "weekday in list" checks.
+        pref_onsite_wd = set(int(v) for v in prefs.preferred_onsite_weekdays)
+        pref_oncall_wd = set(int(v) for v in prefs.preferred_oncall_weekdays)
+        avoid_onsite_wd = set(int(v) for v in prefs.avoid_onsite_weekdays)
+        avoid_oncall_wd = set(int(v) for v in prefs.avoid_oncall_weekdays)
+
+        for d in model.days:
+            wd = datetime(model.year, model.month, d).weekday()  # 0=Mon .. 6=Sun
+
+            # -----------------------------
+            # Preferred weekdays -> BONUS (negative term)
+            # -----------------------------
+            if wd in pref_onsite_wd:
+                x_var = x.get((d, ShiftType.onsite, doc_id))
+                if x_var is not None:
+                    terms.append((-preferred_w) * x_var)
+                    ub_bonus += preferred_w  # x_var <= 1
+
+            if wd in pref_oncall_wd:
+                x_var = x.get((d, ShiftType.oncall, doc_id))
+                if x_var is not None:
+                    terms.append((-preferred_w) * x_var)
+                    ub_bonus += preferred_w
+
+            # -----------------------------
+            # Avoid weekdays -> PENALTY (positive term)
+            # -----------------------------
+            if wd in avoid_onsite_wd:
+                x_var = x.get((d, ShiftType.onsite, doc_id))
+                if x_var is not None:
+                    terms.append(avoid_w * x_var)
+                    ub_penalty += avoid_w
+
+            if wd in avoid_oncall_wd:
+                x_var = x.get((d, ShiftType.oncall, doc_id))
+                if x_var is not None:
+                    terms.append(avoid_w * x_var)
+                    ub_penalty += avoid_w
+
+    if terms:
+        total_penalty = cp.NewIntVar(-int(ub_bonus), int(ub_penalty), "total_weekday_patterns_penalty")
+        cp.Add(total_penalty == sum(terms))
+    else:
+        total_penalty = cp.NewIntVar(0, 0, "total_weekday_patterns_penalty")
+        cp.Add(total_penalty == 0)
+
+    return total_penalty
