@@ -1,3 +1,4 @@
+# tests/solver/test_objective_rest.py
 """
 Soft-objective tests for rest rules.
 
