@@ -141,10 +141,19 @@ def build_and_solve(model: HardModel) -> SolverSolution:
         problem=problem_view,
     )
 
+    # Add fairness penalties by role groups (ETAP 3C).
+    total_fairness_penalty = objective_builder.attach_fairness_objective(
+        cp=cp,
+        x=x,
+        model=model,
+        problem=problem_view,
+    )
+
     # Combined objective:
     # - rest rules have strong weights (from scoring.py),
-    # - preferred days and totals are additional soft goals.
-    cp.Minimize(total_rest_penalty + total_preferred_days_penalty + total_totals_penalty)
+    # - preferred days and totals are additional soft goals,
+    # - fairness tries to balance load inside role groups.
+    cp.Minimize(total_rest_penalty + total_preferred_days_penalty + total_totals_penalty + total_fairness_penalty)
 
     # 5) Solve -----------------------------------------------------------------
     solver = cp_model.CpSolver()
