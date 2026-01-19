@@ -165,6 +165,14 @@ def build_and_solve(model: HardModel) -> SolverSolution:
         problem=problem_view,
     )
 
+    # Add "avoid Friday if weekend off" objective (very low-priority tie-breaker).
+    total_friday_free_weekend_penalty = objective_builder.attach_avoid_friday_if_weekend_off_objective(
+        cp=cp,
+        x=x,
+        model=model,
+        problem=problem_view,
+    )
+
     # Combined objective:
     # - rest rules have strong weights (from scoring.py),
     # - preferred days and totals are additional soft goals,
@@ -177,6 +185,7 @@ def build_and_solve(model: HardModel) -> SolverSolution:
         + total_fairness_penalty
         + total_weekday_patterns_penalty
         + total_preferred_partners_penalty
+        + total_friday_free_weekend_penalty
     )
 
     # 5) Solve -----------------------------------------------------------------
