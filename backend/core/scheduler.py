@@ -10,23 +10,21 @@ This module:
 - optionally applies heuristics,
 - converts the solution to a list of Assignment DTOs.
 """
-
+from dataclasses import dataclass
 from typing import List
-
-from pydantic import BaseModel
 
 from backend.models.schemas.schedule import Assignment
 
 from . import (
     constraint_builder,
     engine,
-    seeding,
 )
 from .feasibility import analyze_problem
 from .types import HardModel, ProblemData, SolverAssignment, SolverSolution, SolverStatus
 
 
-class ScheduleResult(BaseModel):
+@dataclass
+class ScheduleResult:
     """
     Bundle of raw solver solution and finalized Assignment DTOs.
     """
@@ -46,17 +44,16 @@ def generate_schedule(problem: ProblemData) -> ScheduleResult:
     - List[Assignment] (API-level DTOs returned to services).
 
     Steps:
-    1) Build optional warm-start hints (seeding).
-    MVP: hints are just a placeholder (can be empty).
+    1) Seeding (warm-start) is implemented in backend/core/seeding.py,
+    but it is applied inside engine.build_and_solve via CP-SAT hints.
+    (Hints need CP variables x[...] to exist.)
     2) Build a HardModel (allowed_slots + structural data).
     allowed_slots already respect:
     - ignore_days / ignore_slots,
     - unavailable_*_days from preferences.
-    3) (Later) attach soft constraints / objective weights.
-    MVP: we skip objectives and solve only hard constraints.
-    4) Call the CP-SAT engine to get a SolverSolution.
-    5) (Later) optional heuristic polishing.
-    6) Map SolverSolution -> Assignment via _solution_to_assignments.
+    3) Solve using the CP-SAT engine (hard constraints + soft objectives).
+    4) (Later) optional heuristic polishing.
+    5) Map SolverSolution -> Assignment via _solution_to_assignments.
     """
 
     # 0) Feasibility pre-check (cheap, deterministic)
@@ -69,12 +66,9 @@ def generate_schedule(problem: ProblemData) -> ScheduleResult:
         )
         return ScheduleResult(solution=solution, assignments=[])
 
-    # 1) Warm-start hints (MVP: placeholder).
-    #    Example hints:
-    #    - heads (is_head=True) on their preferred days,
-    #    - hardest slots (few available doctors),
-    #    - weekend onsite+oncall combos for doctors who allow it.
-    seed_hints = seeding.generate_initial_hints(problem)
+    # 1) Seeding (warm-start) is implemented in: backend/core/seeding.py
+    #    It is applied inside engine.build_and_solve (via CP-SAT hints),
+    #    because hints need CP variables to exist (x[...] is built there).
 
     # 2) Build the hard-constraint model (no OR-Tools calls here).
     #    This step defines the decision variables and all "must-have" rules:
@@ -83,15 +77,15 @@ def generate_schedule(problem: ProblemData) -> ScheduleResult:
     #    - no double-role for the same doctor on the same day,
     #    - no assignments on unavailable days,
     #    - respect ignore_days / ignore_slots.
-    hard_model: HardModel = constraint_builder.build_hard_model(problem, seed_hints)
+    hard_model: HardModel = constraint_builder.build_hard_model(problem)
 
-    # 3) Soft constraints/objectives will be implemented here in later stages.
-    #    For this stage we solve ONLY the hard model.
-    #    Here we will use preferences and fairness:
-    #    - strong preferences for heads > specialists > residents,
-    #    - rest rules between shifts,
-    #    - max/target totals and weekend loads,
-    #    - weekday patterns, partner preferences, etc.
+    # 3) Soft objectives are handled inside engine.build_and_solve (objective_builder).
+    # # The engine applies:
+    # - rest rules between shifts,
+    # - preferred concrete days,
+    # - max/target totals and weekend loads,
+    # - fairness inside role groups,
+    # - weekday patterns, partner preferences, and other tie-breakers.
     model_for_solver = hard_model
 
     # 4) Solve using OR-Tools CP-SAT (engine is the only place that imports OR-Tools)

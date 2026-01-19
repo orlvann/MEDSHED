@@ -3,7 +3,7 @@
 Build the hard-constraint part of the model (no objective yet).
 
 This module:
-- defines decision variables,
+- precomputes allowed_slots,
 - enforces all hard rules:
   * 1 onsite + 1 oncall per day,
   * at least one specialist per day,
@@ -19,7 +19,7 @@ from backend.models.common_enums import ShiftType
 from .types import HardModel, PreferencesInput, ProblemData
 
 
-def build_hard_model(problem: ProblemData, seed_hints: Any) -> HardModel:
+def build_hard_model(problem: ProblemData, seed_hints: Any | None = None) -> HardModel:
     """
     Build a HardModel from ProblemData.
 
