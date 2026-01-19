@@ -13,7 +13,7 @@ from ortools.sat.python import cp_model
 
 from backend.models.common_enums import DoctorRole, ShiftType
 
-from . import objective_builder
+from . import objective_builder, seeding
 from .types import HardModel, ProblemData, SolverAssignment, SolverSolution, SolverStatus
 
 
@@ -190,6 +190,22 @@ def build_and_solve(model: HardModel) -> SolverSolution:
 
     # 5) Solve -----------------------------------------------------------------
     solver = cp_model.CpSolver()
+
+    # Provide a warm-start hint to the solver.
+    # This does NOT enforce assignments; the solver may override them
+    # if needed to satisfy constraints or improve the objective.
+    seed_hints = seeding.generate_initial_hints(model=model, problem=problem_view)
+
+    for (day, doctor_id, shift_type), val in seed_hints.items():
+        # Our x key order is (day, shift_type, doctor_id)
+        var = x.get((day, shift_type, doctor_id))
+        if var is None:
+            # Defensive: skip hints for non-existing/forbidden slots.
+            continue
+
+        # AddHint attaches a suggestion to the CP model (not a hard rule).
+        cp.AddHint(var, int(val))
+
     status = solver.Solve(cp)
 
     if status in (cp_model.OPTIMAL, cp_model.FEASIBLE):
