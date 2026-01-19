@@ -171,3 +171,16 @@ PREFERRED_PARTNER_BONUS_WEIGHT = 2
 def preferred_partner_bonus_weight() -> int:
     """Return small bonus weight for preferred partners working the same day."""
     return PREFERRED_PARTNER_BONUS_WEIGHT
+
+
+# ---------------------------------------------------------------------------
+# 6. Avoid Friday if weekend off
+# ---------------------------------------------------------------------------
+
+# Small penalty (lower priority than rest/totals/fairness).
+FRIDAY_WITH_FREE_WEEKEND_WEIGHT = 3
+
+
+def friday_with_free_weekend_weight() -> int:
+    """Return small penalty weight for working Friday when the following weekend is fully off."""
+    return FRIDAY_WITH_FREE_WEEKEND_WEIGHT
