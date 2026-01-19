@@ -730,3 +730,101 @@ def attach_weekday_patterns_objective(
         cp.Add(total_penalty == 0)
 
     return total_penalty
+
+
+def attach_preferred_partners_objective(
+    cp: cp_model.CpModel,
+    x: Dict[Tuple[int, ShiftType, int], cp_model.IntVar],
+    model: HardModel,
+    problem: ProblemData,
+) -> cp_model.IntVar:
+    """
+    Add lower-priority preferred-partners bonus.
+
+    For each preferred pair (doc, partner) and each day:
+    - bonus if both doctors work that day (any shift).
+    We model the bonus as a NEGATIVE penalty term (so Minimize prefers it).
+
+    Returns:
+        total_preferred_partners_penalty: IntVar (can be negative)
+    """
+    terms: List[cp_model.LinearExpr] = []
+
+    bonus_w = int(scoring.preferred_partner_bonus_weight())
+
+    # Collect unique pairs (doc_id < partner_id) to avoid double-counting.
+    pairs: List[Tuple[int, int]] = []
+    participants = set(model.participant_doctor_ids)
+
+    for doc_id in sorted(model.participant_doctor_ids):
+        prefs = problem.preferences.get(doc_id)
+        if prefs is None:
+            continue
+
+        partners = list(prefs.preferred_partners or [])
+        for partner_id in partners:
+            partner_id = int(partner_id)
+            if partner_id not in participants:
+                continue
+            if doc_id >= partner_id:
+                continue
+            pairs.append((int(doc_id), int(partner_id)))
+
+    if not pairs or not model.days:
+        total_penalty = cp.NewIntVar(0, 0, "total_preferred_partners_penalty")
+        cp.Add(total_penalty == 0)
+        return total_penalty
+
+    # Upper/lower bounds:
+    # - only bonuses (negative), so ub = 0
+    # - most negative happens when "together" is 1 for every (pair, day)
+    max_together_count = len(pairs) * len(model.days)
+    lb = -int(bonus_w) * int(max_together_count)
+    ub = 0
+
+    def _works_on_day(*, day: int, doc_id: int) -> cp_model.IntVar:
+        """
+        Return BoolVar == 1 if doctor works ANY shift that day.
+
+        Defensive:
+        - if x vars are missing (forbidden slots), works == 0
+        - does NOT assume sum(terms) <= 1 (we encode OR logic)
+        """
+        doc_terms: List[cp_model.IntVar] = []
+        v1 = x.get((day, ShiftType.onsite, doc_id))
+        v2 = x.get((day, ShiftType.oncall, doc_id))
+        if v1 is not None:
+            doc_terms.append(v1)
+        if v2 is not None:
+            doc_terms.append(v2)
+
+        works = cp.NewBoolVar(f"works_d{int(day)}_doc{int(doc_id)}")
+        if not doc_terms:
+            cp.Add(works == 0)
+            return works
+
+        s = sum(doc_terms)
+        # works = 1 if any term == 1, else 0
+        cp.Add(s >= works)
+        cp.Add(s <= len(doc_terms) * works)
+        return works
+
+    for doc_id, partner_id in pairs:
+        for d in model.days:
+            works_doc = _works_on_day(day=int(d), doc_id=int(doc_id))
+            works_partner = _works_on_day(day=int(d), doc_id=int(partner_id))
+
+            together = cp.NewBoolVar(f"together_d{int(d)}_doc{int(doc_id)}_p{int(partner_id)}")
+            cp.AddMultiplicationEquality(together, [works_doc, works_partner])
+
+            # Bonus as negative penalty term.
+            terms.append((-bonus_w) * together)
+
+    if terms:
+        total_penalty = cp.NewIntVar(int(lb), int(ub), "total_preferred_partners_penalty")
+        cp.Add(total_penalty == sum(terms))
+    else:
+        total_penalty = cp.NewIntVar(0, 0, "total_preferred_partners_penalty")
+        cp.Add(total_penalty == 0)
+
+    return total_penalty
