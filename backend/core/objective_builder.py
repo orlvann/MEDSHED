@@ -828,3 +828,123 @@ def attach_preferred_partners_objective(
         cp.Add(total_penalty == 0)
 
     return total_penalty
+
+
+def attach_avoid_friday_if_weekend_off_objective(
+    cp: cp_model.CpModel,
+    x: Dict[Tuple[int, ShiftType, int], cp_model.IntVar],
+    model: HardModel,
+    problem: ProblemData,
+) -> cp_model.IntVar:
+    """
+    Add a small penalty when a doctor works on Friday and has the whole following weekend off.
+
+    Definition (MVP):
+    - Friday day = weekday() == 4
+    - We look only at the immediate next Saturday and Sunday: (fri+1, fri+2),
+      but only if they exist in model.days and are actually Sat/Sun.
+    - A doctor "works" on a day if they have onsite OR oncall assignment on that day.
+
+    Returns:
+        total_friday_free_weekend_penalty: IntVar
+    """
+    terms: List[cp_model.LinearExpr] = []
+    ub: int = 0
+
+    weight = int(scoring.friday_with_free_weekend_weight())
+
+    days_set: Set[int] = set(int(d) for d in model.days)
+
+    def _weekday(day: int) -> int:
+        """
+        Return weekday for a given day number.
+        Uses precomputed problem.weekdays if available, otherwise falls back to datetime().
+        """
+        wd = problem.weekdays.get(int(day))
+        if wd is not None:
+            return int(wd)
+        return datetime(problem.year, problem.month, int(day)).weekday()
+
+    # 1) Collect Fridays that have a full weekend (Sat+Sun) right after them inside this model.
+    fridays_with_weekend: List[int] = []
+    for d in days_set:
+        if _weekday(int(d)) != 4:  # 4=Friday
+            continue
+
+        sat = int(d) + 1
+        sun = int(d) + 2
+
+        # Defensive: weekend days must exist in the model and must really be Sat/Sun.
+        if sat not in days_set or sun not in days_set:
+            continue
+        if _weekday(sat) != 5 or _weekday(sun) != 6:  # 5=Sat, 6=Sun
+            continue
+
+        fridays_with_weekend.append(int(d))
+
+    if not fridays_with_weekend:
+        total_penalty = cp.NewIntVar(0, 0, "total_friday_free_weekend_penalty")
+        cp.Add(total_penalty == 0)
+        return total_penalty
+
+    def _works_on_day(*, day: int, doc_id: int) -> cp_model.IntVar:
+        """
+        Return BoolVar == 1 if doctor works ANY shift that day (onsite OR oncall).
+
+        Defensive:
+        - if x vars are missing (forbidden slots), works == 0
+        - does NOT assume sum(terms) <= 1 (we encode OR logic)
+        """
+        day_terms: List[cp_model.IntVar] = []
+        v1 = x.get((int(day), ShiftType.onsite, int(doc_id)))
+        v2 = x.get((int(day), ShiftType.oncall, int(doc_id)))
+        if v1 is not None:
+            day_terms.append(v1)
+        if v2 is not None:
+            day_terms.append(v2)
+
+        works = cp.NewBoolVar(f"works_d{int(day)}_doc{int(doc_id)}")
+        if not day_terms:
+            cp.Add(works == 0)
+            return works
+
+        s = sum(day_terms)
+        cp.Add(s >= works)
+        cp.Add(s <= len(day_terms) * works)
+        return works
+
+    # 2) Add penalty terms for (doctor, friday) patterns.
+    for doc_id in sorted(model.participant_doctor_ids):
+        for fri in sorted(fridays_with_weekend):
+            sat = int(fri) + 1
+            sun = int(fri) + 2
+
+            works_fri = _works_on_day(day=int(fri), doc_id=int(doc_id))
+            works_sat = _works_on_day(day=int(sat), doc_id=int(doc_id))
+            works_sun = _works_on_day(day=int(sun), doc_id=int(doc_id))
+
+            # works_weekend = works_sat OR works_sun
+            works_weekend = cp.NewBoolVar(f"works_weekend_after_fri{int(fri)}_doc{int(doc_id)}")
+            cp.Add(works_weekend >= works_sat)
+            cp.Add(works_weekend >= works_sun)
+            cp.Add(works_weekend <= works_sat + works_sun)
+
+            # weekend_off = NOT works_weekend
+            weekend_off = cp.NewBoolVar(f"weekend_off_after_fri{int(fri)}_doc{int(doc_id)}")
+            cp.Add(weekend_off + works_weekend == 1)
+
+            # fri_with_free_weekend = works_fri AND weekend_off
+            fri_with_free_weekend = cp.NewBoolVar(f"fri_free_weekend_d{int(fri)}_doc{int(doc_id)}")
+            cp.AddMultiplicationEquality(fri_with_free_weekend, [works_fri, weekend_off])
+
+            terms.append(int(weight) * fri_with_free_weekend)
+            ub += int(weight)
+
+    if terms:
+        total_penalty = cp.NewIntVar(0, int(ub), "total_friday_free_weekend_penalty")
+        cp.Add(total_penalty == sum(terms))
+    else:
+        total_penalty = cp.NewIntVar(0, 0, "total_friday_free_weekend_penalty")
+        cp.Add(total_penalty == 0)
+
+    return total_penalty
