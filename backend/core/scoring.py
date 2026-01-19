@@ -158,3 +158,16 @@ def weekday_pattern_weight(*, kind: str) -> int:
     if kind == "avoid":
         return WEEKDAY_AVOID_PENALTY_WEIGHT
     raise ValueError(f"Unknown weekday pattern kind: {kind}")
+
+
+# ---------------------------------------------------------------------------
+# 5. Preferred partners
+# ---------------------------------------------------------------------------
+
+# Small bonus (lower priority than rest/totals/fairness).
+PREFERRED_PARTNER_BONUS_WEIGHT = 2
+
+
+def preferred_partner_bonus_weight() -> int:
+    """Return small bonus weight for preferred partners working the same day."""
+    return PREFERRED_PARTNER_BONUS_WEIGHT

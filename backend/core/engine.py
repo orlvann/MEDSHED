@@ -157,6 +157,14 @@ def build_and_solve(model: HardModel) -> SolverSolution:
         problem=problem_view,
     )
 
+    # Add preferred partners objective (lower-priority tie-breaker).
+    total_preferred_partners_penalty = objective_builder.attach_preferred_partners_objective(
+        cp=cp,
+        x=x,
+        model=model,
+        problem=problem_view,
+    )
+
     # Combined objective:
     # - rest rules have strong weights (from scoring.py),
     # - preferred days and totals are additional soft goals,
@@ -168,6 +176,7 @@ def build_and_solve(model: HardModel) -> SolverSolution:
         + total_totals_penalty
         + total_fairness_penalty
         + total_weekday_patterns_penalty
+        + total_preferred_partners_penalty
     )
 
     # 5) Solve -----------------------------------------------------------------
