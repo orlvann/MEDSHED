@@ -33,6 +33,16 @@ def build_and_solve(model: HardModel) -> SolverSolution:
     if not model.allowed_slots:
         return SolverSolution(status=SolverStatus.EMPTY, assignments=[])
 
+    # Head commitments are "must-haves":
+    # if they are impossible, stop early with clear issues for the caller/UI.
+    commitment_issues = seeding.validate_head_commitments(model)
+    if commitment_issues:
+        return SolverSolution(
+            status=SolverStatus.INFEASIBLE,
+            assignments=[],
+            issues=commitment_issues,
+        )
+
     # 1) Create CP-SAT model container.
     cp = cp_model.CpModel()
 

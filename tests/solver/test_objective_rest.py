@@ -16,11 +16,6 @@ Tests covered in this file:
 - test_objective_builder_is_defensive_when_x_missing_in_inactive_days (integration/defensive)
 - test_objective_builder_returns_zero_var_when_participants_empty (unit-ish regression)
 
-Current scope:
-- We assume HardModel input is prepared correctly (using test factories).
-- We validate only rest-rule penalties and the weekend exception behavior.
-- We do NOT test DB, API, or service-layer model building here.
-
 Key behaviors enforced:
 - Soft objective MUST NOT change feasibility (hard rules decide OK vs INFEASIBLE).
 - Among multiple feasible schedules, the solver should prefer the one with lower rest penalty.
@@ -28,6 +23,7 @@ Key behaviors enforced:
 
 IMPORTANT:
 - We use factories from tests/solver/conftest.py (no DB, no services).
+- For readable failure messages we use solution_snapshot(model, solution).
 """
 
 from __future__ import annotations
@@ -38,28 +34,12 @@ import pytest
 from ortools.sat.python import cp_model
 
 from backend.core import engine, objective_builder
-from backend.core.types import DoctorInput, ProblemData, SolverAssignment, SolverStatus
+from backend.core.types import DoctorInput, SolverAssignment, SolverStatus
 from backend.models.common_enums import DoctorRole, ShiftType
 
-from ._helpers import (
-    compute_rest_penalty_offline,
-    count_rest_violations_offline,
-    pretty_solution,
-    solution_snapshot,
-)
+from ._helpers import compute_rest_penalty_offline, count_rest_violations_offline, solution_snapshot
 
 pytestmark = [pytest.mark.solver]
-
-
-def _snapshot(model, solution) -> str:
-    """
-    Small wrapper used in assert messages.
-
-    Why:
-    - pretty_solution shows assignments in a stable, readable format,
-    - solution_snapshot also includes hard invariant errors (if any).
-    """
-    return solution_snapshot(model, solution)
 
 
 # --------------------------------------------------------------------------------------
@@ -122,9 +102,9 @@ def test_solver_prefers_lower_rest_penalty_solution(make_hard_model, make_doctor
     )
 
     solution = engine.build_and_solve(model)
-    assert solution.status == SolverStatus.OK, (
-        f"Expected OK (feasible schedule), got {solution.status}.\n" f"{_snapshot(model, solution)}"
-    )
+    assert (
+        solution.status == SolverStatus.OK
+    ), f"Expected OK (feasible schedule), got {solution.status}.\n{solution_snapshot(model, solution)}"
 
     # Compute penalty offline for the chosen solution.
     got_penalty = compute_rest_penalty_offline(
@@ -189,7 +169,7 @@ def test_solver_prefers_lower_rest_penalty_solution(make_hard_model, make_doctor
         f"got_penalty={got_penalty} expected_best={expected_best}\n"
         f"got_violations={got_violations}\n"
         f"candidate_penalties: A={cand_a_penalty} B={cand_b_penalty}\n"
-        f"{pretty_solution(solution)}"
+        f"{solution_snapshot(model, solution)}"
     )
 
 
@@ -414,18 +394,21 @@ def test_objective_builder_is_defensive_when_x_missing_in_inactive_days(
 
     solution = engine.build_and_solve(model)
     assert solution.status == SolverStatus.OK, (
-        "Expected OK (objective must not crash even if some x vars are missing).\n" f"{_snapshot(model, solution)}"
+        "Expected OK (objective must not crash even if some x vars are missing).\n"
+        f"{solution_snapshot(model, solution)}"
     )
 
 
 @pytest.mark.unit
-def test_objective_builder_returns_zero_var_when_participants_empty(make_hard_model, make_doctors, make_preferences):
+def test_objective_builder_returns_zero_var_when_participants_empty(
+    make_hard_model, make_doctors, make_preferences, make_problem_data
+):
     """
     REGRESSION UNIT-ISH TEST (direct objective_builder call).
 
     Edge case:
     - participant_doctor_ids is empty => the loop over doctors does not run,
-    so objective_builder must still return a valid IntVar (0 penalty), not crash.
+      so objective_builder must still return a valid IntVar (0 penalty), not crash.
 
     We do NOT use engine here on purpose.
     """
@@ -454,16 +437,15 @@ def test_objective_builder_returns_zero_var_when_participants_empty(make_hard_mo
     cp = cp_model.CpModel()
     x: dict[tuple[int, ShiftType, int], cp_model.IntVar] = {}
 
-    problem = ProblemData(
+    problem = make_problem_data(
         year=model.year,
         month=model.month,
-        days=model.days,
-        weekdays={d: datetime(model.year, model.month, d).weekday() for d in model.days},
-        doctors=model.doctors,
-        preferences=model.preferences,
-        participant_doctor_ids=model.participant_doctor_ids,
-        ignore_days=model.ignore_days,
-        ignore_slots=model.ignore_slots,
+        days=list(model.days),
+        doctors=dict(model.doctors),
+        preferences=dict(model.preferences),
+        participant_doctor_ids=set(model.participant_doctor_ids),
+        ignore_days=set(model.ignore_days),
+        ignore_slots=set(model.ignore_slots),
     )
 
     total_penalty = objective_builder.attach_rest_objective(cp=cp, x=x, model=model, problem=problem)
