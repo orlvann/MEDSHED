@@ -14,7 +14,88 @@ from ortools.sat.python import cp_model
 from backend.models.common_enums import DoctorRole, ShiftType
 
 from . import objective_builder, seeding
-from .types import HardModel, ProblemData, SolverAssignment, SolverSolution, SolverStatus
+from .issues import (
+    CP_INFEASIBLE,
+    FEASIBILITY_ISSUE_MESSAGES,
+    FORCED_DOUBLE_SHIFT_SAME_DAY,
+    NO_ONCALL_CANDIDATE,
+    NO_ONSITE_CANDIDATE,
+    NO_SPECIALIST,
+)
+from .types import FeasibilityIssue, HardModel, ProblemData, SolverAssignment, SolverSolution, SolverStatus
+
+
+def _derive_infeasible_issues(model: HardModel) -> List[FeasibilityIssue]:
+    """
+    Best-effort, deterministic explanation when CP-SAT returns INFEASIBLE.
+
+    Goal:
+    - give FE something user-friendly (preferably per-day),
+    - even if availability pre-check was OK.
+
+    IMPORTANT:
+    - We keep codes that clearly identify THIS PHASE (CP-SAT),
+      so FE/user knows it failed after model build.
+    """
+    issues: List[FeasibilityIssue] = []
+
+    def _msg(code: str) -> str:
+        # Use a single source of truth for messages.
+        return FEASIBILITY_ISSUE_MESSAGES.get(code, code)
+
+    for day in model.active_days:
+        onsite_required = (day, ShiftType.onsite) not in model.ignore_slots
+        oncall_required = (day, ShiftType.oncall) not in model.ignore_slots
+
+        # If both slots are ignored, nothing to analyze.
+        if not onsite_required and not oncall_required:
+            continue
+
+        onsite_ids = set(model.allowed_slots.get((day, ShiftType.onsite), [])) if onsite_required else set()
+        oncall_ids = set(model.allowed_slots.get((day, ShiftType.oncall), [])) if oncall_required else set()
+
+        # Defensive checks (usually caught earlier, but we prefer to return something useful).
+        if onsite_required and not onsite_ids:
+            issues.append(FeasibilityIssue(day=day, code=NO_ONSITE_CANDIDATE, message=_msg(NO_ONSITE_CANDIDATE)))
+
+        if oncall_required and not oncall_ids:
+            issues.append(FeasibilityIssue(day=day, code=NO_ONCALL_CANDIDATE, message=_msg(NO_ONCALL_CANDIDATE)))
+
+        # Specialist-per-day is defined over required shifts only.
+        required_union = onsite_ids.union(oncall_ids)
+        if required_union:
+            has_specialist = any(
+                (model.doctors.get(did) is not None and model.doctors[did].role == DoctorRole.specialist)
+                for did in required_union
+            )
+            if not has_specialist:
+                issues.append(FeasibilityIssue(day=day, code=NO_SPECIALIST, message=_msg(NO_SPECIALIST)))
+
+        # CP-specific: forced double shift (both shifts required, but only the same single doctor can cover both).
+        if onsite_required and oncall_required:
+            if len(onsite_ids) == 1 and len(oncall_ids) == 1:
+                only_ons = next(iter(onsite_ids))
+                only_onc = next(iter(oncall_ids))
+                if only_ons == only_onc:
+                    issues.append(
+                        FeasibilityIssue(
+                            day=day,
+                            code=FORCED_DOUBLE_SHIFT_SAME_DAY,
+                            message=_msg(FORCED_DOUBLE_SHIFT_SAME_DAY),
+                        )
+                    )
+
+    # If we found nothing day-specific, return a month-level fallback.
+    if not issues:
+        issues.append(
+            FeasibilityIssue(
+                day=0,
+                code=CP_INFEASIBLE,
+                message=_msg(CP_INFEASIBLE),
+            )
+        )
+
+    return issues
 
 
 def build_and_solve(model: HardModel) -> SolverSolution:
@@ -33,15 +114,9 @@ def build_and_solve(model: HardModel) -> SolverSolution:
     if not model.allowed_slots:
         return SolverSolution(status=SolverStatus.EMPTY, assignments=[])
 
-    # Head commitments are "must-haves":
-    # if they are impossible, stop early with clear issues for the caller/UI.
-    commitment_issues = seeding.validate_head_commitments(model)
-    if commitment_issues:
-        return SolverSolution(
-            status=SolverStatus.INFEASIBLE,
-            assignments=[],
-            issues=commitment_issues,
-        )
+    # NOTE:
+    # Head commitments validation is handled in scheduler.generate_schedule().
+    # We intentionally do NOT duplicate it here (avoid double validation).
 
     # 1) Create CP-SAT model container.
     cp = cp_model.CpModel()
@@ -227,6 +302,11 @@ def build_and_solve(model: HardModel) -> SolverSolution:
         status_enum = SolverStatus.NOT_SOLVED
 
     if status_enum is not SolverStatus.OK:
+        # If CP-SAT is infeasible, try to provide a user-friendly explanation.
+        if status_enum == SolverStatus.INFEASIBLE:
+            issues = _derive_infeasible_issues(model)
+            return SolverSolution(status=status_enum, assignments=[], issues=issues)
+
         return SolverSolution(status=status_enum, assignments=[])
 
     # 6) Build SolverAssignment list from chosen Boolean variables.
