@@ -18,6 +18,7 @@ from backend.models.schemas.schedule import Assignment
 from . import (
     constraint_builder,
     engine,
+    seeding,
 )
 from .feasibility import analyze_problem
 from .types import HardModel, ProblemData, SolverAssignment, SolverSolution, SolverStatus
@@ -79,8 +80,19 @@ def generate_schedule(problem: ProblemData) -> ScheduleResult:
     #    - respect ignore_days / ignore_slots.
     hard_model: HardModel = constraint_builder.build_hard_model(problem)
 
+    # 2.1) Validate "Head commitments" (must-have head preferred slots).
+    # We validate here (before OR-Tools) because HardModel.allowed_slots is needed.
+    commitment_issues = seeding.validate_head_commitments(hard_model)
+    if commitment_issues:
+        solution = SolverSolution(
+            status=SolverStatus.INFEASIBLE,
+            assignments=[],
+            issues=commitment_issues,
+        )
+        return ScheduleResult(solution=solution, assignments=[])
+
     # 3) Soft objectives are handled inside engine.build_and_solve (objective_builder).
-    # # The engine applies:
+    # The engine applies:
     # - rest rules between shifts,
     # - preferred concrete days,
     # - max/target totals and weekend loads,

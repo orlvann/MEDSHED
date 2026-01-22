@@ -171,6 +171,64 @@ Important:
     - is soft (still solves when Friday has only one candidate)
     - skips when weekend days are not present in the model
 
+### Seeding (warm-start hints)
+
+Before solving, the engine can provide **hints** (warm-start suggestions) to CP-SAT.
+Hints are **NOT constraints**: the solver may ignore them if they conflict with better solutions
+or with other objectives. We test seeding logic directly for determinism.
+
+1. **Head commitments (must-have head preferred slots)**
+
+Heads can express "must-have" preferred days (commitments). These are validated **before**
+building/solving the CP model.
+
+Rules:
+
+- If a head preferred slot is ignored -> `INFEASIBLE` + issue
+- If a head preferred slot is not allowed -> `INFEASIBLE` + issue
+- If multiple heads prefer the same slot -> `INFEASIBLE` + issue
+- If the same head prefers onsite and oncall on the same day -> `INFEASIBLE` + issue
+
+Tests:
+
+- `tests/solver/test_seeding_head_commitments.py`
+  - conflict between two heads
+  - commitment into ignored slot
+  - commitment not allowed by `allowed_slots`
+  - head requests both shifts on the same day
+
+2. **TOP K hardest slots by difficulty (hinting)**
+
+This is pure warm-start logic: it chooses up to **K = 10** slots that are hardest to cover,
+and adds exactly one `1` hint per seeded slot (the deterministic smallest doctor_id per slot).
+
+Rules (confirmed):
+
+- Build candidate slots = all "in play" slots:
+  - day in `model.active_days`
+  - slot not ignored (not in `model.ignore_slots`)
+  - slot key exists in `model.allowed_slots`
+  - excluding slots already seeded by head commitments
+- `difficulty = len(model.allowed_slots[(day, shift_type)])`
+- Sort by `(difficulty asc, day asc, shift_type asc)`
+- Seed TOP K slots, where `K = min(10, number_of_slots)`
+
+Tests:
+
+- `tests/solver/test_seeding_top_k_difficulty.py`
+  - creates 12 slots with difficulties 1..12 and verifies only 10 are seeded
+
+3. **General seeding integration (hint map content)**
+
+We also keep focused tests checking the hint map produced by `seeding.generate_initial_hints(...)`,
+without going through `engine.build_and_solve(...)`.
+
+Tests:
+
+- `tests/solver/test_seeding_hints.py`
+  - seeding includes the head commitment hint
+  - seeding selects TOP K slots by difficulty as expected
+
 ### How to run the tests (simple commands)
 
 You run tests using `pytest` (a Python test runner).
@@ -222,6 +280,24 @@ Hard constraints:
 
 ```bash
 pytest tests/solver/test_engine_hard.py -vv
+```
+
+Seeding: head commitments validation:
+
+```bash
+pytest tests/solver/test_seeding_head_commitments.py -vv
+```
+
+Seeding: TOP K difficulty:
+
+```bash
+pytest tests/solver/test_seeding_top_k_difficulty.py -vv
+```
+
+Seeding: general hints:
+
+```bash
+pytest tests/solver/test_seeding_hints.py -vv
 ```
 
 Soft objective (rest rules):

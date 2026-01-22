@@ -29,6 +29,18 @@ NO_SPECIALIST = "no_specialist"
 SINGLE_CANDIDATE_FOR_BOTH_ROLES = "single_candidate_for_both_roles"
 TOO_FEW_DOCTORS_TOTAL = "too_few_doctors_total"  # more general availability warning
 
+# ---- Head commitment issues (must-have head preferred slots) ------------------
+
+#
+# These are "business must-haves":
+# if they are violated, schedule generation should stop early with INFEASIBLE
+# and a clear issue list for the UI.
+
+HEAD_COMMITMENT_IGNORED_SLOT = "head_commitment_ignored_slot"
+HEAD_COMMITMENT_NOT_ALLOWED = "head_commitment_not_allowed"
+HEAD_COMMITMENT_CONFLICT = "head_commitment_conflict"
+HEAD_COMMITMENT_DOUBLE_SHIFT_SAME_DAY = "head_commitment_double_shift_same_day"
+
 # Default human-readable messages for feasibility issues.
 
 FEASIBILITY_ISSUE_MESSAGES: Dict[str, str] = {
@@ -37,6 +49,11 @@ FEASIBILITY_ISSUE_MESSAGES: Dict[str, str] = {
     NO_SPECIALIST: "No specialist is available on this day.",
     SINGLE_CANDIDATE_FOR_BOTH_ROLES: "Only one doctor is available, roles cannot be split.",
     # TOO_FEW_DOCTORS_TOTAL is more of a soft availability flag; not used in solver feasibility.
+    # Head commitments (must-have head preferred slots):
+    HEAD_COMMITMENT_IGNORED_SLOT: "Head commitment targets an ignored slot.",
+    HEAD_COMMITMENT_NOT_ALLOWED: "Head commitment is not allowed (doctor is not available for this slot).",
+    HEAD_COMMITMENT_CONFLICT: "Multiple heads have a commitment for the same slot.",
+    HEAD_COMMITMENT_DOUBLE_SHIFT_SAME_DAY: "A head commitment requests both onsite and oncall on the same day.",
 }
 
 
