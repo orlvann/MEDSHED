@@ -229,6 +229,41 @@ Tests:
   - seeding includes the head commitment hint
   - seeding selects TOP K slots by difficulty as expected
 
+### Post-solve infeasible explanation (CP-SAT stage)
+
+When the CP-SAT solver returns `INFEASIBLE`, the engine tries to attach **user-friendly issues**
+explaining *why* it failed at the CP stage.
+
+Rules:
+
+- Prefer **day-level reasons** derived deterministically from `HardModel`:
+  - missing candidates for a required slot (`no_onsite_candidate`, `no_oncall_candidate`)
+  - missing specialist among required shifts (`no_specialist`)
+  - forced double shift on the same day (`forced_double_shift_same_day`)
+- If no day-level reason can be derived, return a global fallback issue:
+  - `day=0`, `code=cp_infeasible`
+
+Tests:
+
+- `tests/solver/test_engine_infeasible_issues.py`
+  - missing onsite candidates -> `no_onsite_candidate`
+  - missing specialist -> `no_specialist`
+  - forced double shift -> `forced_double_shift_same_day`
+  - fallback -> `cp_infeasible` (day=0)
+
+### Engine non-OK statuses (no issues attached)
+
+Not every non-OK status should produce issues:
+
+- `EMPTY` means there are no variables to build (`allowed_slots == {}`), so there is no CP-SAT infeasibility to explain.
+- `NOT_SOLVED` means CP-SAT did not return a definite answer (e.g. `UNKNOWN`), so we do not guess issues.
+
+Tests:
+
+- `tests/solver/test_engine_non_ok_statuses.py`
+  - `EMPTY` returns no issues
+  - `NOT_SOLVED` returns no issues
+
 ### How to run the tests (simple commands)
 
 You run tests using `pytest` (a Python test runner).
@@ -298,6 +333,18 @@ Seeding: general hints:
 
 ```bash
 pytest tests/solver/test_seeding_hints.py -vv
+```
+
+Post-solve infeasible explanation:
+
+```bash
+pytest tests/solver/test_engine_infeasible_issues.py -vv
+```
+
+Engine non-OK statuses:
+
+```bash
+pytest tests/solver/test_engine_non_ok_statuses.py -vv
 ```
 
 Soft objective (rest rules):
