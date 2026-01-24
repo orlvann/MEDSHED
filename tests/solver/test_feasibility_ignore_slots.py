@@ -6,6 +6,7 @@ Main goal:
 - If a slot is ignored, it is NOT required, so feasibility must NOT emit
   "no_*_candidate" for that slot.
 - SINGLE_CANDIDATE_FOR_BOTH_ROLES must be emitted only when BOTH shifts are required.
+- Specialist requirement is enforced only when BOTH shifts are required.
 """
 
 from __future__ import annotations
@@ -94,7 +95,8 @@ def test_single_candidate_for_both_roles_is_not_emitted_when_one_shift_is_ignore
     codes = _codes(issues)
 
     assert SINGLE_CANDIDATE_FOR_BOTH_ROLES not in codes
-    # Still feasible: oncall has a candidate, specialist is present among required shifts.
+    # Still feasible: oncall has a candidate.
+    # Specialist requirement is NOT enforced when only one shift is required.
     assert codes == []
 
 
@@ -103,6 +105,7 @@ def test_if_only_oncall_is_required_and_has_no_candidates_we_emit_no_oncall_cand
 ):
     """
     If onsite is ignored but oncall is required and has 0 candidates, feasibility should emit NO_ONCALL_CANDIDATE.
+    We do NOT enforce NO_SPECIALIST here, because specialist requirement is checked only when BOTH shifts are required.
     """
     doctors = {
         1: DoctorInput(id=1, role=DoctorRole.specialist, is_head=False),
@@ -129,6 +132,6 @@ def test_if_only_oncall_is_required_and_has_no_candidates_we_emit_no_oncall_cand
     codes = _codes(issues)
 
     assert NO_ONCALL_CANDIDATE in codes
-    # Also: specialist requirement across REQUIRED shifts (oncall only) fails -> NO_SPECIALIST is correct too.
-    assert NO_SPECIALIST in codes
     assert NO_ONSITE_CANDIDATE not in codes
+    assert NO_SPECIALIST not in codes
+    assert SINGLE_CANDIDATE_FOR_BOTH_ROLES not in codes
