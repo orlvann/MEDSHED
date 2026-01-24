@@ -17,10 +17,6 @@ from . import objective_builder, seeding
 from .issues import (
     CP_INFEASIBLE,
     FEASIBILITY_ISSUE_MESSAGES,
-    FORCED_DOUBLE_SHIFT_SAME_DAY,
-    NO_ONCALL_CANDIDATE,
-    NO_ONSITE_CANDIDATE,
-    NO_SPECIALIST,
 )
 from .types import FeasibilityIssue, HardModel, ProblemData, SolverAssignment, SolverSolution, SolverStatus
 
@@ -29,71 +25,42 @@ def _derive_infeasible_issues(model: HardModel) -> List[FeasibilityIssue]:
     """
     Best-effort, deterministic explanation when CP-SAT returns INFEASIBLE.
 
-    Goal:
-    - give FE something user-friendly (preferably per-day),
-    - even if availability pre-check was OK.
-
-    IMPORTANT:
-    - We keep codes that clearly identify THIS PHASE (CP-SAT),
-      so FE/user knows it failed after model build.
+    We reuse the same classification logic as feasibility pre-check,
+    but we run it on the already-built HardModel.allowed_slots.
     """
+    from backend.core.issues import classify_feasibility_issues_for_day
+
     issues: List[FeasibilityIssue] = []
 
     def _msg(code: str) -> str:
-        # Use a single source of truth for messages.
         return FEASIBILITY_ISSUE_MESSAGES.get(code, code)
+
+    # Build role map once.
+    doctor_role_by_id = {int(did): doc.role for did, doc in model.doctors.items() if doc is not None}
 
     for day in model.active_days:
         onsite_required = (day, ShiftType.onsite) not in model.ignore_slots
         oncall_required = (day, ShiftType.oncall) not in model.ignore_slots
 
-        # If both slots are ignored, nothing to analyze.
         if not onsite_required and not oncall_required:
             continue
 
         onsite_ids = set(model.allowed_slots.get((day, ShiftType.onsite), [])) if onsite_required else set()
         oncall_ids = set(model.allowed_slots.get((day, ShiftType.oncall), [])) if oncall_required else set()
 
-        # Defensive checks (usually caught earlier, but we prefer to return something useful).
-        if onsite_required and not onsite_ids:
-            issues.append(FeasibilityIssue(day=day, code=NO_ONSITE_CANDIDATE, message=_msg(NO_ONSITE_CANDIDATE)))
-
-        if oncall_required and not oncall_ids:
-            issues.append(FeasibilityIssue(day=day, code=NO_ONCALL_CANDIDATE, message=_msg(NO_ONCALL_CANDIDATE)))
-
-        # Specialist-per-day is defined over required shifts only.
-        required_union = onsite_ids.union(oncall_ids)
-        if required_union:
-            has_specialist = any(
-                (model.doctors.get(did) is not None and model.doctors[did].role == DoctorRole.specialist)
-                for did in required_union
-            )
-            if not has_specialist:
-                issues.append(FeasibilityIssue(day=day, code=NO_SPECIALIST, message=_msg(NO_SPECIALIST)))
-
-        # CP-specific: forced double shift (both shifts required, but only the same single doctor can cover both).
-        if onsite_required and oncall_required:
-            if len(onsite_ids) == 1 and len(oncall_ids) == 1:
-                only_ons = next(iter(onsite_ids))
-                only_onc = next(iter(oncall_ids))
-                if only_ons == only_onc:
-                    issues.append(
-                        FeasibilityIssue(
-                            day=day,
-                            code=FORCED_DOUBLE_SHIFT_SAME_DAY,
-                            message=_msg(FORCED_DOUBLE_SHIFT_SAME_DAY),
-                        )
-                    )
-
-    # If we found nothing day-specific, return a month-level fallback.
-    if not issues:
-        issues.append(
-            FeasibilityIssue(
-                day=0,
-                code=CP_INFEASIBLE,
-                message=_msg(CP_INFEASIBLE),
-            )
+        codes = classify_feasibility_issues_for_day(
+            onsite_ids=onsite_ids,
+            oncall_ids=oncall_ids,
+            doctor_role_by_id=doctor_role_by_id,
+            onsite_required=onsite_required,
+            oncall_required=oncall_required,
         )
+
+        for code in codes:
+            issues.append(FeasibilityIssue(day=day, code=code, message=_msg(code)))
+
+    if not issues:
+        issues.append(FeasibilityIssue(day=0, code=CP_INFEASIBLE, message=_msg(CP_INFEASIBLE)))
 
     return issues
 
@@ -157,15 +124,19 @@ def build_and_solve(model: HardModel) -> SolverSolution:
             else:
                 cp.Add(0 == 1)  # required slot but no candidates -> infeasible
 
-    # 3.2 Enforce that each active day has at least one specialist among REQUIRED shifts (onsite OR oncall).
+    # 3.2 Enforce "at least one specialist per day" ONLY when BOTH shifts are required.
+    # If admin ignored one shift, we do NOT enforce specialist-per-day (consistent with feasibility + availability).
     for day in model.active_days:
-        required_shifts = [st for st in (ShiftType.onsite, ShiftType.oncall) if (day, st) not in model.ignore_slots]
-        if not required_shifts:
-            # both shifts ignored -> nothing to enforce on this day
+        onsite_required = (day, ShiftType.onsite) not in model.ignore_slots
+        oncall_required = (day, ShiftType.oncall) not in model.ignore_slots
+
+        if not onsite_required or not oncall_required:
+            # If any shift is not required, skip specialist-per-day rule for this day.
             continue
 
         specialist_vars: List[cp_model.IntVar] = []
-        for shift_type in required_shifts:
+
+        for shift_type in (ShiftType.onsite, ShiftType.oncall):
             for doc_id in model.allowed_slots.get((day, shift_type), []):
                 doctor = model.doctors.get(doc_id)
                 if doctor and doctor.role == DoctorRole.specialist:
@@ -176,7 +147,7 @@ def build_and_solve(model: HardModel) -> SolverSolution:
         if specialist_vars:
             cp.Add(sum(specialist_vars) >= 1)
         else:
-            cp.Add(0 >= 1)  # required day but no specialist candidate -> infeasible
+            cp.Add(0 >= 1)  # both required but no specialist candidate -> infeasible
 
     # 3.3 Enforce that the same doctor cannot be onsite AND oncall on the same day.
     for day in model.active_days:

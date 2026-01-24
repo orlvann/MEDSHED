@@ -32,49 +32,52 @@ def classify_day_risk_for_availability(
     res_onsite: int,
     spec_oncall: int,
     res_oncall: int,
+    onsite_required: bool = True,
+    oncall_required: bool = True,
     min_ok_doctors_per_category: int = MIN_OK_DOCTORS_PER_CATEGORY,
     min_ok_specialists_total: int = MIN_OK_SPECIALISTS_TOTAL,
 ) -> RiskLevel:
     """
     Classify RiskLevel for a single day based on availability counts.
 
-    ```
-    Inputs are counts of doctors available for each category and role.
+    IMPORTANT:
+    - This function does NOT decide "critical".
+      Critical is determined by hard issue codes (e.g., no candidates, forced double shift).
+    - This function only decides: ok vs alert (safe-ish vs risky) when day is feasible.
 
-    Rules:
-    - critical:
-        * total doctors <= 1, OR
-        * no specialist at all (specialists total == 0)
+    Rules (threshold-based):
+    - If neither shift is required -> ok (day effectively ignored).
     - ok:
-        * enough doctors in BOTH categories (onsite + oncall),
-        * and enough specialists in total
+        * each REQUIRED category has enough doctors (>= min_ok_doctors_per_category)
+        * and enough specialists among REQUIRED shifts:
+            - if both shifts required -> >= min_ok_specialists_total
+            - if only one shift required -> >= 1 specialist is "good enough" for ok
     - alert:
-        * everything else
+        * everything else (still feasible, but low capacity)
     """
 
-    total_specialists = spec_onsite + spec_oncall
-    total_residents = res_onsite + res_oncall
-
-    total_doctors = total_specialists + total_residents
-
-    # Critical if almost nobody is available (0 or 1 doctor total).
-    if total_doctors <= 1:
-        return RiskLevel.critical
-
-    # Critical if there is no specialist at all (only residents).
-    if total_specialists == 0:
-        return RiskLevel.critical
+    if not onsite_required and not oncall_required:
+        return RiskLevel.ok
 
     total_onsite = spec_onsite + res_onsite
     total_oncall = spec_oncall + res_oncall
 
-    # "Ok" if both categories have "enough" doctors and enough specialists.
-    if (
-        total_onsite >= min_ok_doctors_per_category
-        and total_oncall >= min_ok_doctors_per_category
-        and total_specialists >= min_ok_specialists_total
-    ):
+    # Count specialists only across REQUIRED shifts.
+    total_specialists_required = 0
+    if onsite_required:
+        total_specialists_required += spec_onsite
+    if oncall_required:
+        total_specialists_required += spec_oncall
+
+    # Required categories must each meet the "ok" threshold.
+    if onsite_required and total_onsite < min_ok_doctors_per_category:
+        return RiskLevel.alert
+    if oncall_required and total_oncall < min_ok_doctors_per_category:
+        return RiskLevel.alert
+
+    # Specialists threshold depends on how many shifts are required.
+    specialists_needed_for_ok = min_ok_specialists_total if (onsite_required and oncall_required) else 1
+    if total_specialists_required >= specialists_needed_for_ok:
         return RiskLevel.ok
 
-    # All other cases are "alert" (feasible but risky).
     return RiskLevel.alert

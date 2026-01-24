@@ -4,7 +4,7 @@ Test helpers for solver tests.
 
 We keep helper functions here to make individual tests short and readable.
 
-Planned helpers (ETAP 3A):
+Planned helpers (current stage):
 
 * assignments_to_map(solution): map (day, shift_type) -> doctor_id
 * pretty_solution(solution): build a readable snapshot string for assertion messages
@@ -114,7 +114,8 @@ def check_hard_invariants(model: HardModel, solution: SolverSolution) -> list[st
 
     Invariants checked:
     1) For each active day and each required shift (not ignored): exactly 1 assignment.
-    2) At least one specialist among required shifts for that day (unless both shifts ignored).
+    2) At least one specialist on a day ONLY when BOTH shifts are required (onsite + oncall).
+    (If one shift is ignored, we do NOT enforce the specialist rule.)
     3) No doctor can be onsite and oncall on the same day (double shift).
     4) Assignments must only be for active days and must not target ignored slots.
     5) Sanity: assigned doctors should belong to participant_doctor_ids.
@@ -165,12 +166,13 @@ def check_hard_invariants(model: HardModel, solution: SolverSolution) -> list[st
                     f"coverage_wrong_count: day={day} shift={shift.value} expected=1 got={len(got)} doctor_ids={got}"
                 )
 
-        # 2) At least one specialist among required shifts for the day.
-        required_shifts: list[ShiftType] = [
-            s for s in (ShiftType.onsite, ShiftType.oncall) if (day, s) not in model.ignore_slots
-        ]
-        if not required_shifts:
-            continue  # both shifts ignored -> skip specialist rule
+    # 2) Specialist requirement (project policy):
+    # We enforce "at least one specialist" ONLY when BOTH shifts are required.
+    onsite_required = (day, ShiftType.onsite) not in model.ignore_slots
+    oncall_required = (day, ShiftType.oncall) not in model.ignore_slots
+
+    if onsite_required and oncall_required:
+        required_shifts: list[ShiftType] = [ShiftType.onsite, ShiftType.oncall]
 
         required_doctors: list[int] = []
         for s in required_shifts:
