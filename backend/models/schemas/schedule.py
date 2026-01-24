@@ -24,7 +24,7 @@ from pydantic import BaseModel, Field, field_validator
 from backend.models.common_enums import (
     PeriodStatus,  # "past" | "current" | "future"
     ScheduleStatus,  # "draft" | "published"
-    ShiftType,  # "on_duty" | "on_call"
+    ShiftType,  # "onsite" | "oncall"
 )
 
 # IMPORTANT: we need DiagnosticsRead at runtime for Pydantic to resolve
