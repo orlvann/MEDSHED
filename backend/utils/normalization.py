@@ -36,12 +36,36 @@ def normalize_assignments(assignments: Iterable[Dict[str, Any]]) -> List[Dict[st
             return str(getattr(x, "value"))
         return str(x)
 
+    def _require_int(item: Dict[str, Any], key: str) -> int:
+        """
+        Read item[key] safely and convert it to int.
+
+        Why:
+        - dict.get(...) can return None, and Pylance then complains about int(None).
+        - We want a clear error if the payload is missing required keys.
+        """
+        raw = item.get(key)
+        if raw is None:
+            raise ValueError(f"Missing '{key}' in assignment item: {item}")
+        return int(raw)
+
+    def _require_value(item: Dict[str, Any], key: str) -> Any:
+        """
+        Read item[key] safely (required field).
+        Raises a clear error when missing.
+        """
+        raw = item.get(key)
+        if raw is None:
+            raise ValueError(f"Missing '{key}' in assignment item: {item}")
+        return raw
+
     # Stable sort ensures consistent serialization (useful for exports and testing).
     items: List[Dict[str, Any]] = []
     for a in assignments or []:
-        day = int(a["day"])
-        doctor_id = int(a["doctor_id"])
-        shift = _as_value_shift(a["shift_type"])  # "on_call" | "on_duty"
+        day = _require_int(a, "day")
+        doctor_id = _require_int(a, "doctor_id")
+        shift_raw = _require_value(a, "shift_type")
+        shift = _as_value_shift(shift_raw)  # "on_call" | "on_duty"
         items.append({"day": day, "shift_type": shift, "doctor_id": doctor_id})
 
     for a in sorted(items, key=lambda x: (x["day"], x["shift_type"], x["doctor_id"])):
@@ -49,6 +73,7 @@ def normalize_assignments(assignments: Iterable[Dict[str, Any]]) -> List[Dict[st
         if key not in seen:
             seen.add(key)
             out.append({"day": key[0], "shift_type": key[1], "doctor_id": key[2]})
+
     return out
 
 

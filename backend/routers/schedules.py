@@ -113,22 +113,35 @@ def generate_schedule(
     "/{year}/{month}/diagnostics",
     response_model=DiagnosticsRead,
     tags=["schedules:admin"],
-    summary="Diagnostics for draft or published (per pointer)",
+    summary="Get diagnostics for working, draft, or published schedule",
     operation_id="schedules_diagnostics_get",
 )
 def schedules_diagnostics(
     user: UserCtx = Depends(require_admin),  # RBAC: admin only (dopasuj do swojej polityki)
     year: int = Path(..., ge=1900, le=2100, description="Calendar year"),
     month: int = Path(..., ge=1, le=12, description="Month 1..12"),
-    target: Literal["draft", "published"] = Query(..., description="Which pointer to use"),
+    target: Literal["working", "draft", "published"] = Query(
+        ...,
+        description=(
+            "Which schedule source to analyze: "
+            "'working' = live autosave buffer (includes details.working_lock_version), "
+            "'draft' = current draft pointer, "
+            "'published' = current published pointer."
+        ),
+    ),
 ):
     """
-    Thin router layer: call SchedulingService (source of truth for pointers).
+    Admin diagnostics endpoint.
 
-    MVP behavior:
-    - Resolve {year, month, target} → pointer → version_id.
-    - Compute or refresh cached diagnostics for that version (current MVP returns zeros).
-    - Return compact DiagnosticsRead (summary KPIs; 'details' is None in MVP).
+    Important behavior:
+    - target='working' reads the LIVE working buffer (autosave). It returns
+      details.working_lock_version so the frontend can keep it and later use it
+      for optimistic concurrency / “publish what I see” confirmation (ACK).
+    - target='draft' or 'published' resolves the pointer to a version_id and returns
+      diagnostics for that immutable version (computed and cached).
+
+    The router is thin: it delegates pointer resolution and diagnostics computation
+    to SchedulingService.
     """
     try:
         return svc.get_diagnostics(year=year, month=month, target=target)

@@ -53,6 +53,7 @@ from sqlalchemy import delete, func, select
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
+from backend.core import diagnostics as core_diagnostics
 from backend.core.types import DoctorInput, PreferencesInput, ProblemData
 from backend.db.session import SessionLocal
 from backend.models.common_enums import PeriodStatus, ScheduleStatus, ShiftType
@@ -64,7 +65,7 @@ from backend.models.orm.schedule import (
     ScheduleVersion,
     ScheduleWorking,
 )
-from backend.models.schemas.diagnostics import DiagnosticsRead
+from backend.models.schemas.diagnostics import DiagnosticsRead, DiagnosticsSummary
 from backend.models.schemas.schedule import (
     AcceptedException,
     Assignment,
@@ -445,49 +446,59 @@ def _prune_published(session: Session, year: int, month: int, *, keep_last: int 
         session.add(ptr)
 
 
-def _compute_or_upsert_diagnostics(session: Session, version_id: int, payload: Dict[str, Any]) -> DiagnosticsRead:
+def _compute_or_upsert_diagnostics(
+    session: Session,
+    *,
+    year: int,
+    month: int,
+    version_id: int,
+    payload: Dict[str, Any],
+) -> DiagnosticsRead:
     """
-    Compute (MVP stub) or upsert diagnostics cache for a given schedule version.
+    Compute and upsert diagnostics for a given schedule version.
 
-    Design:
-    - Store only plain analytics under JSON column `quality` (no datetimes inside JSON).
-    - Keep timestamps in the dedicated DB column `computed_at`.
-    - Ensure 1:1 relation per version_id (upsert behavior).
+    Now (real MVP):
+    - build ProblemData for participants from payload
+    - compute analytics in backend/core/diagnostics.py
+    - store JSON {summary, details} in ScheduleDiagnostics.quality
     """
 
-    # JSON payload must contain only JSON-serializable primitives.
-    quality_payload: Dict[str, Any] = {
-        "summary": {
-            "penalty_total": 0,
-            "understaffed_days": 0,
-            "rest_violations": 0,
-            "fairness_index": 1.0,
-            "preference_fulfillment_pct": 100.0,
-        }
-        # NOTE: DO NOT put `computed_at` or `version_id` here — keep them as columns/fields, not in JSON.
-    }
+    # Build ProblemData using the same logic as "generate" (but no ignores here).
+    # We reuse your helper by creating a minimal request-like object.
+    req = ScheduleGenerateRequest(
+        year=year,
+        month=month,
+        participant_doctor_ids=list(payload.get("participant_doctor_ids") or []),
+        ignore_days=[],
+        ignore_slots=[],
+    )
+    problem = _build_problem_data_for_generate(session, req)
 
-    # Try to fetch existing diagnostics row for this version
+    # Compute quality (pure core logic)
+    quality_payload = core_diagnostics.compute_quality(problem=problem, payload=payload)
+
+    # Upsert diagnostics row
     row = session.execute(
-        select(ScheduleDiagnostics).where(ScheduleDiagnostics.version_id == version_id)
+        select(ScheduleDiagnostics).where(ScheduleDiagnostics.version_id == int(version_id))
     ).scalar_one_or_none()
 
     if row is None:
-        # Insert new row; computed_at should be handled by DB default or ORM default
-        row = ScheduleDiagnostics(version_id=version_id, quality=quality_payload)
+        row = ScheduleDiagnostics(version_id=int(version_id), quality=quality_payload)
         session.add(row)
     else:
-        # Update existing row's quality JSON
         row.quality = quality_payload
 
-    # Flush to get DB-generated values (e.g., computed_at, id)
     session.flush()
 
-    # Build and return the DTO; Pydantic will serialize datetime to ISO8601 automatically
+    # Build DTO response (Pydantic model types, not raw dicts)
+    summary_dict = quality_payload.get("summary") or {}
+    summary_obj = DiagnosticsSummary.model_validate(summary_dict)
+
     return DiagnosticsRead(
         version_id=str(version_id),
         computed_at=row.computed_at,
-        summary=quality_payload["summary"],
+        summary=summary_obj,
+        details=quality_payload.get("details"),
     )
 
 
@@ -965,7 +976,7 @@ class SchedulingService:
 
             _prune_drafts(session, year, month, keep_last=RETAIN_LAST_DRAFTS)
 
-            diag = _compute_or_upsert_diagnostics(session, vid, payload)
+            diag = _compute_or_upsert_diagnostics(session, year=year, month=month, version_id=vid, payload=payload)
             working = _read_working_read(session, year, month)
 
             drafts_total = _drafts_total(session, year, month)
@@ -1041,7 +1052,7 @@ class SchedulingService:
 
             _prune_drafts(session, year, month, keep_last=RETAIN_LAST_DRAFTS)
 
-            diag = _compute_or_upsert_diagnostics(session, vid, payload)
+            diag = _compute_or_upsert_diagnostics(session, year=year, month=month, version_id=vid, payload=payload)
 
             drafts_total = _drafts_total(session, year, month)
             has_prev, has_next = _draft_neighbors(session, year, month, vid)
@@ -1139,7 +1150,9 @@ class SchedulingService:
                 )
 
                 # Recompute/refresh diagnostics for the selected draft version
-                diag = _compute_or_upsert_diagnostics(session, new_id, ver.payload)
+                diag = _compute_or_upsert_diagnostics(
+                    session, year=year, month=month, version_id=new_id, payload=cast(Dict[str, Any], ver.payload)
+                )
 
                 # Read the updated working view for the response
                 working = _read_working_read(session, year, month)
@@ -1283,7 +1296,7 @@ class SchedulingService:
             ptr.current_published_version_id = vid
             session.add(ptr)
 
-            _compute_or_upsert_diagnostics(session, vid, payload)
+            _compute_or_upsert_diagnostics(session, year=year, month=month, version_id=vid, payload=payload)
 
             _prune_published(
                 session, year, month, keep_last=RETAIN_LAST_PUBLISHED
@@ -1344,50 +1357,73 @@ class SchedulingService:
             )
 
     @_translate_sqla_errors
-    def get_diagnostics(self, year: int, month: int, *, target: Literal["draft", "published"]) -> DiagnosticsRead:
+    def get_diagnostics(
+        self, year: int, month: int, *, target: Literal["working", "draft", "published"]
+    ) -> DiagnosticsRead:
         """
-        Return diagnostics for the current draft/published pointer of {year, month}.
+        Return diagnostics for the selected stream of {year, month}.
 
-        Steps:
-        1) Load the pointer row for the period.
-        2) Resolve version_id for the selected target ("draft" or "published").
-        3) Compute or refresh cached diagnostics for that version (idempotent).
-        4) Return DiagnosticsRead DTO.
-
-        MVP behavior:
-        - Resolve {year, month, target} -> pointer -> version_id.
-        - If diagnostics cache is missing or stale, compute and upsert before returning.
-        - Summary KPIs only; 'details' remains None in MVP.
-
-        Post-MVP optional roadmap lives in docs/api-contract-v1.md:
-        - Strongly typed 'details' sections (coverage, preferences, fairness, partnering, visuals, suggestions).
-        - Optional endpoints:
-            GET  /api/v1/schedules/{y}/{m}/diagnostics/details?target=...
-            POST /api/v1/schedules/{y}/{m}/diagnostics/recompute?target=...
-        - Optional links to CSV/JSON exports for heavy data.
+        Streams:
+        - working   -> live autosave buffer (NOT pointer-based, NOT cached in ScheduleDiagnostics)
+        - draft     -> pointer-based immutable version (cached/upserted)
+        - published -> pointer-based immutable version (cached/upserted)
         """
-        with SessionLocal() as session:
-            # Load or init pointer for the period
-            ptr = session.get(SchedulePointer, {"year": year, "month": month})
+        with SessionLocal() as db:
+            # ----------------------------- target=working -----------------------------
+            if target == "working":
+                w = db.get(ScheduleWorking, {"year": year, "month": month})
+                if w is None:
+                    raise ValueError("not_found")
+
+                payload = cast(Dict[str, Any], w.payload or {})
+
+                req = ScheduleGenerateRequest(
+                    year=year,
+                    month=month,
+                    participant_doctor_ids=list(payload.get("participant_doctor_ids") or []),
+                    ignore_days=[],
+                    ignore_slots=[],
+                )
+                problem = _build_problem_data_for_generate(db, req)
+
+                quality_payload = core_diagnostics.compute_quality(problem=problem, payload=payload)
+
+                summary_dict = quality_payload.get("summary") or {}
+                summary_obj = DiagnosticsSummary.model_validate(summary_dict)
+
+                details = quality_payload.get("details") or {}
+                if not isinstance(details, dict):
+                    details = {}
+                details["working_lock_version"] = w.lock_version
+
+                return DiagnosticsRead(
+                    version_id="working",
+                    computed_at=now_utc(),
+                    summary=summary_obj,
+                    details=details,
+                )
+
+            # -------------------------- target=draft/published -------------------------
+            ptr = db.get(SchedulePointer, {"year": year, "month": month})
             if not ptr:
-                # No pointer row at all -> no versions exist yet
                 raise ValueError("not_found")
 
-            # Resolve version_id from the selected stream
             vid = ptr.current_draft_version_id if target == "draft" else ptr.current_published_version_id
             if vid is None:
-                # Selected stream doesn't exist for this period
                 raise ValueError("not_found")
 
-            # Load the pointed version snapshot
-            ver = session.get(ScheduleVersion, int(vid))
+            ver = db.get(ScheduleVersion, int(vid))
             if ver is None:
-                # Dangling pointer (DB inconsistency) — treat as not_found
                 raise ValueError("not_found")
 
-            # Compute or refresh diagnostics cache and return DTO
-            diag = _compute_or_upsert_diagnostics(session, int(vid), ver.payload)
-            session.commit()
+            diag = _compute_or_upsert_diagnostics(
+                db,
+                year=year,
+                month=month,
+                version_id=int(vid),
+                payload=cast(Dict[str, Any], ver.payload),
+            )
+            db.commit()
             return diag
 
     @_translate_sqla_errors
@@ -1458,7 +1494,9 @@ class SchedulingService:
                 )
 
                 # Diagnostics only when draft pointer exists (period view shows draft KPIs)
-                diagnostics = _compute_or_upsert_diagnostics(session, did, ver.payload)
+                diagnostics = _compute_or_upsert_diagnostics(
+                    session, year=year, month=month, version_id=did, payload=cast(Dict[str, Any], ver.payload)
+                )
 
             # Build PUBLISHED (only if published pointer exists)
             published_view = SchedulePublishedView()
