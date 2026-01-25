@@ -2,10 +2,14 @@
 # -----------------------------------------------------------------------------
 # Diagnostics DTO — kept small and stable (leaf module, no back-imports).
 #
+# Why this file is a "leaf":
+# - It does NOT import schedule schemas (or other app schemas), so others can
+#   safely import DiagnosticsRead without creating circular imports.
+#
 # NOTE (contract evolution):
-# - This module must stay a "leaf" to avoid circular imports.
-# - We keep backward compatibility with older fields in the MVP payload.
-# - New "Read" models are added to provide a stable contract for FE.
+# - We keep backward compatibility with older payload fields (penalty_total, understaffed_days,
+#   and details as a free JSON dict).
+# - New typed "Read" models are added to provide a stable contract for FE.
 # -----------------------------------------------------------------------------
 
 from __future__ import annotations
@@ -74,9 +78,10 @@ def _make_diag_summary() -> "DiagnosticsSummaryRead":
     )
 
 
-# Keep old name as an alias (many places may import DiagnosticsSummary already).
-# This avoids breaking internal imports while we transition services/router code.
-DiagnosticsSummary = DiagnosticsSummaryRead
+# Backward-compatible name (some code may still import DiagnosticsSummary).
+# Keep it as a real class name for easier runtime/debugging.
+class DiagnosticsSummary(DiagnosticsSummaryRead):
+    """Backward-compatible alias for older imports."""
 
 
 # ------------------------------ Findings (stable codes for FE) ------------------------------
@@ -119,7 +124,7 @@ class DoctorDiagnosticsRead(BaseModel):
     score: Optional[float] = Field(
         default=None,
         description=(
-            "Optional per-doctor score used by rankings (higher=better or lower=better depending on convention)."
+            "Optional per-doctor score used by rankings " "(higher=better or lower=better depending on convention)."
         ),
     )
 
@@ -181,11 +186,16 @@ class DiagnosticsRead(BaseModel):
     )
 
     # Backward compatibility:
-    # - Today services may still return an untyped dict in MVP.
-    # - New contract uses DiagnosticsDetailsRead.
-    details: Optional[DiagnosticsDetailsRead | dict[str, Any]] = Field(
+    # - Keep the legacy free JSON dict in `details` so existing services/tests won't break.
+    # - New typed contract can be filled later in `details_typed` (no behavior change now).
+    details: Optional[dict[str, Any]] = Field(
         default=None,
-        description="Optional rich breakdown. New contract: typed details. Legacy: free JSON dict.",
+        description="LEGACY: Optional rich breakdown (free JSON dict).",
+    )
+
+    details_typed: Optional[DiagnosticsDetailsRead] = Field(
+        default=None,
+        description="New typed details contract (optional until services start populating it).",
     )
 
 
