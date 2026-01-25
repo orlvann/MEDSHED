@@ -176,6 +176,7 @@ def _read_working_read(session: Session, year: int, month: int) -> ScheduleWorki
             participant_doctor_ids=[],
             assignments=[],
             meta={"labels": []},
+            inputs_snapshot=None,
             updated_at=None,
             lock_version=None,
         )
@@ -187,6 +188,8 @@ def _read_working_read(session: Session, year: int, month: int) -> ScheduleWorki
         participant_doctor_ids=list(payload.get("participant_doctor_ids", [])),
         assignments=list(payload.get("assignments", [])),
         meta=dict(payload.get("meta", {"labels": []})),
+        # Keep snapshot visible on working for deterministic publish/diagnostics later.
+        inputs_snapshot=payload.get("inputs_snapshot"),
         updated_at=w.updated_at,
         lock_version=w.lock_version,
     )
@@ -527,6 +530,7 @@ def _normalize_snapshot_payload(raw: Dict[str, Any]) -> Dict[str, Any]:
     - Ensures participant_doctor_ids are integers (defensive cast).
     - Normalizes assignments (handles Enum values; sorts & dedupes by (day, shift_type, doctor_id)).
     - Normalizes meta (labels unique & sorted; exceptions must be a list).
+    - Preserves inputs_snapshot if present (it is already "frozen inputs" for this schedule).
 
     Why:
     - Keep all versions deterministic and comparable (no false diffs due to order/dup).
@@ -542,6 +546,11 @@ def _normalize_snapshot_payload(raw: Dict[str, Any]) -> Dict[str, Any]:
     pids = payload.get("participant_doctor_ids") or []
     payload["participant_doctor_ids"] = [int(x) for x in pids]
 
+    # Preserve the frozen inputs snapshot (do not recompute here).
+    # The snapshot is created once at generate() and then copied forward.
+    if "inputs_snapshot" in payload:
+        payload["inputs_snapshot"] = payload.get("inputs_snapshot")
+
     # Assignments: coerce possible Enums to their .value and normalize
     payload["assignments"] = normalize_assignments(cast(List[Dict[str, Any]], payload.get("assignments", []) or []))
 
@@ -549,6 +558,88 @@ def _normalize_snapshot_payload(raw: Dict[str, Any]) -> Dict[str, Any]:
     payload["meta"] = normalize_meta(cast(Dict[str, Any], payload.get("meta") or {"labels": []}))
 
     return payload
+
+
+# --------------------------------- inputs snapshot helpers --------------------------------
+def _doctor_display_name(d: Doctor) -> str:
+    """
+    Build a stable display name for snapshotting.
+
+    We snapshot display_name because doctor names can change later, but old schedules
+    should still show the original names used at generation time.
+    """
+    first = (d.first_name or "").strip()
+    last = (d.last_name or "").strip()
+    name = f"{first} {last}".strip()
+    return name if name else f"Doctor {int(d.id)}"
+
+
+def _build_inputs_snapshot(
+    session: Session,
+    *,
+    year: int,
+    month: int,
+    participant_doctor_ids: set[int],
+) -> Dict[str, Any]:
+    """
+    Create the frozen inputs snapshot for the schedule payload.
+
+    IMPORTANT:
+    - This must reflect what the solver actually used.
+    - We use the same period ({year, month}) and the final participant_doctor_ids
+      from ProblemData (already intersected with active doctors in DB).
+    - We read PreferencePointer.current_version_id, because that's exactly what
+      _build_problem_data_for_generate() uses when loading preference payloads.
+    """
+    ids = sorted({int(x) for x in (participant_doctor_ids or set())})
+    if not ids:
+        return {"doctors": {}, "preference_version_id_by_doctor": {}}
+
+    # 1) Doctor snapshot: role, is_head, display_name, is_active_at_snapshot
+    db_doctors = session.scalars(select(Doctor).where(Doctor.id.in_(ids))).all()
+    by_id: Dict[int, Doctor] = {int(d.id): d for d in db_doctors}
+
+    doctors_snapshot: Dict[int, Dict[str, Any]] = {}
+    for doctor_id in ids:
+        d = by_id.get(int(doctor_id))
+        if d is None:
+            # Defensive fallback: keep the key to satisfy "snapshot must not be empty".
+            doctors_snapshot[int(doctor_id)] = {
+                "role": "specialist",
+                "is_head": False,
+                "display_name": f"Doctor {int(doctor_id)}",
+                "is_active_at_snapshot": False,
+            }
+            continue
+
+        # Store role as plain string value for JSON compatibility.
+        doctors_snapshot[int(doctor_id)] = {
+            "role": d.role.value if hasattr(d.role, "value") else str(d.role),
+            "is_head": bool(d.is_head),
+            "display_name": _doctor_display_name(d),
+            "is_active_at_snapshot": bool(d.is_active),
+        }
+
+    # 2) Preference versions used at generation: doctor_id -> pointer.current_version_id | None
+    pref_map: Dict[int, Optional[int]] = {int(doctor_id): None for doctor_id in ids}
+
+    ptr_rows = session.scalars(
+        select(PreferencePointer).where(
+            PreferencePointer.doctor_id.in_(ids),
+            PreferencePointer.year == int(year),
+            PreferencePointer.month == int(month),
+        )
+    ).all()
+
+    for ptr in ptr_rows:
+        did = int(ptr.doctor_id)
+        # Keep key for each participant; value can be None when no checkpoint exists.
+        pref_map[did] = int(ptr.current_version_id) if ptr.current_version_id is not None else None
+
+    return {
+        "doctors": doctors_snapshot,
+        "preference_version_id_by_doctor": pref_map,
+    }
 
 
 # --------------------------------- DTO builders --------------------------------
@@ -793,45 +884,16 @@ class SchedulingService:
         if_match_lock_version: Optional[int],
         updated_by_user_id: Optional[int],
     ) -> ScheduleWorkingAck:
-        """
-        Autosave the working buffer with optimistic concurrency (OCC).
-
-        Scope:
-            - Writes ONLY the mutable 'working' snapshot for {year, month}.
-            - Does NOT create a checkpoint (history remains unchanged).
-
-        OCC:
-            - If 'if_match_lock_version' is provided and mismatches current lock,
-            raise ValueError("edit_conflict").
-
-        Edit window:
-            - A past-period edit guard exists but is currently DISABLED for development.
-            To enable later, uncomment the _ensure_editable(...) call below.
-
-        Semantics (IMPORTANT):
-            - PUT /working MUST NOT change 'participant_doctor_ids'.
-            - 'participant_doctor_ids' are preserved from the CURRENT working row.
-            - The only supported way to change 'participant_doctor_ids' is via 'generate'
-            (snapshot of the participants pool).
-
-        Normalization (enforced here):
-            - Assignments are normalized (sort & dedupe by (day, shift_type, doctor_id)).
-            - Meta is normalized via 'normalize_meta' (labels unique & sorted; exceptions list).
-            - Deterministic shape avoids "false diffs" and keeps snapshots stable.
-
-        Returns:
-            - ScheduleWorkingAck with updated_at and new lock_version.
-
-        Raises:
-            - ValueError("edit_conflict") when OCC precondition fails.
-        """
-        # _ensure_editable(year, month)  # Enable later to block edits on past periods
-
+        ...
         with SessionLocal() as session:
-            # Load current working to preserve participant_doctor_ids
+            # Load current working to preserve participant_doctor_ids (and inputs_snapshot).
             w = _get_or_init_working(session, year, month)
             current_payload = dict(w.payload or {})
             current_participants = list(current_payload.get("participant_doctor_ids", []))
+
+            # IMPORTANT:
+            # inputs_snapshot is created once at generate() and must NOT be recalculated on autosave.
+            current_inputs_snapshot = current_payload.get("inputs_snapshot")
 
             # Normalize inputs
             norm_assignments: List[Dict[str, Any]] = normalize_assignments(
@@ -841,11 +903,14 @@ class SchedulingService:
             norm_meta = normalize_meta(meta or {"labels": []})
 
             # Build the new working snapshot WITHOUT touching participant_doctor_ids
+            # and WITHOUT dropping the frozen inputs snapshot.
             payload = {
                 "participant_doctor_ids": current_participants,
                 "assignments": norm_assignments,
                 "meta": norm_meta,
             }
+            if current_inputs_snapshot is not None:
+                payload["inputs_snapshot"] = current_inputs_snapshot
 
             # OCC write (will raise ValueError("edit_conflict") on mismatch)
             updated_at_dt, lv = _update_working(
@@ -862,24 +927,12 @@ class SchedulingService:
     # ------------------------------ Generate ----------------------------------
     @_translate_sqla_errors
     def generate(self, req: ScheduleGenerateRequest, *, user_id: Optional[int]) -> ScheduleGenerateCreated:
-        """
-        Generate (MVP): build ProblemData, call the solver, seed working and create first draft version.
-            Behavior:
-            - Builds ProblemData from DB and request (participants, preferences stub, ignore_*).
-            - Calls the core scheduler to get assignments (may be empty list in MVP).
-            - Seeds/overwrites working with solver assignments and meta.
-            - Creates a draft version and points the draft pointer to it.
-            - Computes and stores diagnostics for the draft.
-
-            Invariant (clear REDO semantics):
-            - A newly created checkpoint is always the max(version.id) for the month.
-            - The draft pointer is moved to this newest id, so there is no "next" (redo) available.
-            - We assert this by snapping the pointer to max(id) after insertion.
-        """
-
-        year, month = int(req.year), int(req.month)
-        # _ensure_editable(year, month)  # Enable later to block edits on past periods
         with SessionLocal() as session:
+            # IMPORTANT:
+            # year/month must be defined in this function scope (Ruff/Pylance errors were about this).
+            year = int(req.year)
+            month = int(req.month)
+
             # Build core ProblemData from DB and request
             problem = _build_problem_data_for_generate(session, req)
 
@@ -890,7 +943,24 @@ class SchedulingService:
             result = scheduler.generate_schedule(problem)
 
             solution = result.solution
-            assignments = result.assignments
+            solver_assignments = result.assignments
+
+            # Convert solver assignment objects to plain dicts (works for Pydantic, dicts, and simple objects)
+            def _assignment_to_dict(a: Any) -> Dict[str, Any]:
+                # Pydantic v2 models
+                if hasattr(a, "model_dump"):
+                    return cast(Dict[str, Any], a.model_dump(mode="json"))
+
+                # Already a dict
+                if isinstance(a, dict):
+                    return cast(Dict[str, Any], a)
+
+                # Generic Python object with attributes (fallback)
+                return {
+                    "day": int(getattr(a, "day")),
+                    "shift_type": getattr(getattr(a, "shift_type"), "value", getattr(a, "shift_type")),
+                    "doctor_id": int(getattr(a, "doctor_id")),
+                }
 
             # Normalize snapshot payload: use participants from ProblemData + solver assignments
             meta = {
@@ -900,42 +970,19 @@ class SchedulingService:
                 "solver_status": solution.status.value,
             }
 
-            # Add admin-requested ignores as "exceptions" so they are visible in meta (stable field).
-            # This answers why some days are missing in a schedule generated by the solver
-            for d in sorted(problem.ignore_days):
-                meta["exceptions"].append(
-                    {
-                        "code": "ignored_day",
-                        "day": d,
-                        "justification": "Skipped by admin request (ignore_days).",
-                    }
-                )
-
-            for d, st in sorted(problem.ignore_slots, key=lambda x: (x[0], x[1].value)):
-                meta["exceptions"].append(
-                    {
-                        "code": "ignored_slot",
-                        "day": d,
-                        "shift_type": st.value,
-                        "justification": "Skipped by admin request (ignore_slots).",
-                    }
-                )
-
-            # Keep real feasibility issues ONLY when solver reported them (optional).
-            if solution.issues:
-                for i in solution.issues:
-                    meta["exceptions"].append(
-                        {
-                            "code": i.code,
-                            "day": i.day,
-                            "justification": i.message,
-                        }
-                    )
+            # Build inputs_snapshot ONCE here (single source of truth: same period + same participants).
+            inputs_snapshot = _build_inputs_snapshot(
+                session,
+                year=year,
+                month=month,
+                participant_doctor_ids=problem.participant_doctor_ids,
+            )
 
             payload = _normalize_snapshot_payload(
                 {
                     "participant_doctor_ids": sorted(problem.participant_doctor_ids),
-                    "assignments": [a.model_dump(mode="json") for a in assignments],
+                    "assignments": [_assignment_to_dict(a) for a in (solver_assignments or [])],
+                    "inputs_snapshot": inputs_snapshot,
                     "meta": meta,
                 }
             )
@@ -943,10 +990,15 @@ class SchedulingService:
             # Ensure working row exists and overwrite it with the new snapshot
             _get_or_init_working(session, year, month)
             _update_working(
-                session, year, month, payload=payload, if_match_lock_version=None, updated_by_user_id=user_id
+                session,
+                year,
+                month,
+                payload=payload,
+                if_match_lock_version=None,
+                updated_by_user_id=user_id,
             )
 
-            # Create an immutable draft version based on the same payload
+            # Create an immutable draft version based on the same payload (includes inputs_snapshot)
             vid = _insert_version(
                 session,
                 year=year,
