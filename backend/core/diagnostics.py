@@ -27,7 +27,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
-from backend.core import scoring
+from backend.core import issues, scoring
 from backend.core.types import ProblemData
 from backend.models.common_enums import DoctorRole, ShiftType
 
@@ -91,8 +91,8 @@ def _extract_ignored_from_meta(meta: Dict[str, Any]) -> tuple[Set[int], Set[Tupl
     Parse ignore_days / ignore_slots out of meta.exceptions.
 
     We store these in meta during generate():
-    - {"code": "ignored_day", "day": 12, ...}
-    - {"code": "ignored_slot", "day": 12, "shift_type": "onsite", ...}
+    - {"code": "ignored_day" | "coverage_ignored_day", "day": 12, ...}
+    - {"code": "ignored_slot" | "coverage_ignored_slot", "day": 12, "shift_type": "onsite", ...}
 
     Returns:
         (ignored_days, ignored_slots)
@@ -109,14 +109,22 @@ def _extract_ignored_from_meta(meta: Dict[str, Any]) -> tuple[Set[int], Set[Tupl
             continue
 
         code = str(e.get("code") or "").strip().lower()
+        ignored_day_codes = {
+            "ignored_day",
+            str(getattr(issues, "COVERAGE_IGNORED_DAY", "coverage_ignored_day")).strip().lower(),
+        }
+        ignored_slot_codes = {
+            "ignored_slot",
+            str(getattr(issues, "COVERAGE_IGNORED_SLOT", "coverage_ignored_slot")).strip().lower(),
+        }
 
-        if code == "ignored_day":
+        if code in ignored_day_codes:
             day = _safe_int(e.get("day"))
             if day is not None:
                 ignored_days.add(day)
             continue
 
-        if code == "ignored_slot":
+        if code in ignored_slot_codes:
             day = _safe_int(e.get("day"))
             st = _normalize_shift_type(e.get("shift_type"))
             if day is not None and st is not None:
@@ -246,8 +254,9 @@ def compute_coverage_missing_required_slots(
 
     Rules:
     - Each day requires 1 onsite and 1 oncall slot (MVP).
-    - ignored_day -> day requires nothing (0 missing).
-    - ignored_slot(day, shift_type) -> that slot is not required (0 missing for it).
+    - IMPORTANT: ignore rules DO NOT reduce requirements in diagnostics.
+    Ignore exceptions were used only to allow generation, but diagnostics must show real gaps.
+    - We still return ignored_days/ignored_slots separately so UI can display that the gap was previously "accepted".
 
     Returns:
         (missing_count, missing_slots_list)
@@ -257,18 +266,15 @@ def compute_coverage_missing_required_slots(
     for d_raw in problem.days:
         d = int(d_raw)
 
-        if d in ignored_days:
-            continue
+        # NOTE:
+        # We DO NOT skip ignored_days/ignored_slots here.
+        # Diagnostics must show gaps even if they were "accepted" during generation.
 
-        # onsite required?
-        if (d, ShiftType.onsite) not in ignored_slots:
-            if len(idx.slot_to_doctors.get((d, ShiftType.onsite), [])) < 1:
-                missing_slots.append((d, ShiftType.onsite))
+        if len(idx.slot_to_doctors.get((d, ShiftType.onsite), [])) < 1:
+            missing_slots.append((d, ShiftType.onsite))
 
-        # oncall required?
-        if (d, ShiftType.oncall) not in ignored_slots:
-            if len(idx.slot_to_doctors.get((d, ShiftType.oncall), [])) < 1:
-                missing_slots.append((d, ShiftType.oncall))
+        if len(idx.slot_to_doctors.get((d, ShiftType.oncall), [])) < 1:
+            missing_slots.append((d, ShiftType.oncall))
 
     return int(len(missing_slots)), missing_slots
 
@@ -292,18 +298,18 @@ def compute_understaffed_days(
 
     for d_raw in problem.days:
         d = int(d_raw)
-        if d in ignored_days:
+
+        # NOTE:
+        # Diagnostics must show understaffed days even if they were "accepted" during generation.
+        # This field is deprecated, but keep semantics consistent with coverage gaps.
+
+        if len(idx.slot_to_doctors.get((d, ShiftType.onsite), [])) < 1:
+            missing += 1
             continue
 
-        if (d, ShiftType.onsite) not in ignored_slots:
-            if len(idx.slot_to_doctors.get((d, ShiftType.onsite), [])) < 1:
-                missing += 1
-                continue
-
-        if (d, ShiftType.oncall) not in ignored_slots:
-            if len(idx.slot_to_doctors.get((d, ShiftType.oncall), [])) < 1:
-                missing += 1
-                continue
+        if len(idx.slot_to_doctors.get((d, ShiftType.oncall), [])) < 1:
+            missing += 1
+            continue
 
     return missing
 
@@ -457,11 +463,16 @@ def compute_rest_penalty_and_violations(*, problem: ProblemData, idx: _Index) ->
     Returns:
         (total_penalty, total_violations_count)
     """
-    total_penalty, total_violations, _viol_by_doc, _pen_by_doc = _compute_rest_stats(problem=problem, idx=idx)
+    total_penalty, total_violations, _viol_by_doc, _pen_by_doc, _rest_findings = _compute_rest_stats(
+        problem=problem, idx=idx
+    )
+
     return int(total_penalty), int(total_violations)
 
 
-def _compute_rest_stats(*, problem: ProblemData, idx: _Index) -> tuple[int, int, Dict[int, int], Dict[int, int]]:
+def _compute_rest_stats(
+    *, problem: ProblemData, idx: _Index
+) -> tuple[int, int, Dict[int, int], Dict[int, int], List[Dict[str, Any]]]:
     """
     Compute rest penalty and violations both globally and per-doctor.
 
@@ -473,6 +484,7 @@ def _compute_rest_stats(*, problem: ProblemData, idx: _Index) -> tuple[int, int,
 
     violations_by_doctor: Dict[int, int] = {int(d): 0 for d in problem.participant_doctor_ids}
     penalty_by_doctor: Dict[int, int] = {int(d): 0 for d in problem.participant_doctor_ids}
+    rest_findings: List[Dict[str, Any]] = []
 
     days_sorted = [int(d) for d in problem.days]
 
@@ -500,6 +512,13 @@ def _compute_rest_stats(*, problem: ProblemData, idx: _Index) -> tuple[int, int,
                 total_violations += 1
                 violations_by_doctor[int(doc_id)] += 1
                 penalty_by_doctor[int(doc_id)] += w
+                rest_findings.append(
+                    _finding(
+                        code=issues.REST_CONSECUTIVE_VIOLATION,
+                        severity="warning",
+                        context={"doctor_id": int(doc_id), "day": int(d), "kind": "onsite_onsite"},
+                    )
+                )
 
             # oncall->oncall
             if _doctor_has(idx, doctor_id=doc_id, day=d, shift_type=ShiftType.oncall) and _doctor_has(
@@ -510,6 +529,13 @@ def _compute_rest_stats(*, problem: ProblemData, idx: _Index) -> tuple[int, int,
                 total_violations += 1
                 violations_by_doctor[int(doc_id)] += 1
                 penalty_by_doctor[int(doc_id)] += w
+                rest_findings.append(
+                    _finding(
+                        code=issues.REST_CONSECUTIVE_VIOLATION,
+                        severity="warning",
+                        context={"doctor_id": int(doc_id), "day": int(d), "kind": "oncall_oncall"},
+                    )
+                )
 
             # cross shift (unless weekend exception)
             skip_weekend_cross = bool(_is_weekend_pair(problem, d, d_next) and allow_weekend_consecutive)
@@ -522,6 +548,13 @@ def _compute_rest_stats(*, problem: ProblemData, idx: _Index) -> tuple[int, int,
                     total_violations += 1
                     violations_by_doctor[int(doc_id)] += 1
                     penalty_by_doctor[int(doc_id)] += cross_w
+                    rest_findings.append(
+                        _finding(
+                            code=issues.REST_CONSECUTIVE_VIOLATION,
+                            severity="warning",
+                            context={"doctor_id": int(doc_id), "day": int(d), "kind": "cross"},
+                        )
+                    )
 
                 # oncall -> onsite
                 if _doctor_has(idx, doctor_id=doc_id, day=d, shift_type=ShiftType.oncall) and _doctor_has(
@@ -531,8 +564,15 @@ def _compute_rest_stats(*, problem: ProblemData, idx: _Index) -> tuple[int, int,
                     total_violations += 1
                     violations_by_doctor[int(doc_id)] += 1
                     penalty_by_doctor[int(doc_id)] += cross_w
+                    rest_findings.append(
+                        _finding(
+                            code=issues.REST_CONSECUTIVE_VIOLATION,
+                            severity="warning",
+                            context={"doctor_id": int(doc_id), "day": int(d), "kind": "cross"},
+                        )
+                    )
 
-    return int(total_penalty), int(total_violations), violations_by_doctor, penalty_by_doctor
+    return int(total_penalty), int(total_violations), violations_by_doctor, penalty_by_doctor, rest_findings
 
 
 # ----------------------------- totals (per-doctor penalty) -----------------------
@@ -1093,6 +1133,7 @@ def _build_findings(
     ignored_days: Set[int],
     ignored_slots: Set[Tuple[int, ShiftType]],
     missing_slots: List[Tuple[int, ShiftType]],
+    rest_findings: List[Dict[str, Any]],
 ) -> tuple[List[Dict[str, Any]], Dict[int, int]]:
     """
     Build findings list and return additional per-doctor counters used by rankings.
@@ -1104,18 +1145,25 @@ def _build_findings(
 
     # Info: ignored day/slot context (NOT a KPI, but helpful for UI debugging).
     for d in sorted(ignored_days):
-        findings.append(_finding(code="ignored_day", severity="info", context={"day": int(d)}))
+        findings.append(_finding(code=issues.COVERAGE_IGNORED_DAY, severity="info", context={"day": int(d)}))
 
     for d, st in sorted(ignored_slots, key=lambda x: (int(x[0]), str(x[1].value))):
-        findings.append(_finding(code="ignored_slot", severity="info", context={"day": int(d), "shift_type": st.value}))
+        findings.append(
+            _finding(
+                code=issues.COVERAGE_IGNORED_SLOT, severity="info", context={"day": int(d), "shift_type": st.value}
+            )
+        )
 
     # Critical: missing coverage slots (Gaps)
+    # Even if a gap was previously "accepted" (ignored during generation),
+    # diagnostics must still show it as a real gap.
     for d, st in missing_slots:
+        was_ignored = bool((int(d) in ignored_days) or ((int(d), st) in ignored_slots))
         findings.append(
             _finding(
                 code="coverage_missing_required_slot",
                 severity="critical",
-                context={"day": int(d), "shift_type": st.value},
+                context={"day": int(d), "shift_type": st.value, "was_ignored": was_ignored},
             )
         )
 
@@ -1128,7 +1176,7 @@ def _build_findings(
             double_shift_days_by_doctor[int(doc_id)] += 1
             findings.append(
                 _finding(
-                    code="double_shift_same_day",
+                    code=issues.HARD_DOUBLE_SHIFT_SAME_DAY,
                     severity="critical",
                     context={"doctor_id": int(doc_id), "day": int(day)},
                 )
@@ -1155,7 +1203,55 @@ def _build_findings(
                 break
 
         if not has_specialist:
-            findings.append(_finding(code="no_specialist_onsite", severity="critical", context={"day": int(d)}))
+            findings.append(
+                _finding(code=issues.COVERAGE_NO_SPECIALIST_DAY, severity="critical", context={"day": int(d)})
+            )
+
+    # Warning: rest rule violations (already computed in rest stats)
+    for f in rest_findings or []:
+        if isinstance(f, dict):
+            findings.append(dict(f))
+
+    # Warning: preferred concrete days missed (per preferred day that was not assigned)
+    # Policy: keep this severity consistent (warning).
+    days_set = set(int(x) for x in problem.days)
+
+    for doc_id in sorted(problem.participant_doctor_ids):
+        prefs = problem.preferences.get(doc_id)
+        if prefs is None:
+            continue
+
+        for d in sorted(set(int(x) for x in (prefs.preferred_onsite_days or []))):
+            if d not in days_set:
+                continue
+            if d in ignored_days:
+                continue
+            if (d, ShiftType.onsite) in ignored_slots:
+                continue
+            if not _doctor_has(idx, doctor_id=int(doc_id), day=int(d), shift_type=ShiftType.onsite):
+                findings.append(
+                    _finding(
+                        code=issues.PREFERENCE_MISS,
+                        severity="warning",
+                        context={"doctor_id": int(doc_id), "day": int(d), "shift_type": ShiftType.onsite.value},
+                    )
+                )
+
+        for d in sorted(set(int(x) for x in (prefs.preferred_oncall_days or []))):
+            if d not in days_set:
+                continue
+            if d in ignored_days:
+                continue
+            if (d, ShiftType.oncall) in ignored_slots:
+                continue
+            if not _doctor_has(idx, doctor_id=int(doc_id), day=int(d), shift_type=ShiftType.oncall):
+                findings.append(
+                    _finding(
+                        code=issues.PREFERENCE_MISS,
+                        severity="warning",
+                        context={"doctor_id": int(doc_id), "day": int(d), "shift_type": ShiftType.oncall.value},
+                    )
+                )
 
     return findings, double_shift_days_by_doctor
 
@@ -1198,7 +1294,7 @@ def _build_rankings(
         if int(row.get("preferred_days_missed", 0)) > 0:
             reasons.append("preferred_days_missed")
         if int(row.get("_double_shift_days", 0)) > 0:
-            reasons.append("double_shift_same_day")
+            reasons.append(issues.HARD_DOUBLE_SHIFT_SAME_DAY)
         if float(row.get("preference_fulfillment_pct", 100.0)) < 100.0:
             reasons.append("preferences_not_fully_met")
         # Keep list short and stable
@@ -1218,7 +1314,7 @@ def _build_rankings(
         reasons: List[str] = []
         if int(r.get("rest_violations", 0)) == 0:
             reasons.append("good_rest")
-        if float(r.get("preference_fulfillment_pct", 100.0)) >= 80.0:
+        if float(r.get("preference_fulfillment_pct", 100.0)) >= float(scoring.happy_preferences_met_threshold_pct()):
             reasons.append("preferences_met")
         # score convention: higher=better for the "happy" list
         top_happy.append(
@@ -1275,7 +1371,9 @@ def compute_quality(*, problem: ProblemData, payload: Dict[str, Any]) -> Dict[st
     )
 
     # Rest (global + per doctor)
-    rest_pen, rest_viol, rest_viol_by_doc, rest_pen_by_doc = _compute_rest_stats(problem=problem, idx=idx)
+    rest_pen, rest_viol, rest_viol_by_doc, rest_pen_by_doc, rest_findings = _compute_rest_stats(
+        problem=problem, idx=idx
+    )
 
     # Preferred concrete days (global + per doctor)
     pref_days_pen, pref_days_pen_by_doc = _compute_preferred_days_penalty_per_doctor(
@@ -1308,7 +1406,9 @@ def compute_quality(*, problem: ProblemData, payload: Dict[str, Any]) -> Dict[st
         ignored_days=ignored_days,
         ignored_slots=ignored_slots,
         missing_slots=missing_slots,
+        rest_findings=rest_findings,
     )
+
     hard_issues_count = int(sum(1 for f in findings if str(f.get("severity")) == "critical"))
 
     # Per-doctor blocks

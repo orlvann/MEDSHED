@@ -184,3 +184,17 @@ FRIDAY_WITH_FREE_WEEKEND_WEIGHT = 3
 def friday_with_free_weekend_weight() -> int:
     """Return small penalty weight for working Friday when the following weekend is fully off."""
     return FRIDAY_WITH_FREE_WEEKEND_WEIGHT
+
+
+# ---------------------------------------------------------------------------
+# 7. Diagnostics thresholds (UI heuristics)
+# ---------------------------------------------------------------------------
+
+# Used only for rankings "happy" reasons in diagnostics:
+# If a doctor's preference fulfillment is >= this threshold, we label it as "preferences_met".
+HAPPY_PREFERENCES_MET_THRESHOLD_PCT = 80.0
+
+
+def happy_preferences_met_threshold_pct() -> float:
+    """Return threshold (percent) for labeling a doctor as 'preferences_met' in diagnostics rankings."""
+    return float(HAPPY_PREFERENCES_MET_THRESHOLD_PCT)

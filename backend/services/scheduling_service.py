@@ -54,6 +54,7 @@ from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from backend.core import diagnostics as core_diagnostics
+from backend.core import issues
 from backend.core.types import DoctorInput, PreferencesInput, ProblemData
 from backend.db.session import SessionLocal
 from backend.models.common_enums import PeriodStatus, ScheduleStatus, ShiftType
@@ -965,7 +966,13 @@ class SchedulingService:
             # Normalize snapshot payload: use participants from ProblemData + solver assignments
             meta = {
                 "labels": ["as_generated"],
-                "exceptions": [],
+                "exceptions": (
+                    [{"code": issues.COVERAGE_IGNORED_DAY, "day": int(d)} for d in sorted(problem.ignore_days)]
+                    + [
+                        {"code": issues.COVERAGE_IGNORED_SLOT, "day": int(d), "shift_type": st.value}
+                        for (d, st) in sorted(problem.ignore_slots, key=lambda x: (int(x[0]), str(x[1].value)))
+                    ]
+                ),
                 # Store solver status as plain string for JSON/meta
                 "solver_status": solution.status.value,
             }

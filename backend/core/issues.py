@@ -49,6 +49,19 @@ HEAD_COMMITMENT_NOT_ALLOWED = "head_commitment_not_allowed"
 HEAD_COMMITMENT_CONFLICT = "head_commitment_conflict"
 HEAD_COMMITMENT_DOUBLE_SHIFT_SAME_DAY = "head_commitment_double_shift_same_day"
 
+# ---- Diagnostics findings (schedule quality) ----------------------------------
+# Stable codes used in backend/core/diagnostics.py findings[] (for FE mapping).
+COVERAGE_MISSING_REQUIRED_SLOT = "coverage_missing_required_slot"
+COVERAGE_NO_SPECIALIST_DAY = "coverage_no_specialist_day"
+HARD_DOUBLE_SHIFT_SAME_DAY = "hard_double_shift_same_day"
+
+COVERAGE_IGNORED_DAY = "coverage_ignored_day"
+COVERAGE_IGNORED_SLOT = "coverage_ignored_slot"
+
+REST_CONSECUTIVE_VIOLATION = "rest_consecutive_violation"
+PREFERENCE_MISS = "preference_miss"
+
+
 # ---- Default human-readable messages -----------------------------------------
 
 FEASIBILITY_ISSUE_MESSAGES: Dict[str, str] = {
@@ -68,6 +81,14 @@ FEASIBILITY_ISSUE_MESSAGES: Dict[str, str] = {
     # CP-SAT / post-build solver outcomes
     CP_INFEASIBLE: "No schedule satisfies all hard constraints for this month (CP-SAT infeasible).",
     FORCED_DOUBLE_SHIFT_SAME_DAY: "Only one doctor can cover both shifts on this day, but double shift is forbidden.",
+    # Diagnostics findings (schedule quality)
+    COVERAGE_MISSING_REQUIRED_SLOT: "Required coverage slot is missing.",
+    COVERAGE_NO_SPECIALIST_DAY: "No specialist is assigned on this day (onsite specialist required).",
+    HARD_DOUBLE_SHIFT_SAME_DAY: "Doctor is assigned to both onsite and oncall on the same day.",
+    COVERAGE_IGNORED_DAY: "Day is ignored for coverage (no required slots).",
+    COVERAGE_IGNORED_SLOT: "Slot is ignored for coverage (not required).",
+    REST_CONSECUTIVE_VIOLATION: "Rest rule violation: consecutive duties without required break.",
+    PREFERENCE_MISS: "Preferred concrete day was not assigned.",
 }
 
 # Backward-compat alias (some modules may import ISSUE_MESSAGES)
