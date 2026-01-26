@@ -50,11 +50,15 @@ def _build_doctors_from_inputs_snapshot(inputs_snapshot: dict) -> dict[int, Doct
     Expected inputs_snapshot shape (DTO):
     {
       "doctors": {
-        "123": {"role": "...", "is_head": true, ...},
+        "123": {"role": "specialist"|"resident", "is_head": true, ...},
         ...
       },
       ...
     }
+
+    IMPORTANT:
+    - Snapshot values are plain JSON, so role is typically a string.
+    - We must parse it defensively to avoid crashing diagnostics for old/bad data.
     """
     doctors_any = (inputs_snapshot or {}).get("doctors") or {}
     if not isinstance(doctors_any, dict):
@@ -71,13 +75,12 @@ def _build_doctors_from_inputs_snapshot(inputs_snapshot: dict) -> dict[int, Doct
         if not isinstance(snap, dict):
             continue
 
-        # Defensive: accept both enum-like and string role
         role_raw = snap.get("role")
-        role = (
-            DoctorRole(role_raw)
-            if role_raw in (DoctorRole.specialist, DoctorRole.resident)
-            else DoctorRole(str(role_raw))
-        )
+        try:
+            role = DoctorRole(str(role_raw))
+        except Exception:
+            # Defensive fallback for corrupted snapshot role values.
+            role = DoctorRole.specialist
 
         doctors[doc_id] = DoctorInput(
             id=int(doc_id),

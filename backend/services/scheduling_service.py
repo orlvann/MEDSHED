@@ -85,6 +85,7 @@ from backend.models.schemas.schedule import (
     ScheduleWorkingRead,
     _ViewHint,
 )
+from backend.services import diagnostics_service
 from backend.utils import ORG_TZ, days_in_month, get_period_status, normalize_assignments, normalize_meta, now_utc
 
 # Retention policy (FIFO): tune here
@@ -461,27 +462,37 @@ def _compute_or_upsert_diagnostics(
     """
     Compute and upsert diagnostics for a given schedule version.
 
-    Now (real MVP):
-    - build ProblemData for participants from payload
-    - compute analytics in backend/core/diagnostics.py
-    - store JSON {summary, details} in ScheduleDiagnostics.quality
+    Determinism rules (important):
+    - If payload contains inputs_snapshot, diagnostics MUST be computed from that snapshot
+      (doctor role/head/display_name + preference_version_id pointers captured at generation time).
+    - This makes diagnostics stable for a given version_id, even if Doctor / PreferencePointer
+      records change later in DB.
+
+    Backward compatibility:
+    - If inputs_snapshot is missing (older DB rows), we fall back to current DB-based loading.
     """
 
-    # Build ProblemData using the same logic as "generate" (but no ignores here).
-    # We reuse your helper by creating a minimal request-like object.
-    req = ScheduleGenerateRequest(
-        year=year,
-        month=month,
-        participant_doctor_ids=list(payload.get("participant_doctor_ids") or []),
-        ignore_days=[],
-        ignore_slots=[],
-    )
-    problem = _build_problem_data_for_generate(session, req)
+    # Prefer snapshot-driven deterministic inputs when available.
+    if payload.get("inputs_snapshot") is not None:
+        problem = diagnostics_service.build_problem_data_from_schedule_snapshot(
+            db=session,
+            year=int(year),
+            month=int(month),
+            schedule_payload=payload,
+        )
+    else:
+        # Fallback for older versions without inputs_snapshot.
+        req = ScheduleGenerateRequest(
+            year=year,
+            month=month,
+            participant_doctor_ids=list(payload.get("participant_doctor_ids") or []),
+            ignore_days=[],
+            ignore_slots=[],
+        )
+        problem = _build_problem_data_for_generate(session, req)
 
-    # Compute quality (pure core logic)
     quality_payload = core_diagnostics.compute_quality(problem=problem, payload=payload)
 
-    # Upsert diagnostics row
     row = session.execute(
         select(ScheduleDiagnostics).where(ScheduleDiagnostics.version_id == int(version_id))
     ).scalar_one_or_none()
@@ -491,10 +502,11 @@ def _compute_or_upsert_diagnostics(
         session.add(row)
     else:
         row.quality = quality_payload
+        # IMPORTANT: ScheduleDiagnostics.computed_at has no onupdate=..., so refresh manually.
+        row.computed_at = now_utc()
 
     session.flush()
 
-    # Build DTO response (Pydantic model types, not raw dicts)
     summary_dict = quality_payload.get("summary") or {}
     summary_obj = DiagnosticsSummary.model_validate(summary_dict)
 
@@ -1309,34 +1321,32 @@ class SchedulingService:
         with SessionLocal() as session:
             w = _get_or_init_working(session, year, month)
             payload = dict(w.payload or {"participant_doctor_ids": [], "assignments": [], "meta": {"labels": []}})
-            # normalize both assignments and meta
+
             # Normalize entire snapshot in one place (handles enums, sorting, dedup, labels)
             payload = _normalize_snapshot_payload(payload)
             meta = cast(Dict[str, Any], payload["meta"])  # keep a typed alias for edits below
 
-            # Evaluate hard-rule violations via dedicated helper
             hard_violations = _hard_rule_violations(payload)
 
-            # Block publishing when non-forced and there are hard violations
             if not force and hard_violations:
                 raise ValueError("publish_blocked_by_hard_rules")
 
-            # Forced publish: verify accepted exceptions match detected violations, then append audit details
             if force:
                 violation_codes = {v.get("code") for v in (hard_violations or []) if v.get("code")}
                 if accepted_exceptions:
                     bad = [e.code for e in accepted_exceptions if e.code not in violation_codes]
                     if bad:
-                        # The client attempted to accept exceptions that were not detected as hard violations
                         raise ValueError("invalid_accepted_exception")
+
                     ex_list = list(meta.get("exceptions", []))
                     for e in accepted_exceptions:
+                        # IMPORTANT: keep JSON-serializable values inside payload JSON.
                         ex_list.append(
                             {
                                 "code": e.code,
                                 "justification": e.justification,
                                 "accepted_by_user_id": user_id,
-                                "accepted_at": now_utc(),
+                                "accepted_at": now_utc().isoformat(),
                             }
                         )
                     meta["exceptions"] = ex_list
@@ -1428,7 +1438,6 @@ class SchedulingService:
         - published -> pointer-based immutable version (cached/upserted)
         """
         with SessionLocal() as db:
-            # ----------------------------- target=working -----------------------------
             if target == "working":
                 w = db.get(ScheduleWorking, {"year": year, "month": month})
                 if w is None:
@@ -1436,14 +1445,25 @@ class SchedulingService:
 
                 payload = cast(Dict[str, Any], w.payload or {})
 
-                req = ScheduleGenerateRequest(
-                    year=year,
-                    month=month,
-                    participant_doctor_ids=list(payload.get("participant_doctor_ids") or []),
-                    ignore_days=[],
-                    ignore_slots=[],
-                )
-                problem = _build_problem_data_for_generate(db, req)
+                # Deterministic working diagnostics:
+                # - use payload.inputs_snapshot to load doctors+preference versions used at generation time
+                # - fallback to DB-based loading only if snapshot is missing (older payloads)
+                if payload.get("inputs_snapshot") is not None:
+                    problem = diagnostics_service.build_problem_data_from_schedule_snapshot(
+                        db=db,
+                        year=int(year),
+                        month=int(month),
+                        schedule_payload=payload,
+                    )
+                else:
+                    req = ScheduleGenerateRequest(
+                        year=year,
+                        month=month,
+                        participant_doctor_ids=list(payload.get("participant_doctor_ids") or []),
+                        ignore_days=[],
+                        ignore_slots=[],
+                    )
+                    problem = _build_problem_data_for_generate(db, req)
 
                 quality_payload = core_diagnostics.compute_quality(problem=problem, payload=payload)
 
