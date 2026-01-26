@@ -10,8 +10,15 @@ This module must stay "pure core":
 It produces a JSON-serializable dict for storage in ScheduleDiagnostics.quality:
 {
   "summary": {...},
-  "details": {...}  # optional, can be None
+  "details": {...}
 }
+
+Important contract notes (final contract alignment):
+- summary includes stable KPI fields expected by the API contract
+  (coverage_missing_required_slots, hard_issues_count, rest_violations, fairness_index,
+  preference_fulfillment_pct).
+- details includes findings[], per_doctor[] and rankings{}.
+- core returns only plain Python structures (dict/list/str/int/float/bool).
 """
 
 from __future__ import annotations
@@ -119,6 +126,32 @@ def _extract_ignored_from_meta(meta: Dict[str, Any]) -> tuple[Set[int], Set[Tupl
     return ignored_days, ignored_slots
 
 
+def _display_name_from_snapshot(payload: Dict[str, Any], doctor_id: int) -> str:
+    """
+    Read display_name from payload.inputs_snapshot.doctors (frozen snapshot).
+    Fallback is deterministic and safe for UI/debugging.
+    """
+    snap_any = payload.get("inputs_snapshot") or {}
+    if not isinstance(snap_any, dict):
+        return f"Doctor {int(doctor_id)}"
+
+    doctors_any = snap_any.get("doctors") or {}
+    if not isinstance(doctors_any, dict):
+        return f"Doctor {int(doctor_id)}"
+
+    # JSON keys can be "123" or 123, so we try both.
+    snap = doctors_any.get(doctor_id)
+    if snap is None:
+        snap = doctors_any.get(str(int(doctor_id)))
+
+    if isinstance(snap, dict):
+        name = snap.get("display_name")
+        if isinstance(name, str) and name.strip():
+            return name.strip()
+
+    return f"Doctor {int(doctor_id)}"
+
+
 # ----------------------------- assignment index ---------------------------------
 
 
@@ -127,7 +160,8 @@ class _Index:
     """
     Convenient precomputed structures for fast diagnostics.
 
-    - slot_to_doctors[(day, shift_type)] -> list of doctor_ids (can be >1 if UI saved duplicates)
+    - slot_to_doctors[(day, shift_type)] -> list of doctor_ids
+      (can be >1 if UI saved duplicates or multiple assignments are allowed later)
     - doctor_day_shifts[(doctor_id, day)] -> set of shifts worked that day
     """
 
@@ -181,7 +215,62 @@ def _doctor_has(idx: _Index, *, doctor_id: int, day: int, shift_type: ShiftType)
     return doctor_id in doctors
 
 
-# ----------------------------- metrics: coverage --------------------------------
+# ----------------------------- findings helpers ---------------------------------
+
+
+def _finding(*, code: str, severity: str, context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """
+    Create a finding dict in the stable, FE-friendly shape.
+
+    NOTE: This stays pure dict to avoid importing DTOs into core.
+    """
+    return {
+        "code": str(code),
+        "severity": str(severity),
+        "context": dict(context or {}),
+    }
+
+
+# ----------------------------- coverage (final semantics) ------------------------
+
+
+def compute_coverage_missing_required_slots(
+    *,
+    problem: ProblemData,
+    idx: _Index,
+    ignored_days: Set[int],
+    ignored_slots: Set[Tuple[int, ShiftType]],
+) -> tuple[int, List[Tuple[int, ShiftType]]]:
+    """
+    Count missing required coverage slots (per slot, not per day).
+
+    Rules:
+    - Each day requires 1 onsite and 1 oncall slot (MVP).
+    - ignored_day -> day requires nothing (0 missing).
+    - ignored_slot(day, shift_type) -> that slot is not required (0 missing for it).
+
+    Returns:
+        (missing_count, missing_slots_list)
+    """
+    missing_slots: List[Tuple[int, ShiftType]] = []
+
+    for d_raw in problem.days:
+        d = int(d_raw)
+
+        if d in ignored_days:
+            continue
+
+        # onsite required?
+        if (d, ShiftType.onsite) not in ignored_slots:
+            if len(idx.slot_to_doctors.get((d, ShiftType.onsite), [])) < 1:
+                missing_slots.append((d, ShiftType.onsite))
+
+        # oncall required?
+        if (d, ShiftType.oncall) not in ignored_slots:
+            if len(idx.slot_to_doctors.get((d, ShiftType.oncall), [])) < 1:
+                missing_slots.append((d, ShiftType.oncall))
+
+    return int(len(missing_slots)), missing_slots
 
 
 def compute_understaffed_days(
@@ -192,12 +281,12 @@ def compute_understaffed_days(
     ignored_slots: Set[Tuple[int, ShiftType]],
 ) -> int:
     """
+    DEPRECATED (kept for backward compatibility):
     Count days where required assignments are missing.
 
-    MVP assumption:
-    - each active day needs 1 onsite AND 1 oncall
-    - ignore_days removes both requirements for that day
-    - ignore_slots removes requirement for that (day, shift_type)
+    NOTE:
+    - New contract uses compute_coverage_missing_required_slots (per-slot gaps).
+    - This value should not be used as a KPI by FE anymore.
     """
     missing = 0
 
@@ -206,13 +295,11 @@ def compute_understaffed_days(
         if d in ignored_days:
             continue
 
-        # onsite required?
         if (d, ShiftType.onsite) not in ignored_slots:
             if len(idx.slot_to_doctors.get((d, ShiftType.onsite), [])) < 1:
                 missing += 1
-                continue  # count day once even if both are missing
+                continue
 
-        # oncall required?
         if (d, ShiftType.oncall) not in ignored_slots:
             if len(idx.slot_to_doctors.get((d, ShiftType.oncall), [])) < 1:
                 missing += 1
@@ -221,7 +308,7 @@ def compute_understaffed_days(
     return missing
 
 
-# ----------------------------- metrics: preferences -----------------------------
+# ----------------------------- preferences fulfillment ---------------------------
 
 
 def compute_preference_fulfillment_pct(
@@ -251,7 +338,6 @@ def compute_preference_fulfillment_pct(
         if prefs is None:
             continue
 
-        # Preferred onsite days
         for d_raw in prefs.preferred_onsite_days:
             d = int(d_raw)
             if d not in days_set:
@@ -265,7 +351,6 @@ def compute_preference_fulfillment_pct(
             if _doctor_has(idx, doctor_id=doc_id, day=d, shift_type=ShiftType.onsite):
                 ok += 1
 
-        # Preferred oncall days
         for d_raw in prefs.preferred_oncall_days:
             d = int(d_raw)
             if d not in days_set:
@@ -285,113 +370,34 @@ def compute_preference_fulfillment_pct(
     return float((ok * 100.0) / total)
 
 
-# ----------------------------- penalty: rest rules ------------------------------
-
-
-def _is_weekend_pair(problem: ProblemData, d: int, d_next: int) -> bool:
-    """
-    Weekend pair is only Sat -> Sun (same logic as objective_builder).
-    """
-    wd = _weekday(problem, d)
-    wd_next = _weekday(problem, d_next)
-    return wd == 5 and wd_next == 6
-
-
-def compute_rest_penalty_and_violations(*, problem: ProblemData, idx: _Index) -> tuple[int, int]:
-    """
-    Compute rest penalty like the solver objective:
-    - onsite->onsite consecutive
-    - oncall->oncall consecutive
-    - cross-shift consecutive (unless weekend exception flag is set)
-
-    Returns:
-        (penalty, violations_count)
-    """
-    penalty = 0
-    violations = 0
-
-    participants = sorted(problem.participant_doctor_ids)
-
-    for doc_id in participants:
-        doctor = problem.doctors.get(doc_id)
-        prefs = problem.preferences.get(doc_id)
-
-        # Defensive defaults
-        role = doctor.role if doctor else DoctorRole.resident
-        allow_weekend_consecutive = bool(prefs.allow_weekend_consecutive_onsite_oncall) if prefs else False
-
-        cross_w = int(scoring.rest_cross_shift_weight(role=role))
-
-        # Iterate consecutive day pairs
-        days_sorted = [int(d) for d in problem.days]
-        for i in range(len(days_sorted) - 1):
-            d = days_sorted[i]
-            d_next = days_sorted[i + 1]
-
-            if d_next != d + 1:
-                continue
-
-            # onsite->onsite
-            if _doctor_has(idx, doctor_id=doc_id, day=d, shift_type=ShiftType.onsite) and _doctor_has(
-                idx, doctor_id=doc_id, day=d_next, shift_type=ShiftType.onsite
-            ):
-                penalty += int(scoring.REST_ONS_ONS_WEIGHT)
-                violations += 1
-
-            # oncall->oncall
-            if _doctor_has(idx, doctor_id=doc_id, day=d, shift_type=ShiftType.oncall) and _doctor_has(
-                idx, doctor_id=doc_id, day=d_next, shift_type=ShiftType.oncall
-            ):
-                penalty += int(scoring.REST_ONCALL_ONCALL_WEIGHT)
-                violations += 1
-
-            # cross shift
-            skip_weekend_cross = bool(_is_weekend_pair(problem, d, d_next) and allow_weekend_consecutive)
-            if not skip_weekend_cross:
-                # onsite -> oncall
-                if _doctor_has(idx, doctor_id=doc_id, day=d, shift_type=ShiftType.onsite) and _doctor_has(
-                    idx, doctor_id=doc_id, day=d_next, shift_type=ShiftType.oncall
-                ):
-                    penalty += cross_w
-                    violations += 1
-
-                # oncall -> onsite
-                if _doctor_has(idx, doctor_id=doc_id, day=d, shift_type=ShiftType.oncall) and _doctor_has(
-                    idx, doctor_id=doc_id, day=d_next, shift_type=ShiftType.onsite
-                ):
-                    penalty += cross_w
-                    violations += 1
-
-    return penalty, violations
-
-
-# ----------------------------- penalty: preferred days --------------------------
-
-
-def compute_preferred_days_penalty(
+def _compute_preference_stats_per_doctor(
     *,
     problem: ProblemData,
     idx: _Index,
     ignored_days: Set[int],
     ignored_slots: Set[Tuple[int, ShiftType]],
-) -> int:
+) -> tuple[Dict[int, float], Dict[int, int]]:
     """
-    Penalty for missing preferred concrete days (same logic as objective_builder):
-    - if slot cannot/should not exist (ignored) -> skip it
-    - else miss is penalized with doctor-specific weight
+    Compute per-doctor preference fulfillment percent and preferred_days_missed.
+
+    Returns:
+        (pct_by_doctor, missed_by_doctor)
     """
-    penalty = 0
     days_set = set(int(x) for x in problem.days)
 
-    for doc_id in problem.participant_doctor_ids:
-        doctor = problem.doctors.get(doc_id)
+    pct_by_doctor: Dict[int, float] = {}
+    missed_by_doctor: Dict[int, int] = {}
+
+    for doc_id in sorted(problem.participant_doctor_ids):
         prefs = problem.preferences.get(doc_id)
         if prefs is None:
+            pct_by_doctor[int(doc_id)] = 100.0
+            missed_by_doctor[int(doc_id)] = 0
             continue
 
-        is_head = bool(doctor.is_head) if doctor else False
-        role = doctor.role if doctor else DoctorRole.resident
-        miss_w = int(scoring.preferred_day_miss_weight_for_doctor(is_head=is_head, role=role))
+        total = 0
+        ok = 0
+        missed = 0
 
         for d_raw in prefs.preferred_onsite_days:
             d = int(d_raw)
@@ -402,8 +408,11 @@ def compute_preferred_days_penalty(
             if (d, ShiftType.onsite) in ignored_slots:
                 continue
 
-            if not _doctor_has(idx, doctor_id=doc_id, day=d, shift_type=ShiftType.onsite):
-                penalty += miss_w
+            total += 1
+            if _doctor_has(idx, doctor_id=doc_id, day=d, shift_type=ShiftType.onsite):
+                ok += 1
+            else:
+                missed += 1
 
         for d_raw in prefs.preferred_oncall_days:
             d = int(d_raw)
@@ -414,13 +423,119 @@ def compute_preferred_days_penalty(
             if (d, ShiftType.oncall) in ignored_slots:
                 continue
 
-            if not _doctor_has(idx, doctor_id=doc_id, day=d, shift_type=ShiftType.oncall):
-                penalty += miss_w
+            total += 1
+            if _doctor_has(idx, doctor_id=doc_id, day=d, shift_type=ShiftType.oncall):
+                ok += 1
+            else:
+                missed += 1
 
-    return penalty
+        if total <= 0:
+            pct = 100.0
+        else:
+            pct = float((ok * 100.0) / total)
+
+        pct_by_doctor[int(doc_id)] = float(max(0.0, min(100.0, pct)))
+        missed_by_doctor[int(doc_id)] = int(missed)
+
+    return pct_by_doctor, missed_by_doctor
 
 
-# ----------------------------- penalty: totals ----------------------------------
+# ----------------------------- rest rules (per-doctor stats) ---------------------
+
+
+def _is_weekend_pair(problem: ProblemData, d: int, d_next: int) -> bool:
+    """Weekend pair is only Sat -> Sun (same logic as objective_builder)."""
+    wd = _weekday(problem, d)
+    wd_next = _weekday(problem, d_next)
+    return wd == 5 and wd_next == 6
+
+
+def compute_rest_penalty_and_violations(*, problem: ProblemData, idx: _Index) -> tuple[int, int]:
+    """
+    Backward-compatible wrapper.
+
+    Returns:
+        (total_penalty, total_violations_count)
+    """
+    total_penalty, total_violations, _viol_by_doc, _pen_by_doc = _compute_rest_stats(problem=problem, idx=idx)
+    return int(total_penalty), int(total_violations)
+
+
+def _compute_rest_stats(*, problem: ProblemData, idx: _Index) -> tuple[int, int, Dict[int, int], Dict[int, int]]:
+    """
+    Compute rest penalty and violations both globally and per-doctor.
+
+    Returns:
+        (total_penalty, total_violations, violations_by_doctor, penalty_by_doctor)
+    """
+    total_penalty = 0
+    total_violations = 0
+
+    violations_by_doctor: Dict[int, int] = {int(d): 0 for d in problem.participant_doctor_ids}
+    penalty_by_doctor: Dict[int, int] = {int(d): 0 for d in problem.participant_doctor_ids}
+
+    days_sorted = [int(d) for d in problem.days]
+
+    for doc_id in sorted(problem.participant_doctor_ids):
+        doctor = problem.doctors.get(doc_id)
+        prefs = problem.preferences.get(doc_id)
+
+        role = doctor.role if doctor else DoctorRole.resident
+        allow_weekend_consecutive = bool(prefs.allow_weekend_consecutive_onsite_oncall) if prefs else False
+
+        cross_w = int(scoring.rest_cross_shift_weight(role=role))
+
+        for i in range(len(days_sorted) - 1):
+            d = days_sorted[i]
+            d_next = days_sorted[i + 1]
+            if d_next != d + 1:
+                continue
+
+            # onsite->onsite
+            if _doctor_has(idx, doctor_id=doc_id, day=d, shift_type=ShiftType.onsite) and _doctor_has(
+                idx, doctor_id=doc_id, day=d_next, shift_type=ShiftType.onsite
+            ):
+                w = int(scoring.REST_ONS_ONS_WEIGHT)
+                total_penalty += w
+                total_violations += 1
+                violations_by_doctor[int(doc_id)] += 1
+                penalty_by_doctor[int(doc_id)] += w
+
+            # oncall->oncall
+            if _doctor_has(idx, doctor_id=doc_id, day=d, shift_type=ShiftType.oncall) and _doctor_has(
+                idx, doctor_id=doc_id, day=d_next, shift_type=ShiftType.oncall
+            ):
+                w = int(scoring.REST_ONCALL_ONCALL_WEIGHT)
+                total_penalty += w
+                total_violations += 1
+                violations_by_doctor[int(doc_id)] += 1
+                penalty_by_doctor[int(doc_id)] += w
+
+            # cross shift (unless weekend exception)
+            skip_weekend_cross = bool(_is_weekend_pair(problem, d, d_next) and allow_weekend_consecutive)
+            if not skip_weekend_cross:
+                # onsite -> oncall
+                if _doctor_has(idx, doctor_id=doc_id, day=d, shift_type=ShiftType.onsite) and _doctor_has(
+                    idx, doctor_id=doc_id, day=d_next, shift_type=ShiftType.oncall
+                ):
+                    total_penalty += cross_w
+                    total_violations += 1
+                    violations_by_doctor[int(doc_id)] += 1
+                    penalty_by_doctor[int(doc_id)] += cross_w
+
+                # oncall -> onsite
+                if _doctor_has(idx, doctor_id=doc_id, day=d, shift_type=ShiftType.oncall) and _doctor_has(
+                    idx, doctor_id=doc_id, day=d_next, shift_type=ShiftType.onsite
+                ):
+                    total_penalty += cross_w
+                    total_violations += 1
+                    violations_by_doctor[int(doc_id)] += 1
+                    penalty_by_doctor[int(doc_id)] += cross_w
+
+    return int(total_penalty), int(total_violations), violations_by_doctor, penalty_by_doctor
+
+
+# ----------------------------- totals (per-doctor penalty) -----------------------
 
 
 def _weekend_days(problem: ProblemData) -> Set[int]:
@@ -436,16 +551,26 @@ def _weekend_days(problem: ProblemData) -> Set[int]:
 
 def compute_totals_penalty(*, problem: ProblemData, idx: _Index) -> int:
     """
-    Totals penalty (same spirit as objective_builder):
+    Backward-compatible wrapper (total penalty).
+    """
+    total_penalty, _pen_by_doc = _compute_totals_penalty_per_doctor(problem=problem, idx=idx)
+    return int(total_penalty)
+
+
+def _compute_totals_penalty_per_doctor(*, problem: ProblemData, idx: _Index) -> tuple[int, Dict[int, int]]:
+    """
+    Totals penalty (same spirit as objective_builder), per doctor:
     - max_* -> excess^2
     - target_* -> (over^2 + under^2)
     Separate for monthly totals and weekend totals.
     """
-    penalty = 0
+    total_penalty = 0
+    penalty_by_doctor: Dict[int, int] = {int(d): 0 for d in problem.participant_doctor_ids}
+
     weekend = _weekend_days(problem)
     days_sorted = [int(d) for d in problem.days]
 
-    for doc_id in problem.participant_doctor_ids:
+    for doc_id in sorted(problem.participant_doctor_ids):
         prefs = problem.preferences.get(doc_id)
         if prefs is None:
             continue
@@ -466,61 +591,74 @@ def compute_totals_penalty(*, problem: ProblemData, idx: _Index) -> int:
                 if d in weekend:
                     total_onc_w += 1
 
-        # ---- monthly max ----
+        p = 0
+
+        # monthly max
         if prefs.max_onsite_total is not None:
             excess = max(0, int(total_ons) - int(prefs.max_onsite_total))
-            penalty += int(scoring.MAX_TOTAL_EXCESS_WEIGHT) * (excess * excess)
+            p += int(scoring.MAX_TOTAL_EXCESS_WEIGHT) * (excess * excess)
 
         if prefs.max_oncall_total is not None:
             excess = max(0, int(total_onc) - int(prefs.max_oncall_total))
-            penalty += int(scoring.MAX_TOTAL_EXCESS_WEIGHT) * (excess * excess)
+            p += int(scoring.MAX_TOTAL_EXCESS_WEIGHT) * (excess * excess)
 
-        # ---- monthly target (over + under) ----
+        # monthly target (over + under)
         if prefs.target_onsite_total is not None:
             tgt = int(prefs.target_onsite_total)
             over = max(0, total_ons - tgt)
             under = max(0, tgt - total_ons)
-            penalty += int(scoring.TARGET_TOTAL_DEVIATION_WEIGHT) * (over * over)
-            penalty += int(scoring.TARGET_TOTAL_DEVIATION_WEIGHT) * (under * under)
+            p += int(scoring.TARGET_TOTAL_DEVIATION_WEIGHT) * (over * over)
+            p += int(scoring.TARGET_TOTAL_DEVIATION_WEIGHT) * (under * under)
 
         if prefs.target_oncall_total is not None:
             tgt = int(prefs.target_oncall_total)
             over = max(0, total_onc - tgt)
             under = max(0, tgt - total_onc)
-            penalty += int(scoring.TARGET_TOTAL_DEVIATION_WEIGHT) * (over * over)
-            penalty += int(scoring.TARGET_TOTAL_DEVIATION_WEIGHT) * (under * under)
+            p += int(scoring.TARGET_TOTAL_DEVIATION_WEIGHT) * (over * over)
+            p += int(scoring.TARGET_TOTAL_DEVIATION_WEIGHT) * (under * under)
 
-        # ---- weekend max ----
+        # weekend max
         if prefs.max_onsite_weekends is not None:
             excess = max(0, total_ons_w - int(prefs.max_onsite_weekends))
-            penalty += int(scoring.MAX_WEEKEND_EXCESS_WEIGHT) * (excess * excess)
+            p += int(scoring.MAX_WEEKEND_EXCESS_WEIGHT) * (excess * excess)
 
         if prefs.max_oncall_weekends is not None:
             excess = max(0, total_onc_w - int(prefs.max_oncall_weekends))
-            penalty += int(scoring.MAX_WEEKEND_EXCESS_WEIGHT) * (excess * excess)
+            p += int(scoring.MAX_WEEKEND_EXCESS_WEIGHT) * (excess * excess)
 
-        # ---- weekend target ----
+        # weekend target
         if prefs.target_onsite_weekends is not None:
             tgt = int(prefs.target_onsite_weekends)
             over = max(0, total_ons_w - tgt)
             under = max(0, tgt - total_ons_w)
-            penalty += int(scoring.TARGET_WEEKEND_DEVIATION_WEIGHT) * (over * over)
-            penalty += int(scoring.TARGET_WEEKEND_DEVIATION_WEIGHT) * (under * under)
+            p += int(scoring.TARGET_WEEKEND_DEVIATION_WEIGHT) * (over * over)
+            p += int(scoring.TARGET_WEEKEND_DEVIATION_WEIGHT) * (under * under)
 
         if prefs.target_oncall_weekends is not None:
             tgt = int(prefs.target_oncall_weekends)
             over = max(0, total_onc_w - tgt)
             under = max(0, tgt - total_onc_w)
-            penalty += int(scoring.TARGET_WEEKEND_DEVIATION_WEIGHT) * (over * over)
-            penalty += int(scoring.TARGET_WEEKEND_DEVIATION_WEIGHT) * (under * under)
+            p += int(scoring.TARGET_WEEKEND_DEVIATION_WEIGHT) * (over * over)
+            p += int(scoring.TARGET_WEEKEND_DEVIATION_WEIGHT) * (under * under)
 
-    return penalty
+        penalty_by_doctor[int(doc_id)] = int(p)
+        total_penalty += int(p)
+
+    return int(total_penalty), penalty_by_doctor
 
 
-# ----------------------------- penalty: fairness --------------------------------
+# ----------------------------- fairness (per-doctor penalty + index) -------------
 
 
 def compute_fairness_penalty_and_index(*, problem: ProblemData, idx: _Index) -> tuple[int, float]:
+    """
+    Backward-compatible wrapper (total penalty + index).
+    """
+    total_penalty, fairness_index, _pen_by_doc = _compute_fairness_stats(problem=problem, idx=idx)
+    return int(total_penalty), float(fairness_index)
+
+
+def _compute_fairness_stats(*, problem: ProblemData, idx: _Index) -> tuple[int, float, Dict[int, int]]:
     """
     Fairness like objective_builder:
     - groups: specialists (including heads) vs residents
@@ -528,15 +666,16 @@ def compute_fairness_penalty_and_index(*, problem: ProblemData, idx: _Index) -> 
     - expected = target if present else group average (floor)
     - penalty = weight * (abs_dev^2)
 
-    Also returns a simple fairness_index in [0..1] (1.0 means very even).
+    Returns:
+        (total_penalty, fairness_index, penalty_by_doctor)
     """
-    penalty = 0
+    total_penalty = 0
+    penalty_by_doctor: Dict[int, int] = {int(d): 0 for d in problem.participant_doctor_ids}
 
     weekend = _weekend_days(problem)
-    weekday_days: list[int] = [int(d) for d in problem.days if int(d) not in weekend]
-    weekend_days: list[int] = sorted(int(d) for d in weekend)
+    weekday_days: List[int] = [int(d) for d in problem.days if int(d) not in weekend]
+    weekend_days: List[int] = sorted(int(d) for d in weekend)
 
-    # Build groups
     specialist_ids: List[int] = []
     resident_ids: List[int] = []
 
@@ -585,21 +724,14 @@ def compute_fairness_penalty_and_index(*, problem: ProblemData, idx: _Index) -> 
 
         return max(0, expected)
 
-    # --- Categories typing (Pylance-friendly) ---
-    # (name, group_doctors, days, shift_type, is_weekend_category, weight)
+    categories: List[tuple[List[int], List[int], ShiftType, bool, int]] = []
 
-    # --- Categories typing (Pylance-friendly) ---
-    # (name, group_doctors, days, shift_type, is_weekend_category, weight)
-    categories: List[tuple[str, List[int], List[int], ShiftType, bool, int]] = []
-
-    # Build categories (only for groups with size >= 2)
     for group_ids in (specialist_ids, resident_ids):
         if len(group_ids) <= 1:
             continue
 
         categories.append(
             (
-                "onsite_weekday",
                 group_ids,
                 weekday_days,
                 ShiftType.onsite,
@@ -609,7 +741,6 @@ def compute_fairness_penalty_and_index(*, problem: ProblemData, idx: _Index) -> 
         )
         categories.append(
             (
-                "onsite_weekend",
                 group_ids,
                 weekend_days,
                 ShiftType.onsite,
@@ -619,7 +750,6 @@ def compute_fairness_penalty_and_index(*, problem: ProblemData, idx: _Index) -> 
         )
         categories.append(
             (
-                "oncall_weekday",
                 group_ids,
                 weekday_days,
                 ShiftType.oncall,
@@ -629,7 +759,6 @@ def compute_fairness_penalty_and_index(*, problem: ProblemData, idx: _Index) -> 
         )
         categories.append(
             (
-                "oncall_weekend",
                 group_ids,
                 weekend_days,
                 ShiftType.oncall,
@@ -638,30 +767,22 @@ def compute_fairness_penalty_and_index(*, problem: ProblemData, idx: _Index) -> 
             )
         )
 
-    # Now we unpack 6 fields (including the name)
-    for _name, group_ids, days, st, is_weekend_cat, w in categories:
-        ...
-
-    # Fairness index: average of per-category "evenness" scores
     index_parts: List[float] = []
 
-    # Now we unpack 6 fields (including the name)
-    for _name, group_ids, days, st, is_weekend_cat, w in categories:
-        if len(group_ids) <= 1:
-            continue
-
+    for group_ids, days, st, is_weekend_cat, w in categories:
         totals = [_count(doc_id, days, st) for doc_id in group_ids]
         n = len(totals)
         sum_tot = sum(totals)
-        avg_floor = sum_tot // n  # floor, same as in model
+        avg_floor = sum_tot // n
 
-        # penalty
         for doc_id, total in zip(group_ids, totals):
             exp = _expected_for_category(doc_id, st=st, is_weekend_category=is_weekend_cat, group_avg_floor=avg_floor)
             abs_dev = abs(int(total) - int(exp))
-            penalty += int(w) * (abs_dev * abs_dev)
+            p = int(w) * (abs_dev * abs_dev)
 
-        # fairness_index part
+            total_penalty += int(p)
+            penalty_by_doctor[int(doc_id)] += int(p)
+
         mean = (sum_tot / n) if n > 0 else 0.0
         if mean <= 0.0:
             index_parts.append(1.0)
@@ -671,24 +792,38 @@ def compute_fairness_penalty_and_index(*, problem: ProblemData, idx: _Index) -> 
             index_parts.append(max(0.0, score))
 
     fairness_index = float(sum(index_parts) / len(index_parts)) if index_parts else 1.0
-    return penalty, fairness_index
+    fairness_index = float(max(0.0, min(1.0, fairness_index)))
+
+    return int(total_penalty), float(fairness_index), penalty_by_doctor
 
 
-# ----------------------------- penalty: weekday patterns -------------------------
+# ----------------------------- weekday patterns (per-doctor penalty) -------------
 
 
 def compute_weekday_patterns_penalty(*, problem: ProblemData, idx: _Index) -> int:
     """
+    Backward-compatible wrapper (total penalty).
+    """
+    total_penalty, _pen_by_doc = _compute_weekday_patterns_penalty_per_doctor(problem=problem, idx=idx)
+    return int(total_penalty)
+
+
+def _compute_weekday_patterns_penalty_per_doctor(*, problem: ProblemData, idx: _Index) -> tuple[int, Dict[int, int]]:
+    """
     Weekday pattern terms:
     - preferred weekdays -> small BONUS (negative penalty)
     - avoid weekdays -> small PENALTY (positive penalty)
+
+    Returns:
+        (total_penalty, penalty_by_doctor)
     """
-    penalty = 0
+    total_penalty = 0
+    penalty_by_doctor: Dict[int, int] = {int(d): 0 for d in problem.participant_doctor_ids}
 
     preferred_w = int(scoring.weekday_pattern_weight(kind="preferred"))
     avoid_w = int(scoring.weekday_pattern_weight(kind="avoid"))
 
-    for doc_id in problem.participant_doctor_ids:
+    for doc_id in sorted(problem.participant_doctor_ids):
         prefs = problem.preferences.get(doc_id)
         if prefs is None:
             continue
@@ -698,36 +833,55 @@ def compute_weekday_patterns_penalty(*, problem: ProblemData, idx: _Index) -> in
         avoid_ons = set(int(v) for v in prefs.avoid_onsite_weekdays)
         avoid_onc = set(int(v) for v in prefs.avoid_oncall_weekdays)
 
+        p = 0
         for d_raw in problem.days:
             d = int(d_raw)
             wd = _weekday(problem, d)
 
-            # bonus: preferred weekday AND assigned
             if wd in pref_ons and _doctor_has(idx, doctor_id=doc_id, day=d, shift_type=ShiftType.onsite):
-                penalty -= preferred_w
+                p -= preferred_w
             if wd in pref_onc and _doctor_has(idx, doctor_id=doc_id, day=d, shift_type=ShiftType.oncall):
-                penalty -= preferred_w
+                p -= preferred_w
 
-            # penalty: avoid weekday AND assigned
             if wd in avoid_ons and _doctor_has(idx, doctor_id=doc_id, day=d, shift_type=ShiftType.onsite):
-                penalty += avoid_w
+                p += avoid_w
             if wd in avoid_onc and _doctor_has(idx, doctor_id=doc_id, day=d, shift_type=ShiftType.oncall):
-                penalty += avoid_w
+                p += avoid_w
 
-    return penalty
+        penalty_by_doctor[int(doc_id)] = int(p)
+        total_penalty += int(p)
+
+    return int(total_penalty), penalty_by_doctor
 
 
-# ----------------------------- penalty: preferred partners -----------------------
+# ----------------------------- preferred partners (per-doctor bonus) -------------
 
 
 def compute_preferred_partners_penalty(*, problem: ProblemData, idx: _Index) -> int:
     """
+    Backward-compatible wrapper (total penalty).
+    """
+    total_penalty, _bonus_by_doctor = _compute_preferred_partners_bonus_by_doctor(problem=problem, idx=idx)
+    return int(total_penalty)
+
+
+def _compute_preferred_partners_bonus_by_doctor(*, problem: ProblemData, idx: _Index) -> tuple[int, Dict[int, float]]:
+    """
     Preferred partners bonus:
     - for each unique pair (doc_id < partner_id)
     - for each day: if both work any shift -> bonus (negative penalty)
+
+    Per-doctor allocation for rankings:
+    - The solver objective counts bonus per pair-day once.
+    - For per-doctor "score", we split the bonus equally: half to each doctor.
+
+    Returns:
+        (total_penalty, bonus_by_doctor)  where bonus values are floats (negative numbers).
     """
-    bonus_w = int(scoring.preferred_partner_bonus_weight())
+    bonus_w = float(scoring.preferred_partner_bonus_weight())
     participants = set(problem.participant_doctor_ids)
+
+    bonus_by_doctor: Dict[int, float] = {int(d): 0.0 for d in problem.participant_doctor_ids}
 
     pairs: List[Tuple[int, int]] = []
     for doc_id in sorted(problem.participant_doctor_ids):
@@ -742,33 +896,48 @@ def compute_preferred_partners_penalty(*, problem: ProblemData, idx: _Index) -> 
                 continue
             if doc_id >= partner_id:
                 continue
-            pairs.append((doc_id, partner_id))
+            pairs.append((int(doc_id), int(partner_id)))
 
     if not pairs:
-        return 0
+        return 0, bonus_by_doctor
 
-    penalty = 0
+    total_penalty = 0.0
     for a, b in pairs:
         for d_raw in problem.days:
             d = int(d_raw)
             if _doctor_works_any(idx, doctor_id=a, day=d) and _doctor_works_any(idx, doctor_id=b, day=d):
-                penalty -= bonus_w
+                total_penalty -= bonus_w
+                bonus_by_doctor[int(a)] -= bonus_w / 2.0
+                bonus_by_doctor[int(b)] -= bonus_w / 2.0
 
-    return penalty
+    return int(total_penalty), bonus_by_doctor
 
 
-# ----------------------------- penalty: Friday + free weekend --------------------
+# ----------------------------- Friday + free weekend (per-doctor penalty) --------
 
 
 def compute_friday_free_weekend_penalty(*, problem: ProblemData, idx: _Index) -> int:
+    """
+    Backward-compatible wrapper (total penalty).
+    """
+    total_penalty, _pen_by_doc = _compute_friday_free_weekend_penalty_per_doctor(problem=problem, idx=idx)
+    return int(total_penalty)
+
+
+def _compute_friday_free_weekend_penalty_per_doctor(*, problem: ProblemData, idx: _Index) -> tuple[int, Dict[int, int]]:
     """
     Avoid Friday if the following weekend is fully off:
     - Friday (weekday==4)
     - Saturday and Sunday must exist in this month: (fri+1, fri+2) and be Sat/Sun
     - penalty if doctor works on Friday AND does NOT work on Sat AND does NOT work on Sun
+
+    Returns:
+        (total_penalty, penalty_by_doctor)
     """
     weight = int(scoring.friday_with_free_weekend_weight())
     days_set = set(int(d) for d in problem.days)
+
+    penalty_by_doctor: Dict[int, int] = {int(d): 0 for d in problem.participant_doctor_ids}
 
     fridays: List[int] = []
     for d in sorted(days_set):
@@ -784,10 +953,11 @@ def compute_friday_free_weekend_penalty(*, problem: ProblemData, idx: _Index) ->
             fridays.append(d)
 
     if not fridays:
-        return 0
+        return 0, penalty_by_doctor
 
-    penalty = 0
-    for doc_id in problem.participant_doctor_ids:
+    total_penalty = 0
+    for doc_id in sorted(problem.participant_doctor_ids):
+        p = 0
         for fri in fridays:
             sat = fri + 1
             sun = fri + 2
@@ -798,9 +968,268 @@ def compute_friday_free_weekend_penalty(*, problem: ProblemData, idx: _Index) ->
             )
 
             if works_fri and not works_weekend:
-                penalty += weight
+                p += int(weight)
 
-    return penalty
+        penalty_by_doctor[int(doc_id)] = int(p)
+        total_penalty += int(p)
+
+    return int(total_penalty), penalty_by_doctor
+
+
+# ----------------------------- preferred concrete days (per-doctor) --------------
+
+
+def compute_preferred_days_penalty(
+    *,
+    problem: ProblemData,
+    idx: _Index,
+    ignored_days: Set[int],
+    ignored_slots: Set[Tuple[int, ShiftType]],
+) -> int:
+    """
+    Backward-compatible wrapper (total penalty).
+    """
+    total_penalty, _pen_by_doc = _compute_preferred_days_penalty_per_doctor(
+        problem=problem, idx=idx, ignored_days=ignored_days, ignored_slots=ignored_slots
+    )
+    return int(total_penalty)
+
+
+def _compute_preferred_days_penalty_per_doctor(
+    *,
+    problem: ProblemData,
+    idx: _Index,
+    ignored_days: Set[int],
+    ignored_slots: Set[Tuple[int, ShiftType]],
+) -> tuple[int, Dict[int, int]]:
+    """
+    Penalty for missing preferred concrete days (same logic as objective_builder):
+    - if slot cannot/should not exist (ignored) -> skip it
+    - else miss is penalized with doctor-specific weight
+
+    Returns:
+        (total_penalty, penalty_by_doctor)
+    """
+    total_penalty = 0
+    penalty_by_doctor: Dict[int, int] = {int(d): 0 for d in problem.participant_doctor_ids}
+
+    days_set = set(int(x) for x in problem.days)
+
+    for doc_id in sorted(problem.participant_doctor_ids):
+        doctor = problem.doctors.get(doc_id)
+        prefs = problem.preferences.get(doc_id)
+        if prefs is None:
+            continue
+
+        is_head = bool(doctor.is_head) if doctor else False
+        role = doctor.role if doctor else DoctorRole.resident
+        miss_w = int(scoring.preferred_day_miss_weight_for_doctor(is_head=is_head, role=role))
+
+        p = 0
+
+        for d_raw in prefs.preferred_onsite_days:
+            d = int(d_raw)
+            if d not in days_set:
+                continue
+            if d in ignored_days:
+                continue
+            if (d, ShiftType.onsite) in ignored_slots:
+                continue
+
+            if not _doctor_has(idx, doctor_id=doc_id, day=d, shift_type=ShiftType.onsite):
+                p += miss_w
+
+        for d_raw in prefs.preferred_oncall_days:
+            d = int(d_raw)
+            if d not in days_set:
+                continue
+            if d in ignored_days:
+                continue
+            if (d, ShiftType.oncall) in ignored_slots:
+                continue
+
+            if not _doctor_has(idx, doctor_id=doc_id, day=d, shift_type=ShiftType.oncall):
+                p += miss_w
+
+        penalty_by_doctor[int(doc_id)] = int(p)
+        total_penalty += int(p)
+
+    return int(total_penalty), penalty_by_doctor
+
+
+# ----------------------------- per-doctor assignments totals ---------------------
+
+
+def _assigned_totals_per_doctor(*, problem: ProblemData, idx: _Index) -> tuple[Dict[int, int], Dict[int, int]]:
+    """
+    Count assigned totals for each doctor (onsite and oncall).
+    """
+    onsite_by_doctor: Dict[int, int] = {int(d): 0 for d in problem.participant_doctor_ids}
+    oncall_by_doctor: Dict[int, int] = {int(d): 0 for d in problem.participant_doctor_ids}
+
+    for doc_id in sorted(problem.participant_doctor_ids):
+        ons = 0
+        onc = 0
+        for d_raw in problem.days:
+            d = int(d_raw)
+            if _doctor_has(idx, doctor_id=doc_id, day=d, shift_type=ShiftType.onsite):
+                ons += 1
+            if _doctor_has(idx, doctor_id=doc_id, day=d, shift_type=ShiftType.oncall):
+                onc += 1
+        onsite_by_doctor[int(doc_id)] = int(ons)
+        oncall_by_doctor[int(doc_id)] = int(onc)
+
+    return onsite_by_doctor, oncall_by_doctor
+
+
+# ----------------------------- hard issues / findings ----------------------------
+
+
+def _build_findings(
+    *,
+    problem: ProblemData,
+    payload: Dict[str, Any],
+    idx: _Index,
+    ignored_days: Set[int],
+    ignored_slots: Set[Tuple[int, ShiftType]],
+    missing_slots: List[Tuple[int, ShiftType]],
+) -> tuple[List[Dict[str, Any]], Dict[int, int]]:
+    """
+    Build findings list and return additional per-doctor counters used by rankings.
+
+    Returns:
+        (findings, double_shift_days_by_doctor)
+    """
+    findings: List[Dict[str, Any]] = []
+
+    # Info: ignored day/slot context (NOT a KPI, but helpful for UI debugging).
+    for d in sorted(ignored_days):
+        findings.append(_finding(code="ignored_day", severity="info", context={"day": int(d)}))
+
+    for d, st in sorted(ignored_slots, key=lambda x: (int(x[0]), str(x[1].value))):
+        findings.append(_finding(code="ignored_slot", severity="info", context={"day": int(d), "shift_type": st.value}))
+
+    # Critical: missing coverage slots (Gaps)
+    for d, st in missing_slots:
+        findings.append(
+            _finding(
+                code="coverage_missing_required_slot",
+                severity="critical",
+                context={"day": int(d), "shift_type": st.value},
+            )
+        )
+
+    # Critical: doctor has both onsite and oncall on the same day (double shift)
+    double_shift_days_by_doctor: Dict[int, int] = {int(d): 0 for d in problem.participant_doctor_ids}
+    for (doc_id, day), shifts in idx.doctor_day_shifts.items():
+        if int(doc_id) not in problem.participant_doctor_ids:
+            continue
+        if len(set(shifts)) >= 2:
+            double_shift_days_by_doctor[int(doc_id)] += 1
+            findings.append(
+                _finding(
+                    code="double_shift_same_day",
+                    severity="critical",
+                    context={"doctor_id": int(doc_id), "day": int(day)},
+                )
+            )
+
+    # Critical: onsite slot exists but has no specialist assigned
+    # (coverage is handled separately; this is about role mix on onsite)
+    for d_raw in problem.days:
+        d = int(d_raw)
+        if d in ignored_days:
+            continue
+        if (d, ShiftType.onsite) in ignored_slots:
+            continue
+
+        assigned = idx.slot_to_doctors.get((d, ShiftType.onsite), []) or []
+        if not assigned:
+            continue  # already covered by coverage_missing_required_slot
+
+        has_specialist = False
+        for doc_id in assigned:
+            doc = problem.doctors.get(int(doc_id))
+            if doc and doc.role == DoctorRole.specialist:
+                has_specialist = True
+                break
+
+        if not has_specialist:
+            findings.append(_finding(code="no_specialist_onsite", severity="critical", context={"day": int(d)}))
+
+    return findings, double_shift_days_by_doctor
+
+
+# ----------------------------- rankings -----------------------------------------
+
+
+def _build_rankings(
+    *,
+    per_doctor_rows: List[Dict[str, Any]],
+    top_n: int = 5,
+) -> Dict[str, Any]:
+    """
+    Build deterministic rankings:
+    - top_unhappy: highest score first (score = penalty-like measure, higher => worse)
+    - top_happy: lowest score first, but we return score as negative (higher => better)
+    """
+
+    # Defensive: if score is missing, treat it as 0.0
+    def _score(row: Dict[str, Any]) -> float:
+        try:
+            v = row.get("score")
+            return float(v) if v is not None else 0.0
+        except Exception:
+            return 0.0
+
+    # Unhappy: worst score first
+    unhappy_sorted = sorted(per_doctor_rows, key=lambda r: (-_score(r), int(r.get("doctor_id", 0))))
+    unhappy = unhappy_sorted[: int(top_n)]
+
+    # Happy: best (lowest) score first
+    happy_sorted = sorted(per_doctor_rows, key=lambda r: (_score(r), int(r.get("doctor_id", 0))))
+    happy = happy_sorted[: int(top_n)]
+
+    def _reasons_codes(row: Dict[str, Any]) -> List[str]:
+        # Stable, short reason codes for FE (no messages here).
+        reasons: List[str] = []
+        if int(row.get("rest_violations", 0)) > 0:
+            reasons.append("rest_violations")
+        if int(row.get("preferred_days_missed", 0)) > 0:
+            reasons.append("preferred_days_missed")
+        if int(row.get("_double_shift_days", 0)) > 0:
+            reasons.append("double_shift_same_day")
+        if float(row.get("preference_fulfillment_pct", 100.0)) < 100.0:
+            reasons.append("preferences_not_fully_met")
+        # Keep list short and stable
+        return reasons[:3]
+
+    top_unhappy = [
+        {
+            "doctor_id": int(r["doctor_id"]),
+            "score": float(_score(r)),
+            "reasons_codes": _reasons_codes(r),
+        }
+        for r in unhappy
+    ]
+
+    top_happy = []
+    for r in happy:
+        reasons: List[str] = []
+        if int(r.get("rest_violations", 0)) == 0:
+            reasons.append("good_rest")
+        if float(r.get("preference_fulfillment_pct", 100.0)) >= 80.0:
+            reasons.append("preferences_met")
+        # score convention: higher=better for the "happy" list
+        top_happy.append(
+            {
+                "doctor_id": int(r["doctor_id"]),
+                "score": float(-_score(r)),
+                "reasons_codes": reasons[:3],
+            }
+        )
+
+    return {"top_unhappy": top_unhappy, "top_happy": top_happy}
 
 
 # ----------------------------- public API ---------------------------------------
@@ -813,7 +1242,12 @@ def compute_quality(*, problem: ProblemData, payload: Dict[str, Any]) -> Dict[st
     Returns a JSON-serializable dict:
     {
       "summary": {...},
-      "details": {...} | None
+      "details": {
+        "findings": [...],
+        "per_doctor": [...],
+        "rankings": {...},
+        "components": {...}  # optional, useful for debugging
+      }
     }
     """
     meta_any = payload.get("meta") or {"labels": []}
@@ -825,35 +1259,111 @@ def compute_quality(*, problem: ProblemData, payload: Dict[str, Any]) -> Dict[st
     ignored_days, ignored_slots = _extract_ignored_from_meta(meta)
     idx = _build_index(assignments)
 
+    # Coverage (final semantics: per slot)
+    coverage_missing_required_slots, missing_slots = compute_coverage_missing_required_slots(
+        problem=problem, idx=idx, ignored_days=ignored_days, ignored_slots=ignored_slots
+    )
+
+    # Backward compatibility field (deprecated KPI)
     understaffed_days = compute_understaffed_days(
         problem=problem, idx=idx, ignored_days=ignored_days, ignored_slots=ignored_slots
     )
 
+    # Global preference fulfillment
     pref_pct = compute_preference_fulfillment_pct(
         problem=problem, idx=idx, ignored_days=ignored_days, ignored_slots=ignored_slots
     )
 
-    rest_pen, rest_viol = compute_rest_penalty_and_violations(problem=problem, idx=idx)
-    pref_days_pen = compute_preferred_days_penalty(
+    # Rest (global + per doctor)
+    rest_pen, rest_viol, rest_viol_by_doc, rest_pen_by_doc = _compute_rest_stats(problem=problem, idx=idx)
+
+    # Preferred concrete days (global + per doctor)
+    pref_days_pen, pref_days_pen_by_doc = _compute_preferred_days_penalty_per_doctor(
         problem=problem, idx=idx, ignored_days=ignored_days, ignored_slots=ignored_slots
     )
-    totals_pen = compute_totals_penalty(problem=problem, idx=idx)
-    fairness_pen, fairness_index = compute_fairness_penalty_and_index(problem=problem, idx=idx)
-    weekday_pen = compute_weekday_patterns_penalty(problem=problem, idx=idx)
-    partners_pen = compute_preferred_partners_penalty(problem=problem, idx=idx)
-    fri_pen = compute_friday_free_weekend_penalty(problem=problem, idx=idx)
 
+    # Totals (global + per doctor)
+    totals_pen, totals_pen_by_doc = _compute_totals_penalty_per_doctor(problem=problem, idx=idx)
+
+    # Fairness (global + per doctor + index)
+    fairness_pen, fairness_index, fairness_pen_by_doc = _compute_fairness_stats(problem=problem, idx=idx)
+
+    # Weekday patterns (global + per doctor)
+    weekday_pen, weekday_pen_by_doc = _compute_weekday_patterns_penalty_per_doctor(problem=problem, idx=idx)
+
+    # Preferred partners (global + per doctor bonus share)
+    partners_pen, partners_bonus_by_doc = _compute_preferred_partners_bonus_by_doctor(problem=problem, idx=idx)
+
+    # Friday if weekend off (global + per doctor)
+    fri_pen, fri_pen_by_doc = _compute_friday_free_weekend_penalty_per_doctor(problem=problem, idx=idx)
+
+    # Total penalty (legacy, still useful for debug)
     penalty_total = int(rest_pen + pref_days_pen + totals_pen + fairness_pen + weekday_pen + partners_pen + fri_pen)
 
+    # Findings + hard issues count
+    findings, double_shift_days_by_doc = _build_findings(
+        problem=problem,
+        payload=payload,
+        idx=idx,
+        ignored_days=ignored_days,
+        ignored_slots=ignored_slots,
+        missing_slots=missing_slots,
+    )
+    hard_issues_count = int(sum(1 for f in findings if str(f.get("severity")) == "critical"))
+
+    # Per-doctor blocks
+    onsite_total_by_doc, oncall_total_by_doc = _assigned_totals_per_doctor(problem=problem, idx=idx)
+    pref_pct_by_doc, pref_missed_by_doc = _compute_preference_stats_per_doctor(
+        problem=problem, idx=idx, ignored_days=ignored_days, ignored_slots=ignored_slots
+    )
+
+    per_doctor: List[Dict[str, Any]] = []
+    for doc_id in sorted(problem.participant_doctor_ids):
+        doc_id_i = int(doc_id)
+
+        # A simple per-doctor score derived from the same components as the solver objective.
+        # Higher score => worse (used for "top_unhappy").
+        score = 0.0
+        score += float(rest_pen_by_doc.get(doc_id_i, 0))
+        score += float(pref_days_pen_by_doc.get(doc_id_i, 0))
+        score += float(totals_pen_by_doc.get(doc_id_i, 0))
+        score += float(fairness_pen_by_doc.get(doc_id_i, 0))
+        score += float(weekday_pen_by_doc.get(doc_id_i, 0))
+        score += float(fri_pen_by_doc.get(doc_id_i, 0))
+        score += float(partners_bonus_by_doc.get(doc_id_i, 0.0))  # bonus is negative
+
+        row: Dict[str, Any] = {
+            "doctor_id": doc_id_i,
+            "display_name": _display_name_from_snapshot(payload, doc_id_i),
+            "assigned_onsite_total": int(onsite_total_by_doc.get(doc_id_i, 0)),
+            "assigned_oncall_total": int(oncall_total_by_doc.get(doc_id_i, 0)),
+            "rest_violations": int(rest_viol_by_doc.get(doc_id_i, 0)),
+            "preference_fulfillment_pct": float(pref_pct_by_doc.get(doc_id_i, 100.0)),
+            "preferred_days_missed": int(pref_missed_by_doc.get(doc_id_i, 0)),
+            "score": float(score),
+            # Internal helper fields for rankings reasons (not part of DTO, but still pure dict)
+            "_double_shift_days": int(double_shift_days_by_doc.get(doc_id_i, 0)),
+        }
+        per_doctor.append(row)
+
+    rankings = _build_rankings(per_doctor_rows=per_doctor, top_n=5)
+
     summary: Dict[str, Any] = {
-        "penalty_total": int(penalty_total),
-        "understaffed_days": int(understaffed_days),
+        # NEW (final contract KPIs)
+        "coverage_missing_required_slots": int(coverage_missing_required_slots),
+        "hard_issues_count": int(hard_issues_count),
         "rest_violations": int(rest_viol),
         "fairness_index": float(max(0.0, min(1.0, fairness_index))),
         "preference_fulfillment_pct": float(max(0.0, min(100.0, pref_pct))),
+        # OLD (deprecated, kept for backward compatibility)
+        "penalty_total": int(penalty_total),
+        "understaffed_days": int(understaffed_days),
     }
 
     details: Dict[str, Any] = {
+        "findings": list(findings),
+        "per_doctor": list(per_doctor),
+        "rankings": dict(rankings),
         "components": {
             "rest_penalty": int(rest_pen),
             "preferred_days_penalty": int(pref_days_pen),
@@ -862,7 +1372,7 @@ def compute_quality(*, problem: ProblemData, payload: Dict[str, Any]) -> Dict[st
             "weekday_patterns_penalty": int(weekday_pen),
             "preferred_partners_penalty": int(partners_pen),
             "friday_free_weekend_penalty": int(fri_pen),
-        }
+        },
     }
 
     return {"summary": summary, "details": details}
