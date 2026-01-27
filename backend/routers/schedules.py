@@ -438,7 +438,7 @@ def schedules_published_read(
     "/{year}/{month}/my-assignments",
     response_model=MyAssignmentsRead,
     tags=["schedules:doctor"],
-    summary="List my assignments from the current PUBLISHED schedule (TODO)",
+    summary="List my assignments from the current PUBLISHED schedule",
 )
 def schedules_my_assignments(
     year: int = Path(..., ge=1900, le=2100),
@@ -446,6 +446,14 @@ def schedules_my_assignments(
     user: UserCtx = Depends(require_doctor),
 ) -> MyAssignmentsRead:
     """
-    Placeholder for per-doctor assignment view (will filter from published payload).
+    Doctor endpoint: return ONLY my assignments for the period.
+
+    Rules:
+    - Source of truth is the current PUBLISHED pointer (stable doctor view).
+    - Doctor id is taken from auth context (user.user_id in MVP).
     """
-    return MyAssignmentsRead(doctor_id=user.user_id if user else -1, year=year, month=month, assignments=[])
+    try:
+        return svc.get_my_assignments(year=year, month=month, doctor_id=user.user_id if user else -1)
+    except ValueError as e:
+        _raise(e)
+        assert False

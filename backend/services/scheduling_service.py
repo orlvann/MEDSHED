@@ -70,6 +70,8 @@ from backend.models.schemas.diagnostics import DiagnosticsRead, DiagnosticsSumma
 from backend.models.schemas.schedule import (
     AcceptedException,
     Assignment,
+    MyAssignment,
+    MyAssignmentsRead,
     ScheduleCheckpointCreated,
     ScheduleDraftView,
     ScheduleGenerateCreated,
@@ -867,12 +869,13 @@ class SchedulingService:
     Public surface consumed by the router (thin API; stable DTOs in/out).
 
     Methods:
-      - get_working / save_working
-      - generate
-      - checkpoint
-      - revert (target: "draft" | "published", direction: "prev" | "next")
-      - publish
-      - get_published
+        - get_working / save_working
+        - generate
+        - checkpoint
+        - revert (target: "draft" | "published", direction: "prev" | "next")
+        - publish
+        - get_published
+        - get_my_assignments
     """
 
     # ------------------------------ Working -----------------------------------
@@ -1397,7 +1400,7 @@ class SchedulingService:
         Read the current published snapshot (pointer-based).
 
         Raises:
-          ValueError("not_found") if there is no published pointer or version.
+        ValueError("not_found") if there is no published pointer or version.
         """
         with SessionLocal() as session:
             ptr = session.get(SchedulePointer, {"year": year, "month": month})
@@ -1420,9 +1423,49 @@ class SchedulingService:
                     ver.payload,
                     can_undo=has_prev,
                     can_redo=has_next,
-                    count=publications_total,  # lub max(... - 1, 0) — jeśli chcesz "poza headem"
+                    count=publications_total,
                     audit={"published_at": ver.created_at},
                 ),
+            )
+
+    # -------------------------- Doctor: my assignments --------------------------
+    @_translate_sqla_errors
+    def get_my_assignments(self, year: int, month: int, *, doctor_id: int) -> MyAssignmentsRead:
+        """
+        Return assignments for a single doctor from the current PUBLISHED schedule.
+
+        Important:
+        - This reads ONLY the published pointer (doctor path must be stable).
+        - It filters assignments by doctor_id and returns a small, doctor-focused DTO.
+
+        Raises:
+        ValueError("not_found") when there is no published schedule for the period.
+        """
+        with SessionLocal() as session:
+            ptr = session.get(SchedulePointer, {"year": year, "month": month})
+            if ptr is None or ptr.current_published_version_id is None:
+                raise ValueError("not_found")
+
+            ver = session.get(ScheduleVersion, int(ptr.current_published_version_id))
+            if ver is None:
+                raise ValueError("not_found")
+
+            # Parse payload through the DTO to safely coerce types (ShiftType enum, day ints, etc.).
+            payload_obj = SchedulePayload.model_validate(ver.payload)
+
+            mine: List[MyAssignment] = []
+            for a in payload_obj.assignments or []:
+                if int(a.doctor_id) == int(doctor_id):
+                    mine.append(MyAssignment(day=int(a.day), shift_type=a.shift_type))
+
+            # Defensive deterministic ordering (should already be normalized).
+            mine = sorted(mine, key=lambda x: (int(x.day), str(x.shift_type.value)))
+
+            return MyAssignmentsRead(
+                doctor_id=int(doctor_id),
+                year=year,
+                month=month,
+                assignments=mine,
             )
 
     @_translate_sqla_errors
