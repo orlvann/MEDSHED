@@ -275,3 +275,75 @@ export interface MyAssignmentsRead {
   month: number;
   assignments: MyAssignment[];
 }
+
+// Availability types
+export type RiskLevel = "ok" | "alert" | "critical";
+
+export interface DoctorMini {
+  id: number;
+  first_name: string;
+  last_name: string;
+}
+
+export interface IgnoredSlot {
+  day: number;
+  shift_type: ShiftType;
+}
+
+export interface AvailabilityDayOverview {
+  day: number;
+  available_specialists_onsite: number;
+  available_residents_onsite: number;
+  available_specialists_oncall: number;
+  available_residents_oncall: number;
+  risk: RiskLevel;
+  risk_issues: string[];
+  suggested_ignored_slots: IgnoredSlot[];
+  suggested_ignore_reason_codes: string[];
+}
+
+export interface AvailabilityOverviewRead {
+  year: number;
+  month: number;
+  days: AvailabilityDayOverview[];
+}
+
+export interface AvailabilityDayRead {
+  year: number;
+  month: number;
+  day: number;
+  specialists_onsite: DoctorMini[];
+  residents_onsite: DoctorMini[];
+  specialists_oncall: DoctorMini[];
+  residents_oncall: DoctorMini[];
+  risk: RiskLevel;
+  risk_issues: string[];
+  suggested_ignored_slots: IgnoredSlot[];
+  suggested_ignore_reason_codes: string[];
+}
+
+// Schedule generation types
+export interface ScheduleGenerateRequest {
+  year: number;
+  month: number;
+  participant_doctor_ids: number[];
+  ignore_days: number[];
+  ignore_slots: IgnoredSlot[];
+}
+
+export interface ScheduleDiagnostics {
+  total_penalty: number;
+  rest_violations: number;
+  fairness_score: number;
+  coverage_gaps: number;
+  preference_fulfillment: number;
+}
+
+export interface ScheduleGenerateCreated {
+  working: SchedulePayload;
+  draft: {
+    version_id: string;
+    payload: SchedulePayload;
+  };
+  diagnostics: ScheduleDiagnostics;
+}

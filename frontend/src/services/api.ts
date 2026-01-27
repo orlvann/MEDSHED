@@ -23,6 +23,10 @@ import type {
   PreferencesDeadlineRead,
   SchedulePublishedRead,
   MyAssignmentsRead,
+  AvailabilityOverviewRead,
+  AvailabilityDayRead,
+  ScheduleGenerateRequest,
+  ScheduleGenerateCreated,
 } from "../types";
 
 // Base API URL - can be overridden by environment variable
@@ -46,7 +50,7 @@ api.interceptors.request.use(
     }
     return config;
   },
-  (error) => Promise.reject(error)
+  (error) => Promise.reject(error),
 );
 
 // Response interceptor for error handling
@@ -65,7 +69,7 @@ api.interceptors.response.use(
       }
     }
     return Promise.reject(error);
-  }
+  },
 );
 
 // Auth API
@@ -73,7 +77,7 @@ export const authApi = {
   login: async (credentials: LoginRequest): Promise<TokenResponse> => {
     const response = await api.post<TokenResponse>(
       "/api/v1/auth/login",
-      credentials
+      credentials,
     );
     return response.data;
   },
@@ -84,11 +88,11 @@ export const authApi = {
   },
 
   setPassword: async (
-    data: SetPasswordRequest
+    data: SetPasswordRequest,
   ): Promise<SetPasswordResponse> => {
     const response = await api.post<SetPasswordResponse>(
       "/api/v1/auth/set-password",
-      data
+      data,
     );
     return response.data;
   },
@@ -107,7 +111,7 @@ export const authApi = {
   }): Promise<{ message: string }> => {
     const response = await api.post<{ message: string }>(
       "/api/v1/auth/change-password",
-      data
+      data,
     );
     return response.data;
   },
@@ -172,7 +176,7 @@ export const adminUsersApi = {
   update: async (id: number, user: AdminUserUpdate): Promise<AdminUser> => {
     const response = await api.put<AdminUser>(
       `/api/v1/admin/users/${id}`,
-      user
+      user,
     );
     return response.data;
   },
@@ -187,11 +191,11 @@ export const preferencesApi = {
   // Summary - who submitted vs missing
   getSummary: async (
     year: number,
-    month: number
+    month: number,
   ): Promise<PreferencesSummaryRead> => {
     const response = await api.get<PreferencesSummaryRead>(
       "/api/v1/preferences/summary",
-      { params: { year, month } }
+      { params: { year, month } },
     );
     return response.data;
   },
@@ -199,10 +203,10 @@ export const preferencesApi = {
   // Deadline management
   getDeadline: async (
     year: number,
-    month: number
+    month: number,
   ): Promise<PreferencesDeadlineRead> => {
     const response = await api.get<PreferencesDeadlineRead>(
-      `/api/v1/preferences/deadlines/${year}/${month}`
+      `/api/v1/preferences/deadlines/${year}/${month}`,
     );
     return response.data;
   },
@@ -210,11 +214,11 @@ export const preferencesApi = {
   updateDeadline: async (
     year: number,
     month: number,
-    deadline: string
+    deadline: string,
   ): Promise<PreferencesDeadlineRead> => {
     const response = await api.put<PreferencesDeadlineRead>(
       `/api/v1/preferences/deadlines/${year}/${month}`,
-      { deadline }
+      { deadline },
     );
     return response.data;
   },
@@ -223,10 +227,10 @@ export const preferencesApi = {
   getWorking: async (
     year: number,
     month: number,
-    doctorId: number
+    doctorId: number,
   ): Promise<PreferenceWorkingRead> => {
     const response = await api.get<PreferenceWorkingRead>(
-      `/api/v1/preferences/${year}/${month}/${doctorId}`
+      `/api/v1/preferences/${year}/${month}/${doctorId}`,
     );
     return response.data;
   },
@@ -235,11 +239,11 @@ export const preferencesApi = {
     year: number,
     month: number,
     doctorId: number,
-    data: PreferenceWorkingPut
+    data: PreferenceWorkingPut,
   ): Promise<PreferenceAutosaveAck> => {
     const response = await api.put<PreferenceAutosaveAck>(
       `/api/v1/preferences/${year}/${month}/${doctorId}/working`,
-      data
+      data,
     );
     return response.data;
   },
@@ -247,11 +251,11 @@ export const preferencesApi = {
   createCheckpoint: async (
     year: number,
     month: number,
-    doctorId: number
+    doctorId: number,
   ): Promise<PreferenceCheckpointCreated> => {
     const response = await api.post<PreferenceCheckpointCreated>(
       `/api/v1/preferences/${year}/${month}/${doctorId}/checkpoint`,
-      {}
+      {},
     );
     return response.data;
   },
@@ -259,10 +263,10 @@ export const preferencesApi = {
   revertLast: async (
     year: number,
     month: number,
-    doctorId: number
+    doctorId: number,
   ): Promise<PreferenceRevertRead> => {
     const response = await api.post<PreferenceRevertRead>(
-      `/api/v1/preferences/${year}/${month}/${doctorId}/revert-last`
+      `/api/v1/preferences/${year}/${month}/${doctorId}/revert-last`,
     );
     return response.data;
   },
@@ -270,10 +274,10 @@ export const preferencesApi = {
   revertNext: async (
     year: number,
     month: number,
-    doctorId: number
+    doctorId: number,
   ): Promise<PreferenceRevertRead> => {
     const response = await api.post<PreferenceRevertRead>(
-      `/api/v1/preferences/${year}/${month}/${doctorId}/revert-next`
+      `/api/v1/preferences/${year}/${month}/${doctorId}/revert-next`,
     );
     return response.data;
   },
@@ -283,10 +287,10 @@ export const preferencesApi = {
 export const doctorPreferencesApi = {
   getMyPreferences: async (
     year: number,
-    month: number
+    month: number,
   ): Promise<PreferenceWorkingRead> => {
     const response = await api.get<PreferenceWorkingRead>(
-      `/api/v1/preferences/${year}/${month}/me`
+      `/api/v1/preferences/${year}/${month}/me`,
     );
     return response.data;
   },
@@ -294,44 +298,44 @@ export const doctorPreferencesApi = {
   saveMyWorking: async (
     year: number,
     month: number,
-    data: PreferenceWorkingPut
+    data: PreferenceWorkingPut,
   ): Promise<PreferenceAutosaveAck> => {
     const response = await api.put<PreferenceAutosaveAck>(
       `/api/v1/preferences/${year}/${month}/me/working`,
-      data
+      data,
     );
     return response.data;
   },
 
   createMyCheckpoint: async (
     year: number,
-    month: number
+    month: number,
   ): Promise<PreferenceCheckpointCreated> => {
     const response = await api.post<PreferenceCheckpointCreated>(
       `/api/v1/preferences/${year}/${month}/me/checkpoint`,
-      {}
+      {},
     );
     return response.data;
   },
 
   revertMyLast: async (
     year: number,
-    month: number
+    month: number,
   ): Promise<PreferenceRevertRead> => {
     const response = await api.post<PreferenceRevertRead>(
       `/api/v1/preferences/${year}/${month}/me/revert-last`,
-      {}
+      {},
     );
     return response.data;
   },
 
   revertMyNext: async (
     year: number,
-    month: number
+    month: number,
   ): Promise<PreferenceRevertRead> => {
     const response = await api.post<PreferenceRevertRead>(
       `/api/v1/preferences/${year}/${month}/me/revert-next`,
-      {}
+      {},
     );
     return response.data;
   },
@@ -341,20 +345,55 @@ export const doctorPreferencesApi = {
 export const schedulesApi = {
   getPublished: async (
     year: number,
-    month: number
+    month: number,
   ): Promise<SchedulePublishedRead> => {
     const response = await api.get<SchedulePublishedRead>(
-      `/api/v1/schedules/${year}/${month}/published`
+      `/api/v1/schedules/${year}/${month}/published`,
     );
     return response.data;
   },
 
   getMyAssignments: async (
     year: number,
-    month: number
+    month: number,
   ): Promise<MyAssignmentsRead> => {
     const response = await api.get<MyAssignmentsRead>(
-      `/api/v1/schedules/${year}/${month}/my-assignments`
+      `/api/v1/schedules/${year}/${month}/my-assignments`,
+    );
+    return response.data;
+  },
+
+  generate: async (
+    data: ScheduleGenerateRequest,
+  ): Promise<ScheduleGenerateCreated> => {
+    const response = await api.post<ScheduleGenerateCreated>(
+      "/api/v1/schedules/generate",
+      data,
+    );
+    return response.data;
+  },
+};
+
+// Availability API
+export const availabilityApi = {
+  getOverview: async (
+    year: number,
+    month: number,
+  ): Promise<AvailabilityOverviewRead> => {
+    const response = await api.get<AvailabilityOverviewRead>(
+      "/api/v1/availability/overview",
+      { params: { year, month } },
+    );
+    return response.data;
+  },
+
+  getDay: async (
+    year: number,
+    month: number,
+    day: number,
+  ): Promise<AvailabilityDayRead> => {
+    const response = await api.get<AvailabilityDayRead>(
+      `/api/v1/availability/${year}/${month}/${day}`,
     );
     return response.data;
   },

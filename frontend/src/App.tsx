@@ -10,6 +10,7 @@ import { DoctorsManagement } from "./pages/admin/DoctorsManagement";
 import { AdminUsersManagement } from "./pages/admin/AdminUsersManagement";
 import { PendingDoctors } from "./pages/admin/PendingDoctors";
 import { PreferencesManagement } from "./pages/admin/PreferencesManagement";
+import { GenerateSchedule } from "./pages/admin/GenerateSchedule";
 import { Unauthorized } from "./pages/Unauthorized";
 import { DoctorHome } from "./pages/doctor/DoctorHome";
 import { DoctorPreferences } from "./pages/doctor/DoctorPreferences";
@@ -77,14 +78,7 @@ function App() {
             path="/admin/generate"
             element={
               <ProtectedRoute requiredRole="admin">
-                <div className="flex items-center justify-center min-h-screen">
-                  <div className="text-center">
-                    <h1 className="text-2xl font-bold mb-4">
-                      Generate Schedules
-                    </h1>
-                    <p className="text-muted-foreground">Coming soon...</p>
-                  </div>
-                </div>
+                <GenerateSchedule />
               </ProtectedRoute>
             }
           />
