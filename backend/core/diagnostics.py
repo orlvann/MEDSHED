@@ -1182,21 +1182,23 @@ def _build_findings(
                 )
             )
 
-    # Critical: onsite slot exists but has no specialist assigned
-    # (coverage is handled separately; this is about role mix on onsite)
+        # Critical: in this day there must be at least 1 specialist assigned
+    # on ANY shift (onsite OR oncall).
+    #
+    # IMPORTANT:
+    # - This finding is independent from "coverage missing slot" findings.
+    #   Even if a slot/day is empty, we still report "no specialist".
+    # - We do NOT skip ignored days/slots in diagnostics; we only annotate them
+    #   so UI can show "this was previously accepted/ignored".
     for d_raw in problem.days:
         d = int(d_raw)
-        if d in ignored_days:
-            continue
-        if (d, ShiftType.onsite) in ignored_slots:
-            continue
 
-        assigned = idx.slot_to_doctors.get((d, ShiftType.onsite), []) or []
-        if not assigned:
-            continue  # already covered by coverage_missing_required_slot
+        onsite_assigned = idx.slot_to_doctors.get((d, ShiftType.onsite), []) or []
+        oncall_assigned = idx.slot_to_doctors.get((d, ShiftType.oncall), []) or []
+        assigned_any = set(int(x) for x in (onsite_assigned + oncall_assigned))
 
         has_specialist = False
-        for doc_id in assigned:
+        for doc_id in assigned_any:
             doc = problem.doctors.get(int(doc_id))
             if doc and doc.role == DoctorRole.specialist:
                 has_specialist = True
@@ -1204,7 +1206,18 @@ def _build_findings(
 
         if not has_specialist:
             findings.append(
-                _finding(code=issues.COVERAGE_NO_SPECIALIST_DAY, severity="critical", context={"day": int(d)})
+                _finding(
+                    code=issues.COVERAGE_NO_SPECIALIST_DAY,
+                    severity="critical",
+                    context={
+                        "day": int(d),
+                        "day_empty": bool(len(assigned_any) == 0),
+                        "assigned_doctor_ids": sorted(int(x) for x in assigned_any),
+                        "was_ignored_day": bool(int(d) in ignored_days),
+                        "was_ignored_onsite": bool((int(d), ShiftType.onsite) in ignored_slots),
+                        "was_ignored_oncall": bool((int(d), ShiftType.oncall) in ignored_slots),
+                    },
+                )
             )
 
     # Warning: rest rule violations (already computed in rest stats)
@@ -1265,9 +1278,10 @@ def _build_rankings(
     top_n: int = 5,
 ) -> Dict[str, Any]:
     """
-    Build deterministic rankings:
-    - top_unhappy: highest score first (score = penalty-like measure, higher => worse)
-    - top_happy: lowest score first, but we return score as negative (higher => better)
+    Build deterministic rankings (POINTS convention):
+    - score = points (higher => better/happier)
+    - top_happy: highest score first
+    - top_unhappy: lowest score first (often negative)
     """
 
     # Defensive: if score is missing, treat it as 0.0
@@ -1278,12 +1292,12 @@ def _build_rankings(
         except Exception:
             return 0.0
 
-    # Unhappy: worst score first
-    unhappy_sorted = sorted(per_doctor_rows, key=lambda r: (-_score(r), int(r.get("doctor_id", 0))))
+    # Unhappy: lowest points first
+    unhappy_sorted = sorted(per_doctor_rows, key=lambda r: (_score(r), int(r.get("doctor_id", 0))))
     unhappy = unhappy_sorted[: int(top_n)]
 
-    # Happy: best (lowest) score first
-    happy_sorted = sorted(per_doctor_rows, key=lambda r: (_score(r), int(r.get("doctor_id", 0))))
+    # Happy: highest points first
+    happy_sorted = sorted(per_doctor_rows, key=lambda r: (-_score(r), int(r.get("doctor_id", 0))))
     happy = happy_sorted[: int(top_n)]
 
     def _reasons_codes(row: Dict[str, Any]) -> List[str]:
@@ -1316,11 +1330,10 @@ def _build_rankings(
             reasons.append("good_rest")
         if float(r.get("preference_fulfillment_pct", 100.0)) >= float(scoring.happy_preferences_met_threshold_pct()):
             reasons.append("preferences_met")
-        # score convention: higher=better for the "happy" list
         top_happy.append(
             {
                 "doctor_id": int(r["doctor_id"]),
-                "score": float(-_score(r)),
+                "score": float(_score(r)),
                 "reasons_codes": reasons[:3],
             }
         )
@@ -1421,16 +1434,19 @@ def compute_quality(*, problem: ProblemData, payload: Dict[str, Any]) -> Dict[st
     for doc_id in sorted(problem.participant_doctor_ids):
         doc_id_i = int(doc_id)
 
-        # A simple per-doctor score derived from the same components as the solver objective.
-        # Higher score => worse (used for "top_unhappy").
-        score = 0.0
-        score += float(rest_pen_by_doc.get(doc_id_i, 0))
-        score += float(pref_days_pen_by_doc.get(doc_id_i, 0))
-        score += float(totals_pen_by_doc.get(doc_id_i, 0))
-        score += float(fairness_pen_by_doc.get(doc_id_i, 0))
-        score += float(weekday_pen_by_doc.get(doc_id_i, 0))
-        score += float(fri_pen_by_doc.get(doc_id_i, 0))
-        score += float(partners_bonus_by_doc.get(doc_id_i, 0.0))  # bonus is negative
+        # Build a per-doctor "penalty-like" score from the same components as solver objective.
+        # Then convert it to "points" where HIGHER means BETTER:
+        # points = -penalty_like
+        penalty_like = 0.0
+        penalty_like += float(rest_pen_by_doc.get(doc_id_i, 0))
+        penalty_like += float(pref_days_pen_by_doc.get(doc_id_i, 0))
+        penalty_like += float(totals_pen_by_doc.get(doc_id_i, 0))
+        penalty_like += float(fairness_pen_by_doc.get(doc_id_i, 0))
+        penalty_like += float(weekday_pen_by_doc.get(doc_id_i, 0))
+        penalty_like += float(fri_pen_by_doc.get(doc_id_i, 0))
+        penalty_like += float(partners_bonus_by_doc.get(doc_id_i, 0.0))  # bonus is negative
+
+        score_points = float(-penalty_like)
 
         row: Dict[str, Any] = {
             "doctor_id": doc_id_i,
@@ -1440,7 +1456,8 @@ def compute_quality(*, problem: ProblemData, payload: Dict[str, Any]) -> Dict[st
             "rest_violations": int(rest_viol_by_doc.get(doc_id_i, 0)),
             "preference_fulfillment_pct": float(pref_pct_by_doc.get(doc_id_i, 100.0)),
             "preferred_days_missed": int(pref_missed_by_doc.get(doc_id_i, 0)),
-            "score": float(score),
+            # "score" is now points: higher => happier/better
+            "score": float(score_points),
             # Internal helper fields for rankings reasons (not part of DTO, but still pure dict)
             "_double_shift_days": int(double_shift_days_by_doc.get(doc_id_i, 0)),
         }
