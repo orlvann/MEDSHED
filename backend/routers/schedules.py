@@ -14,6 +14,7 @@
 # - "edit_conflict"                       -> 409
 # - "cannot_undo" / "cannot_redo"         -> 409
 # - "publish_blocked_by_hard_rules"       -> 409
+# - "invalid_accepted_exception"          -> 400
 # - "not_found"                           -> 404
 #
 # API SHAPE
@@ -79,6 +80,8 @@ def _raise(e: ValueError) -> None:
         "cannot_undo": status.HTTP_409_CONFLICT,
         "cannot_redo": status.HTTP_409_CONFLICT,
         "publish_blocked_by_hard_rules": status.HTTP_409_CONFLICT,
+        # Raised when FE sends accepted_exceptions codes that do NOT match current hard violations.
+        "invalid_accepted_exception": status.HTTP_400_BAD_REQUEST,
         "not_found": status.HTTP_404_NOT_FOUND,
     }
     if code in mapping:
@@ -129,7 +132,7 @@ def schedules_diagnostics(
             "'published' = current published pointer."
         ),
     ),
-):
+) -> DiagnosticsRead:
     """
     Admin diagnostics endpoint.
 
@@ -146,13 +149,8 @@ def schedules_diagnostics(
     try:
         return svc.get_diagnostics(year=year, month=month, target=target)
     except ValueError as e:
-        code = str(e)
-        if code in {"not_found"}:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=make_error("not_found", context={"year": year, "month": month, "target": target}),
-            )
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=make_error(code or "bad_request"))
+        _raise(e)
+        assert False
 
 
 # --------------------------- ADMIN: period view (MVP) --------------------------
