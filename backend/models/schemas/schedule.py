@@ -18,7 +18,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Dict, List, Literal, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -37,7 +37,6 @@ from .dto_common import (
     DayInt,  # 1..31 (validated)
     MonthInt,  # canonical 1..12 month
     YearInt,  # canonical 1900..2100 year (zgodnie z dto_common)
-    normalize_days,  # helper for dedup/sort/validation of day lists
 )
 
 # ------------------------------ Core small blocks ------------------------------
@@ -245,20 +244,111 @@ class IgnoreSlot(BaseModel):
     shift_type: ShiftType
 
 
+class HeadCommitmentResolution(BaseModel):
+    """
+    Admin's manual resolution for a head commitment conflict.
+
+    Meaning:
+    - For a conflicting slot (day + shift_type), admin selects which head keeps this commitment.
+    - Service will remove this day from other heads' preferred_*_days for the same shift type
+      (only for the purpose of this generation run).
+    """
+
+    day: DayInt
+    shift_type: ShiftType
+    chosen_head_id: int
+
+
 class ScheduleGenerateRequest(BaseModel):
     """POST /api/v1/schedules/generate"""
 
     year: YearInt
     month: MonthInt
     participant_doctor_ids: List[int] = Field(default_factory=list)
-    ignore_days: List[DayInt] = Field(default_factory=list)
+
+    # FINAL POLICY:
+    # - ignore_days is removed from the whole flow.
+    # - Only individual slots can be ignored.
     ignore_slots: List[IgnoreSlot] = Field(default_factory=list)
 
-    @field_validator("ignore_days", mode="before")
+    # Optional: provided only when FE resolves "multiple heads want same slot" conflicts.
+    head_commitment_resolutions: List[HeadCommitmentResolution] = Field(
+        default_factory=list,
+        description=(
+            "Manual conflict resolutions for head commitments. "
+            "For each conflicting (day, shift_type) slot, choose which head keeps the commitment."
+        ),
+        examples=[
+            [
+                {"day": 5, "shift_type": "onsite", "chosen_head_id": 101},
+                {"day": 12, "shift_type": "oncall", "chosen_head_id": 102},
+            ]
+        ],
+    )
+
+    @field_validator("head_commitment_resolutions", mode="before")
     @classmethod
-    def _dedupe_days(cls, v):
-        # Normalize: unique, sorted, and within 1..31; raises ValueError otherwise.
-        return normalize_days(v)
+    def _normalize_head_commitment_resolutions(cls, v):
+        """
+        Normalize resolutions deterministically:
+        - accept None as empty list,
+        - keep last resolution for the same (day, shift_type),
+        - sort by (day, shift_type.value, chosen_head_id).
+
+        IMPORTANT:
+        - if any required field is missing -> return raw v so Pydantic can raise a clear error.
+        """
+        if v is None:
+            return []
+        if not isinstance(v, list):
+            return v
+
+        # Keep the LAST resolution for a given (day, shift_type) (deterministic).
+        dedup: Dict[tuple[int, str], Dict[str, Any]] = {}
+
+        for item in v:
+            if isinstance(item, dict):
+                day_raw = item.get("day")
+                st = item.get("shift_type")
+                chosen_raw = item.get("chosen_head_id")
+                if day_raw is None or st is None or chosen_raw is None:
+                    return v
+
+                day = int(day_raw)
+                st_val = str(getattr(st, "value", st))
+                dedup[(day, st_val)] = {
+                    "day": day,
+                    "shift_type": st,
+                    "chosen_head_id": int(chosen_raw),
+                }
+                continue
+
+            # Object-like input (e.g., Pydantic model instance)
+            day_raw = getattr(item, "day", None)
+            st = getattr(item, "shift_type", None)
+            chosen_raw = getattr(item, "chosen_head_id", None)
+            if day_raw is None or st is None or chosen_raw is None:
+                return v
+
+            day = int(day_raw)
+            st_val = str(getattr(st, "value", st))
+            dedup[(day, st_val)] = {
+                "day": day,
+                "shift_type": st,
+                "chosen_head_id": int(chosen_raw),
+            }
+
+        out = list(dedup.values())
+
+        # Sort deterministically.
+        out.sort(
+            key=lambda x: (
+                x["day"],
+                str(getattr(x["shift_type"], "value", x["shift_type"])),
+                x["chosen_head_id"],
+            )
+        )
+        return out
 
 
 class ScheduleGenerateCreated(BaseModel):

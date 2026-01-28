@@ -1,3 +1,4 @@
+# backend/models/schemas/availability.py
 from __future__ import annotations
 
 from pydantic import BaseModel, Field
@@ -31,17 +32,19 @@ class AvailabilityDaySummary(BaseModel):
     available_specialists_oncall: int
     available_residents_oncall: int
 
-    # Overall risk flag for this day (ok / alert / critical).
+    # Overall risk flag for this day (ok / critical).
+    # FINAL POLICY:
+    # - ok: no hard availability problems
+    # - critical: missing candidates for any required slot OR no specialist for the day
     risk: RiskLevel
 
     # Machine-readable issue codes explaining why the day is risky.
     # - ok: usually []
-    # - alert: may contain warning codes (e.g. "few_candidates_total")
-    # - critical: contains blocking codes (e.g. "no_onsite_candidate")
+    # - critical: contains blocking codes (e.g. "no_onsite_candidate", "no_specialist")
     risk_issues: list[str] = Field(default_factory=list)
 
     # Suggested ignores (ONLY for critical days):
-    # Backend computes a minimal set of slots to ignore so Generate can proceed.
+    # Backend can compute a minimal set of slots to ignore so Generate can proceed.
     suggested_ignored_slots: list[AvailabilityIgnoreSlot] = Field(default_factory=list)
 
     # The reason codes that caused the suggestion above (usually a subset of risk_issues).
@@ -75,6 +78,7 @@ class AvailabilityDayRead(BaseModel):
     specialists_oncall: list[DoctorMini] = Field(default_factory=list)
     residents_oncall: list[DoctorMini] = Field(default_factory=list)
 
+    # Same meaning as in AvailabilityDaySummary (ok / critical).
     risk: RiskLevel
 
     # Same meaning as in AvailabilityDaySummary.

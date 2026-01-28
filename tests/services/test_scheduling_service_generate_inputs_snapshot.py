@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
+from typing import Any, Dict
 
 import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
+from backend.core.types import SolverStatus
 from backend.models.common_enums import DoctorRole, ShiftType
 from backend.models.orm.doctor import Doctor
 from backend.models.schemas.schedule import ScheduleGenerateRequest
@@ -53,6 +55,26 @@ def db_session_and_patch_sessionlocal(monkeypatch):
         yield session
 
 
+def _as_dict(obj: Any) -> Dict[str, Any]:
+    """
+    Convert inputs_snapshot to a plain dict in a defensive way.
+
+    Why:
+    - Depending on how schemas are implemented, inputs_snapshot might be:
+      * a Pydantic v2 model (has model_dump),
+      * a plain dict,
+      * something else.
+    """
+    if obj is None:
+        return {}
+    if isinstance(obj, dict):
+        return obj
+    if hasattr(obj, "model_dump"):
+        return obj.model_dump(mode="json")
+    # Last resort: try __dict__ (works for simple objects)
+    return dict(getattr(obj, "__dict__", {}) or {})
+
+
 def test_generate_payload_has_non_empty_inputs_snapshot(db_session_and_patch_sessionlocal, monkeypatch):
     """
     Integration test (service-level):
@@ -82,24 +104,34 @@ def test_generate_payload_has_non_empty_inputs_snapshot(db_session_and_patch_ses
     session.commit()
 
     # --------------------------
-    # 2) Stub solver output
+    # 2) Patch gatekeeper + stub solver output
     # --------------------------
-    # We patch backend.core.scheduler.generate_schedule to return a tiny deterministic result.
-    # This avoids OR-Tools and makes the test fast and stable.
-    def fake_generate_schedule(problem):
-        fake_solution = SimpleNamespace(status=SimpleNamespace(value="optimal"))
+    import backend.core.scheduler as scheduler_module
+    import backend.services.scheduling_service as scheduling_service_module
+
+    # IMPORTANT:
+    # This test focuses on inputs_snapshot creation and persistence,
+    # not on feasibility gating. We patch the gatekeeper to always pass.
+    monkeypatch.setattr(
+        scheduling_service_module.core_feasibility,
+        "analyze_problem",
+        lambda _problem: [],
+    )
+
+    # Stub core scheduler so we don't run OR-Tools.
+    # The service expects solution.status to be a SolverStatus enum and must be OK.
+    def fake_generate_schedule(_problem):
+        fake_solution = SimpleNamespace(status=SolverStatus.OK)
 
         # One assignment is enough for a valid payload shape
         fake_assignments = [
             {
                 "day": 1,
-                "shift_type": ShiftType.onsite,  # enum is OK; service normalization handles it
+                "shift_type": ShiftType.onsite,  # enum is OK; normalization handles it
                 "doctor_id": 1,
             }
         ]
         return SimpleNamespace(solution=fake_solution, assignments=fake_assignments)
-
-    import backend.core.scheduler as scheduler_module
 
     monkeypatch.setattr(scheduler_module, "generate_schedule", fake_generate_schedule)
 
@@ -112,7 +144,6 @@ def test_generate_payload_has_non_empty_inputs_snapshot(db_session_and_patch_ses
         year=2026,
         month=1,
         participant_doctor_ids=[1],
-        ignore_days=[],
         ignore_slots=[],
     )
 
@@ -123,20 +154,27 @@ def test_generate_payload_has_non_empty_inputs_snapshot(db_session_and_patch_ses
     # --------------------------
     assert created.draft.payload is not None, "Draft payload should exist after generate()"
 
-    snapshot = created.draft.payload.inputs_snapshot
-    assert snapshot is not None, "inputs_snapshot must be present in draft payload after generate()"
+    # Draft snapshot
+    draft_payload_dict = _as_dict(created.draft.payload)
+    draft_snapshot_dict = _as_dict(draft_payload_dict.get("inputs_snapshot"))
 
-    # Must contain at least one doctor (non-empty snapshot)
-    assert snapshot.doctors, "inputs_snapshot.doctors must NOT be empty after generate()"
+    assert draft_snapshot_dict, "inputs_snapshot must be present in draft payload after generate()"
 
-    # Must include our participant doctor id
-    assert 1 in snapshot.doctors, "inputs_snapshot.doctors must contain the participant doctor id"
+    doctors_map = draft_snapshot_dict.get("doctors") or {}
+    assert doctors_map, "inputs_snapshot.doctors must NOT be empty after generate()"
 
-    # Optional but useful: verify preference version map has the key (value can be None)
-    assert (
-        1 in snapshot.preference_version_id_by_doctor
-    ), "inputs_snapshot.preference_version_id_by_doctor must contain the participant doctor id"
+    # Keys might be strings or ints depending on JSON coercion
+    assert ("1" in doctors_map) or (1 in doctors_map), "inputs_snapshot.doctors must contain doctor id=1"
 
-    # Optional extra: working should also carry the same snapshot for deterministic diagnostics/publish
-    assert created.working.inputs_snapshot is not None, "Working should keep inputs_snapshot after generate()"
-    assert created.working.inputs_snapshot.doctors, "Working inputs_snapshot.doctors must not be empty"
+    pref_map = draft_snapshot_dict.get("preference_version_id_by_doctor") or {}
+    assert ("1" in pref_map) or (
+        1 in pref_map
+    ), "inputs_snapshot.preference_version_id_by_doctor must contain doctor id=1"
+
+    # Working snapshot should also carry it (deterministic diagnostics/publish later)
+    working_snapshot_dict = _as_dict(getattr(created.working, "inputs_snapshot", None))
+    assert working_snapshot_dict, "Working should keep inputs_snapshot after generate()"
+
+    working_doctors_map = working_snapshot_dict.get("doctors") or {}
+    assert working_doctors_map, "Working inputs_snapshot.doctors must not be empty"
+    assert ("1" in working_doctors_map) or (1 in working_doctors_map), "Working snapshot must contain doctor id=1"

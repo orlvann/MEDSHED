@@ -89,6 +89,10 @@ def _compute_available_days_for_doctor(
 def get_month_availability(*, year: int, month: int, actor) -> AvailabilityOverviewRead:
     """
     Compute monthly availability overview for admin.
+
+    FINAL POLICY:
+    - This is "business-required" mode: every day requires onsite + oncall.
+    - ignore_slots/ignore_days do not exist here.
     """
     ensure_latest_checkpoints_for_period(year=year, month=month)
 
@@ -96,57 +100,62 @@ def get_month_availability(*, year: int, month: int, actor) -> AvailabilityOverv
     org_tz = ORG_TZ
     num_days = days_in_month(year, month)
 
+    # Counts (kept for UI fields)
     spec_onsite_counts: Dict[int, int] = {d: 0 for d in range(1, num_days + 1)}
     res_onsite_counts: Dict[int, int] = {d: 0 for d in range(1, num_days + 1)}
     spec_oncall_counts: Dict[int, int] = {d: 0 for d in range(1, num_days + 1)}
     res_oncall_counts: Dict[int, int] = {d: 0 for d in range(1, num_days + 1)}
 
-    # Identity sets (only needed for forced-double-shift detection).
+    # Identity sets (needed for risk reasons and forced-double-shift detection)
     onsite_ids_by_day: Dict[int, Set[int]] = {d: set() for d in range(1, num_days + 1)}
     oncall_ids_by_day: Dict[int, Set[int]] = {d: set() for d in range(1, num_days + 1)}
+
+    # Role map needed by classify_availability_risk_with_reasons (ID-aware)
+    doctor_role_by_id: Dict[int, DoctorRole] = {}
 
     with SessionLocal() as session:
         doctors: List[Doctor] = session.query(Doctor).filter_by(is_active=True).all()
 
+        # Build role map once (no extra DB queries later)
+        for doc in doctors:
+            doctor_role_by_id[int(doc.id)] = doc.role
+
+        # Build availability sets + counts
         for doc in doctors:
             available_onsite, available_oncall = _compute_available_days_for_doctor(
                 session, year=year, month=month, doctor_id=doc.id
             )
 
-            for day in range(1, num_days + 1):
-                if day in available_onsite:
-                    onsite_ids_by_day[day].add(int(doc.id))
+            for d in range(1, num_days + 1):
+                if d in available_onsite:
+                    onsite_ids_by_day[d].add(int(doc.id))
                     if doc.role == DoctorRole.specialist:
-                        spec_onsite_counts[day] += 1
+                        spec_onsite_counts[d] += 1
                     else:
-                        res_onsite_counts[day] += 1
+                        res_onsite_counts[d] += 1
 
-                if day in available_oncall:
-                    oncall_ids_by_day[day].add(int(doc.id))
+                if d in available_oncall:
+                    oncall_ids_by_day[d].add(int(doc.id))
                     if doc.role == DoctorRole.specialist:
-                        spec_oncall_counts[day] += 1
+                        spec_oncall_counts[d] += 1
                     else:
-                        res_oncall_counts[day] += 1
+                        res_oncall_counts[d] += 1
 
+        # Build day summaries
         day_summaries: List[AvailabilityDaySummary] = []
-        for day in range(1, num_days + 1):
-            spec_onsite = spec_onsite_counts[day]
-            res_onsite = res_onsite_counts[day]
-            spec_oncall = spec_oncall_counts[day]
-            res_oncall = res_oncall_counts[day]
-
-            # Correct call: counts-only (matches issues.py signature).
+        for d in range(1, num_days + 1):
             details = classify_availability_risk_with_reasons(
-                spec_onsite=spec_onsite,
-                res_onsite=res_onsite,
-                spec_oncall=spec_oncall,
-                res_oncall=res_oncall,
+                onsite_ids=onsite_ids_by_day[d],
+                oncall_ids=oncall_ids_by_day[d],
+                doctor_role_by_id=doctor_role_by_id,
+                onsite_required=True,
+                oncall_required=True,
             )
 
-            # Add the identity-aware forced-double-shift signal (counts cannot detect it).
+            # Extra signal (still identity-aware): forced double shift if only one doctor can do both
             if is_forced_double_shift_same_day(
-                onsite_ids=onsite_ids_by_day[day],
-                oncall_ids=oncall_ids_by_day[day],
+                onsite_ids=onsite_ids_by_day[d],
+                oncall_ids=oncall_ids_by_day[d],
                 onsite_required=True,
                 oncall_required=True,
             ):
@@ -155,11 +164,11 @@ def get_month_availability(*, year: int, month: int, actor) -> AvailabilityOverv
 
             day_summaries.append(
                 AvailabilityDaySummary(
-                    day=day,
-                    available_specialists_onsite=spec_onsite,
-                    available_residents_onsite=res_onsite,
-                    available_specialists_oncall=spec_oncall,
-                    available_residents_oncall=res_oncall,
+                    day=d,
+                    available_specialists_onsite=spec_onsite_counts[d],
+                    available_residents_onsite=res_onsite_counts[d],
+                    available_specialists_oncall=spec_oncall_counts[d],
+                    available_residents_oncall=res_oncall_counts[d],
                     risk=details.risk,
                     risk_issues=details.issues,
                 )
@@ -177,6 +186,10 @@ def get_month_availability(*, year: int, month: int, actor) -> AvailabilityOverv
 def get_day_availability(*, year: int, month: int, day: int, actor) -> AvailabilityDayRead | None:
     """
     Compute per-day drill-down (which doctors are available on that day).
+
+    FINAL POLICY:
+    - This is "business-required" mode: the day requires onsite + oncall.
+    - ignore_slots/ignore_days do not exist here.
     """
     num_days = days_in_month(year, month)
     if day < 1 or day > num_days:
@@ -195,8 +208,14 @@ def get_day_availability(*, year: int, month: int, day: int, actor) -> Availabil
     onsite_ids: Set[int] = set()
     oncall_ids: Set[int] = set()
 
+    doctor_role_by_id: Dict[int, DoctorRole] = {}
+
     with SessionLocal() as session:
         doctors: List[Doctor] = session.query(Doctor).filter_by(is_active=True).all()
+
+        # Build role map once
+        for doc in doctors:
+            doctor_role_by_id[int(doc.id)] = doc.role
 
         for doc in doctors:
             available_onsite, available_oncall = _compute_available_days_for_doctor(
@@ -219,15 +238,14 @@ def get_day_availability(*, year: int, month: int, day: int, actor) -> Availabil
                 else:
                     residents_oncall.append(mini)
 
-        # Correct call: counts-only.
         details = classify_availability_risk_with_reasons(
-            spec_onsite=len(specialists_onsite),
-            res_onsite=len(residents_onsite),
-            spec_oncall=len(specialists_oncall),
-            res_oncall=len(residents_oncall),
+            onsite_ids=onsite_ids,
+            oncall_ids=oncall_ids,
+            doctor_role_by_id=doctor_role_by_id,
+            onsite_required=True,
+            oncall_required=True,
         )
 
-        # Add identity-aware forced-double-shift signal.
         if is_forced_double_shift_same_day(
             onsite_ids=onsite_ids,
             oncall_ids=oncall_ids,

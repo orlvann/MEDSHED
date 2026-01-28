@@ -10,12 +10,17 @@
 #
 # ERROR MAPPING (ValueError.code -> HTTP)
 # ---------------------------------------
-# - "period_closed"                       -> 403
-# - "edit_conflict"                       -> 409
-# - "cannot_undo" / "cannot_redo"         -> 409
-# - "publish_blocked_by_hard_rules"       -> 409
-# - "invalid_accepted_exception"          -> 400
-# - "not_found"                           -> 404
+# - "period_closed"                         -> 403
+# - "edit_conflict"                          -> 409
+# - "cannot_undo" / "cannot_redo"            -> 409
+# - "publish_blocked_by_hard_rules"          -> 409
+# - "invalid_accepted_exception"             -> 400
+# - "invalid_head_commitment_resolution"     -> 400
+# - "not_found"                              -> 404
+# - "generate_requires_ignore"               -> 409   (FE uses .context.issues_* to propose ignores)
+# - "generate_requires_head_resolution"      -> 409   (FE shows modal to pick a head per conflicting slot)
+# - "generate_infeasible"                    -> 409   (FE shows solver_status + issues_sample from .context)
+# - "db_integrity_error"                     -> 500   (unexpected; indicates a bug)
 #
 # API SHAPE
 # ---------
@@ -71,21 +76,53 @@ def _raise(e: ValueError) -> None:
     """
     Convert domain ValueError(code) -> HTTPException.
 
-    This keeps the router declarative and avoids duplicating try/except logic.
+    Rules:
+    - Map known codes to HTTP status.
+    - Always include `context` in the response (at least {}), so FE never loses data.
+    - Optionally override `detail` with a short human-friendly message (code stays stable).
     """
     code = str(e)
+
     mapping = {
         "period_closed": status.HTTP_403_FORBIDDEN,
         "edit_conflict": status.HTTP_409_CONFLICT,
         "cannot_undo": status.HTTP_409_CONFLICT,
         "cannot_redo": status.HTTP_409_CONFLICT,
         "publish_blocked_by_hard_rules": status.HTTP_409_CONFLICT,
-        # Raised when FE sends accepted_exceptions codes that do NOT match current hard violations.
         "invalid_accepted_exception": status.HTTP_400_BAD_REQUEST,
+        "invalid_head_commitment_resolution": status.HTTP_400_BAD_REQUEST,
         "not_found": status.HTTP_404_NOT_FOUND,
+        # generate gatekeeper errors
+        "generate_requires_ignore": status.HTTP_409_CONFLICT,
+        "generate_requires_head_resolution": status.HTTP_409_CONFLICT,
+        "generate_infeasible": status.HTTP_409_CONFLICT,
+        # DB integrity fallback (see SchedulingService._translate_sqla_errors)
+        "db_integrity_error": status.HTTP_500_INTERNAL_SERVER_ERROR,
+        "db_error": status.HTTP_500_INTERNAL_SERVER_ERROR,
     }
+
+    # Short, human-friendly descriptions (optional cosmetic layer).
+    human_detail = {
+        "generate_requires_ignore": "Generation requires ignore_days/ignore_slots to proceed.",
+        "generate_requires_head_resolution": "Generation requires choosing a head for conflicting commitment slots.",
+        "generate_infeasible": "Generation failed: solver could not find a feasible solution.",
+        "invalid_head_commitment_resolution": "Invalid head commitment resolution payload.",
+        "db_integrity_error": "Database integrity error.",
+        "db_error": "Database error.",
+    }
+
     if code in mapping:
-        raise HTTPException(status_code=mapping[code], detail=make_error(code))
+        # Always return a dict for context (never None), so FE can rely on it.
+        context = getattr(e, "context", None) or {}
+
+        # Prefer explicit human-friendly detail; otherwise keep any attached detail; fallback to code.
+        detail = human_detail.get(code) or getattr(e, "detail", None) or code
+
+        raise HTTPException(
+            status_code=mapping[code],
+            detail=make_error(code, context=context, detail=detail),
+        )
+
     raise e
 
 
@@ -96,13 +133,153 @@ def _raise(e: ValueError) -> None:
     response_model=ScheduleGenerateCreated,
     tags=["schedules:admin"],
     summary="Generate schedule: writes working + creates first draft checkpoint",
+    responses={
+        201: {
+            "description": "Working saved + first draft checkpoint created + diagnostics returned.",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "year": 2026,
+                        "month": 2,
+                        "status": "draft",
+                        "working": {
+                            "year": 2026,
+                            "month": 2,
+                            "exists": True,
+                            "participant_doctor_ids": [101, 102, 103],
+                            "assignments": [
+                                {"day": 1, "shift_type": "onsite", "doctor_id": 101},
+                                {"day": 1, "shift_type": "oncall", "doctor_id": 102},
+                            ],
+                            "meta": {"labels": ["as_generated"], "exceptions": [], "solver_status": "OK"},
+                            "updated_at": "2026-01-28T09:15:00Z",
+                            "lock_version": 2,
+                            "inputs_snapshot": {
+                                "doctors": {
+                                    "101": {
+                                        "role": "specialist",
+                                        "is_head": True,
+                                        "display_name": "Jan Kowalski",
+                                        "is_active_at_snapshot": True,
+                                    }
+                                },
+                                "preference_version_id_by_doctor": {"101": 55, "102": 56, "103": None},
+                            },
+                        },
+                        "draft": {
+                            "version_id": "123",
+                            "checkpoints_count": 1,
+                            "can_undo": False,
+                            "can_redo": False,
+                            "payload": {
+                                "participant_doctor_ids": [101, 102, 103],
+                                "assignments": [
+                                    {"day": 1, "shift_type": "onsite", "doctor_id": 101},
+                                    {"day": 1, "shift_type": "oncall", "doctor_id": 102},
+                                ],
+                                "inputs_snapshot": {
+                                    "doctors": {
+                                        "101": {
+                                            "role": "specialist",
+                                            "is_head": True,
+                                            "display_name": "Jan Kowalski",
+                                            "is_active_at_snapshot": True,
+                                        }
+                                    },
+                                    "preference_version_id_by_doctor": {"101": 55, "102": 56, "103": None},
+                                },
+                                "meta": {"labels": ["as_generated"], "exceptions": [], "solver_status": "OK"},
+                            },
+                        },
+                        "diagnostics": {
+                            "version_id": "123",
+                            "computed_at": "2026-01-28T09:15:01Z",
+                            "summary": {"score_total": 0.83, "coverage_gaps_total": 0, "hard_violations_total": 0},
+                            "details": {},
+                        },
+                    }
+                }
+            },
+        },
+        409: {
+            "description": "Generation blocked or infeasible.",
+            "content": {
+                "application/json": {
+                    "examples": {
+                        "requires_ignore_days_or_slots": {
+                            "summary": "Feasibility pre-check: requires ignore_days/ignore_slots",
+                            "value": {
+                                "code": "generate_requires_ignore",
+                                "detail": "Generation requires ignore_days/ignore_slots to proceed.",
+                                "context": {
+                                    "year": 2026,
+                                    "month": 2,
+                                    "issues_total": 2,
+                                    "issues_truncated": False,
+                                    "issues_summary": [
+                                        {"code": "no_specialist", "count": 1},
+                                        {"code": "no_onsite_candidate", "count": 1},
+                                    ],
+                                    "issues_sample": [
+                                        {
+                                            "day": 3,
+                                            "code": "no_specialist",
+                                            "message": "No specialist is available on this day.",
+                                        },
+                                        {
+                                            "day": 3,
+                                            "code": "no_onsite_candidate",
+                                            "message": "No doctor is available for onsite duty on this day.",
+                                        },
+                                    ],
+                                },
+                            },
+                        },
+                        "infeasible_head_commitments_or_solver": {
+                            "summary": "Head commitments invalid or CP-SAT infeasible",
+                            "value": {
+                                "code": "generate_infeasible",
+                                "detail": "Generation failed: solver could not find a feasible solution.",
+                                "context": {
+                                    "year": 2026,
+                                    "month": 2,
+                                    "solver_status": "INFEASIBLE",
+                                    "issues_total": 1,
+                                    "issues_truncated": False,
+                                    "issues_summary": [{"code": "head_commitment_conflict", "count": 1}],
+                                    "issues_sample": [
+                                        {
+                                            "day": 5,
+                                            "code": "head_commitment_conflict",
+                                            "message": "Multiple heads have a commitment for the same slot. "
+                                            "(shift=onsite, head_id=101, other_head_id=102)",
+                                        }
+                                    ],
+                                },
+                            },
+                        },
+                    }
+                }
+            },
+        },
+    },
 )
 def generate_schedule(
     body: ScheduleGenerateRequest = Body(...),
     user: UserCtx = Depends(require_admin),
 ) -> ScheduleGenerateCreated:
     """
-    Generate a new schedule for {year, month} (MVP: seed + first checkpoint).
+    Generate a new schedule for {year, month}.
+
+    Possible blocking outcomes (409) returned as a structured error:
+    - generate_requires_ignore:
+        context contains issues_* describing which days/slots have no feasible coverage.
+        FE should propose ignore_days/ignore_slots based on issues_sample.
+    - generate_requires_head_resolution:
+        context.head_commitment_conflicts contains conflicting slots and head_candidates.
+        FE should show a modal and resend the request with head_commitment_resolutions[].
+    - generate_infeasible:
+        solver ran but returned non-OK status; context.solver_status + issues_sample help explain why.
     """
     try:
         return svc.generate(body, user_id=user.user_id if user else None)
@@ -118,6 +295,38 @@ def generate_schedule(
     tags=["schedules:admin"],
     summary="Get diagnostics for working, draft, or published schedule",
     operation_id="schedules_diagnostics_get",
+    responses={
+        200: {
+            "description": "Diagnostics computed (and cached for draft/published).",
+            "content": {
+                "application/json": {
+                    "examples": {
+                        "working": {
+                            "summary": "Working diagnostics (includes working_lock_version)",
+                            "value": {
+                                "version_id": "working",
+                                "computed_at": "2026-01-28T09:20:00Z",
+                                "summary": {"score_total": 0.74, "coverage_gaps_total": 2, "hard_violations_total": 0},
+                                "details": {"working_lock_version": 7},
+                            },
+                        },
+                        "draft": {
+                            "summary": "Draft diagnostics (version_id from pointer)",
+                            "value": {
+                                "version_id": "123",
+                                "computed_at": "2026-01-28T09:15:01Z",
+                                "summary": {"score_total": 0.83, "coverage_gaps_total": 0, "hard_violations_total": 0},
+                                "details": {},
+                            },
+                        },
+                    }
+                }
+            },
+        },
+        404: {
+            "description": "Not found (no working row or pointer/version missing).",
+        },
+    },
 )
 def schedules_diagnostics(
     user: UserCtx = Depends(require_admin),  # RBAC: admin only (dopasuj do swojej polityki)

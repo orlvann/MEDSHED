@@ -49,7 +49,6 @@ class DeadlineStatus(str, Enum):
 
 class RiskLevel(str, Enum):
     ok = "ok"
-    alert = "alert"
     critical = "critical"
 
 

@@ -24,12 +24,18 @@ CORE INVARIANTS & TYPES
 - Working is disjoint from history (it is NOT a source of truth for past states).
 - Pointers (SchedulePointer) provide O(1) access to current draft/published versions.
 - Enums from backend.models.common_enums are the single source of truth (no raw strings).
-- Domain errors are raised as ValueError with a short code:
+- Domain errors are raised as ValueError with a short code.
+- Some errors are raised as DomainError (subclass of ValueError) and can also carry:
+    * .context (structured machine-readable payload for FE)
+    * .detail  (optional human-friendly detail string)
   * "edit_conflict"  — optimistic concurrency violation on working PUT
   * "cannot_undo"    — there is no previous version to revert to
   * "cannot_redo"    — there is no next version to move forward to
   * "publish_blocked_by_hard_rules" — hard constraints prevent publishing without force
   * "not_found"      — requested entity/pointer/version does not exist
+  * "generate_requires_ignore" — feasibility pre-check found blocking issues (see .context)
+  * "generate_infeasible" — solver did not return SolverStatus.OK (see .context.solver_status)
+
 
 TRANSACTIONAL POLICY (MVP)
 --------------------------
@@ -43,9 +49,10 @@ This module keeps routers thin. All domain rules live here.
 from __future__ import annotations
 
 import calendar
+from collections import Counter
 from datetime import datetime
 from functools import wraps
-from typing import Any, Dict, List, Literal, Optional, cast
+from typing import Any, Dict, List, Literal, Optional, Sequence, cast
 
 from sqlalchemy import delete, func, select
 
@@ -54,10 +61,15 @@ from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from backend.core import diagnostics as core_diagnostics
+from backend.core import feasibility as core_feasibility
 from backend.core import issues
-from backend.core.types import DoctorInput, PreferencesInput, ProblemData
+from backend.core.types import DoctorInput, FeasibilityIssue, PreferencesInput, ProblemData, SolverStatus
 from backend.db.session import SessionLocal
-from backend.models.common_enums import PeriodStatus, ScheduleStatus, ShiftType
+from backend.models.common_enums import (
+    PeriodStatus,
+    ScheduleStatus,
+    ShiftType,
+)
 from backend.models.orm.doctor import Doctor
 from backend.models.orm.preference import PreferencePointer, PreferenceVersion
 from backend.models.orm.schedule import (
@@ -70,6 +82,7 @@ from backend.models.schemas.diagnostics import DiagnosticsRead, DiagnosticsSumma
 from backend.models.schemas.schedule import (
     AcceptedException,
     Assignment,
+    HeadCommitmentResolution,
     MyAssignment,
     MyAssignmentsRead,
     ScheduleCheckpointCreated,
@@ -88,6 +101,7 @@ from backend.models.schemas.schedule import (
     _ViewHint,
 )
 from backend.services import diagnostics_service
+from backend.services.errors import DomainError
 from backend.utils import ORG_TZ, days_in_month, get_period_status, normalize_assignments, normalize_meta, now_utc
 
 # Retention policy (FIFO): tune here
@@ -95,14 +109,167 @@ from backend.utils import ORG_TZ, days_in_month, get_period_status, normalize_as
 RETAIN_LAST_DRAFTS = 5
 RETAIN_LAST_PUBLISHED = 5
 
+# ---- Error helpers (stable, deterministic payloads for FE) -------------------
 
+ISSUES_SAMPLE_LIMIT = 30
+
+
+def _detect_head_commitment_conflicts(problem: ProblemData) -> List[Dict[str, Any]]:
+    """
+    Detect "multiple heads want the same slot" conflicts based purely on preferences.
+
+    Returns a list of conflicts:
+      [{"day": 3, "shift_type": "onsite", "head_ids": [10, 12]}, ...]
+    Deterministic order: by (day, shift_type).
+    """
+    # Collect head ids that are actually in this ProblemData + participant pool
+    head_ids = sorted(
+        [
+            int(doc_id)
+            for doc_id, doc in problem.doctors.items()
+            if doc is not None and bool(doc.is_head) and int(doc_id) in set(problem.participant_doctor_ids)
+        ]
+    )
+
+    wanted: Dict[tuple[int, ShiftType], List[int]] = {}
+
+    for hid in head_ids:
+        pref = problem.preferences.get(hid)
+        if pref is None:
+            continue
+
+        for day in pref.preferred_onsite_days or []:
+            wanted.setdefault((int(day), ShiftType.onsite), []).append(int(hid))
+
+        for day in pref.preferred_oncall_days or []:
+            wanted.setdefault((int(day), ShiftType.oncall), []).append(int(hid))
+
+    conflicts: List[Dict[str, Any]] = []
+    for (day, st), ids in wanted.items():
+        uniq = sorted({int(x) for x in ids})
+        if len(uniq) > 1:
+            conflicts.append({"day": int(day), "shift_type": st.value, "head_ids": uniq})
+
+    conflicts.sort(key=lambda x: (int(x["day"]), str(x["shift_type"])))
+    return conflicts
+
+
+def _apply_head_commitment_resolutions(problem: ProblemData, resolutions: List[HeadCommitmentResolution]) -> None:
+    """
+    Apply admin resolutions by editing ProblemData.preferences in-place.
+
+    Rule:
+    - For each (day, shift_type) resolution:
+      * chosen_head keeps this day in preferred_*_days for that shift,
+      * every other head has this day removed from their preferred_*_days for that shift.
+
+    IMPORTANT:
+    - This is NOT persisted to DB preferences. It's only for this generate request.
+    """
+    if not resolutions:
+        return
+
+    # Build a fast head set for validation
+    head_ids = {
+        int(doc_id)
+        for doc_id, doc in problem.doctors.items()
+        if doc is not None and bool(doc.is_head) and int(doc_id) in set(problem.participant_doctor_ids)
+    }
+
+    # Deduplicate by (day, shift_type): keep last (request validator also does this, but keep it defensive)
+    last_by_slot: Dict[tuple[int, ShiftType], int] = {}
+    for r in resolutions:
+        slot = (int(r.day), ShiftType(r.shift_type))
+        last_by_slot[slot] = int(r.chosen_head_id)
+
+    for (day, st), chosen in last_by_slot.items():
+        if int(chosen) not in head_ids:
+            raise ValueError("invalid_head_commitment_resolution")
+
+        for hid in sorted(head_ids):
+            pref = problem.preferences.get(int(hid))
+            if pref is None:
+                continue
+
+            if st == ShiftType.onsite:
+                days = list(pref.preferred_onsite_days or [])
+                if int(hid) == int(chosen):
+                    # Ensure chosen has this day
+                    if int(day) not in set(days):
+                        days.append(int(day))
+                else:
+                    # Remove from others
+                    days = [int(d) for d in days if int(d) != int(day)]
+                pref.preferred_onsite_days = sorted({int(d) for d in days})
+
+            else:  # ShiftType.oncall
+                days = list(pref.preferred_oncall_days or [])
+                if int(hid) == int(chosen):
+                    if int(day) not in set(days):
+                        days.append(int(day))
+                else:
+                    days = [int(d) for d in days if int(d) != int(day)]
+                pref.preferred_oncall_days = sorted({int(d) for d in days})
+
+
+def _build_issues_context(
+    *,
+    year: int,
+    month: int,
+    issues: Sequence[FeasibilityIssue],
+    limit: int = ISSUES_SAMPLE_LIMIT,
+) -> Dict[str, Any]:
+    """
+    Build a stable, deterministic context payload for FE when generation is blocked.
+
+    We always return:
+    - issues_sample: first N issues sorted by (day, code)
+    - issues_total: total issues count
+    - issues_truncated: whether we cut the list
+    - issues_summary: counts per code (sorted by code)
+    """
+
+    # 1) Normalize issues to plain dicts (defensive: tolerate different shapes)
+    normalized: List[Dict[str, Any]] = []
+    for it in issues:
+        # FeasibilityIssue is expected, but getattr keeps it defensive.
+        day = int(getattr(it, "day", 0))
+        code = str(getattr(it, "code", "unknown"))
+        message = str(getattr(it, "message", code))
+
+        normalized.append({"day": day, "code": code, "message": message})
+
+    # 2) Deterministic order: by day, then code
+    normalized.sort(key=lambda x: (int(x["day"]), str(x["code"])))
+
+    # 3) Compute totals + truncation
+    total = len(normalized)
+    sample = normalized[: int(limit)]
+    truncated = total > int(limit)
+
+    # 4) Summary (counts per code) in deterministic order
+    counts = Counter([str(x["code"]) for x in normalized])
+    summary = [{"code": code, "count": int(counts[code])} for code in sorted(counts.keys())]
+
+    return {
+        "year": int(year),
+        "month": int(month),
+        "issues_sample": sample,
+        "issues_total": int(total),
+        "issues_truncated": bool(truncated),
+        "issues_summary": summary,
+    }
+
+
+# ------------------------ SQLAlchemy error translation ------------------------
 def _translate_sqla_errors(func):
     """
     Decorator that converts raw SQLAlchemy exceptions into our domain ValueError codes.
-    Rules:
-      - IntegrityError -> ValueError("edit_conflict")
-      - Any other SQLAlchemyError -> ValueError("not_found")
-      - Domain ValueError passes through unchanged (we don't touch it).
+
+    Notes:
+    - Not every IntegrityError is an OCC conflict.
+      It can also be FK/NOT NULL/UNIQUE errors unrelated to optimistic concurrency.
+    - We map to edit_conflict only when the error message strongly suggests OCC/lock_version issues.
     """
 
     @wraps(func)
@@ -112,12 +279,23 @@ def _translate_sqla_errors(func):
         except ValueError:
             # domain errors are already correct; let the router map them.
             raise
-        except IntegrityError:
-            # treat integrity/unique/OCC-like DB issues as edit conflicts.
-            raise ValueError("edit_conflict")
+        except IntegrityError as ex:
+            # Heuristic: treat as OCC conflict only if it mentions lock_version.
+            # Otherwise, return a distinct code so we don't lie with "edit_conflict".
+            msg = ""
+            try:
+                msg = str(getattr(ex, "orig", "") or str(ex)).lower()
+            except Exception:
+                msg = str(ex).lower()
+
+            if "lock_version" in msg:
+                raise ValueError("edit_conflict")
+
+            raise ValueError("db_integrity_error")
         except SQLAlchemyError:
-            # safe fallback for DB-layer problems that should not leak details.
-            raise ValueError("not_found")
+            # Any SQLAlchemyError here means "server/DB problem", NOT "not found".
+            # We translate it to a stable domain code that router maps to HTTP 500.
+            raise ValueError("db_error")
 
     return _wrapped
 
@@ -353,7 +531,6 @@ def _published_neighbors(session: Session, year: int, month: int, current_id: in
     - has_prev: exists published with id < current_id
     - has_next: exists published with id > current_id
     """
-    # any older?
     older = session.scalar(
         select(func.max(ScheduleVersion.id)).where(
             ScheduleVersion.year == year,
@@ -362,7 +539,6 @@ def _published_neighbors(session: Session, year: int, month: int, current_id: in
             ScheduleVersion.id < current_id,
         )
     )
-    # any newer?
     newer = session.scalar(
         select(func.min(ScheduleVersion.id)).where(
             ScheduleVersion.year == year,
@@ -386,7 +562,6 @@ def _prune_drafts(session: Session, year: int, month: int, *, keep_last: int = 5
     if keep_last <= 0:
         return
 
-    # Collect all draft ids ascending (oldest first)
     ids = session.scalars(
         select(ScheduleVersion.id)
         .where(
@@ -404,12 +579,10 @@ def _prune_drafts(session: Session, year: int, month: int, *, keep_last: int = 5
     to_delete = ids[:overflow]
     remaining = ids[overflow:]
 
-    # Delete diagnostics for to-be-deleted versions
     if to_delete:
         session.execute(delete(ScheduleDiagnostics).where(ScheduleDiagnostics.version_id.in_(to_delete)))
         session.execute(delete(ScheduleVersion).where(ScheduleVersion.id.in_(to_delete)))
 
-    # Fix pointer if needed
     ptr = _ensure_pointer(session, year, month)
     if ptr.current_draft_version_id and int(ptr.current_draft_version_id) in to_delete:
         ptr.current_draft_version_id = remaining[-1] if remaining else None
@@ -488,8 +661,8 @@ def _compute_or_upsert_diagnostics(
             year=year,
             month=month,
             participant_doctor_ids=list(payload.get("participant_doctor_ids") or []),
-            ignore_days=[],
             ignore_slots=[],
+            head_commitment_resolutions=[],
         )
         problem = _build_problem_data_for_generate(session, req)
 
@@ -525,14 +698,8 @@ def _hard_rule_violations(payload: Dict[str, Any]) -> List[Dict[str, str]]:
     """
     Evaluate hard (non-overridable) rule violations for a schedule payload.
 
-    Production intent:
-    - This function should run deterministic validations derived from domain rules
-      (e.g., legal staffing minima, rest-period hard constraints).
-    - Return a list of {code, message} dicts. Empty list means "no hard violations".
-
     Current behavior (MVP):
     - Returns an empty list to keep publishing unblocked during development.
-    - Replace with real checks once the solver/validator is wired into the service.
     """
     return []
 
@@ -545,31 +712,14 @@ def _normalize_snapshot_payload(raw: Dict[str, Any]) -> Dict[str, Any]:
     - Ensures participant_doctor_ids are integers (defensive cast).
     - Normalizes assignments (handles Enum values; sorts & dedupes by (day, shift_type, doctor_id)).
     - Normalizes meta (labels unique & sorted; exceptions must be a list).
-    - Preserves inputs_snapshot if present (it is already "frozen inputs" for this schedule).
-
-    Why:
-    - Keep all versions deterministic and comparable (no false diffs due to order/dup).
-    - Make snapshots tolerant to upstream sources that might pass Enum objects.
-
-    Note:
-    - This helper is used for *immutable* snapshots (draft/published).
-      Working (autosave) is normalized in `save_working` separately.
+    - Preserves inputs_snapshot if present.
     """
     payload = dict(raw or {})
 
-    # Defensive cast of participants to ints
     pids = payload.get("participant_doctor_ids") or []
     payload["participant_doctor_ids"] = [int(x) for x in pids]
 
-    # Preserve the frozen inputs snapshot (do not recompute here).
-    # The snapshot is created once at generate() and then copied forward.
-    if "inputs_snapshot" in payload:
-        payload["inputs_snapshot"] = payload.get("inputs_snapshot")
-
-    # Assignments: coerce possible Enums to their .value and normalize
     payload["assignments"] = normalize_assignments(cast(List[Dict[str, Any]], payload.get("assignments", []) or []))
-
-    # Meta: ensure labels unique & sorted; exceptions list
     payload["meta"] = normalize_meta(cast(Dict[str, Any], payload.get("meta") or {"labels": []}))
 
     return payload
@@ -579,9 +729,6 @@ def _normalize_snapshot_payload(raw: Dict[str, Any]) -> Dict[str, Any]:
 def _doctor_display_name(d: Doctor) -> str:
     """
     Build a stable display name for snapshotting.
-
-    We snapshot display_name because doctor names can change later, but old schedules
-    should still show the original names used at generation time.
     """
     first = (d.first_name or "").strip()
     last = (d.last_name or "").strip()
@@ -600,17 +747,13 @@ def _build_inputs_snapshot(
     Create the frozen inputs snapshot for the schedule payload.
 
     IMPORTANT:
-    - This must reflect what the solver actually used.
-    - We use the same period ({year, month}) and the final participant_doctor_ids
-      from ProblemData (already intersected with active doctors in DB).
-    - We read PreferencePointer.current_version_id, because that's exactly what
-      _build_problem_data_for_generate() uses when loading preference payloads.
+    - Snapshot uses PreferencePointer.current_version_id for {year, month},
+      because that's what ProblemData loading uses at generation time.
     """
     ids = sorted({int(x) for x in (participant_doctor_ids or set())})
     if not ids:
         return {"doctors": {}, "preference_version_id_by_doctor": {}}
 
-    # 1) Doctor snapshot: role, is_head, display_name, is_active_at_snapshot
     db_doctors = session.scalars(select(Doctor).where(Doctor.id.in_(ids))).all()
     by_id: Dict[int, Doctor] = {int(d.id): d for d in db_doctors}
 
@@ -618,7 +761,6 @@ def _build_inputs_snapshot(
     for doctor_id in ids:
         d = by_id.get(int(doctor_id))
         if d is None:
-            # Defensive fallback: keep the key to satisfy "snapshot must not be empty".
             doctors_snapshot[int(doctor_id)] = {
                 "role": "specialist",
                 "is_head": False,
@@ -627,7 +769,6 @@ def _build_inputs_snapshot(
             }
             continue
 
-        # Store role as plain string value for JSON compatibility.
         doctors_snapshot[int(doctor_id)] = {
             "role": d.role.value if hasattr(d.role, "value") else str(d.role),
             "is_head": bool(d.is_head),
@@ -635,7 +776,6 @@ def _build_inputs_snapshot(
             "is_active_at_snapshot": bool(d.is_active),
         }
 
-    # 2) Preference versions used at generation: doctor_id -> pointer.current_version_id | None
     pref_map: Dict[int, Optional[int]] = {int(doctor_id): None for doctor_id in ids}
 
     ptr_rows = session.scalars(
@@ -648,7 +788,6 @@ def _build_inputs_snapshot(
 
     for ptr in ptr_rows:
         did = int(ptr.doctor_id)
-        # Keep key for each participant; value can be None when no checkpoint exists.
         pref_map[did] = int(ptr.current_version_id) if ptr.current_version_id is not None else None
 
     return {
@@ -662,27 +801,26 @@ def _build_problem_data_for_generate(session: Session, req: ScheduleGenerateRequ
     """
     Build ProblemData for a generate request.
 
-    ```
     This helper:
     - computes the list of days in the month,
     - loads active doctors from DB and maps them to DoctorInput,
     - intersects requested participant_doctor_ids with active doctors in DB,
     - builds PreferencesInput per participant doctor from PreferencePointer/PreferenceVersion (or defaults),
-    - converts ignore_days and ignore_slots from the request to sets.
+    - converts ignore_slots from the request to a set[(day, ShiftType)].
+
+    IMPORTANT POLICY:
+    - ignore_days does NOT exist anymore.
+    - A whole day is ignored only by including BOTH slots in ignore_slots.
     """
 
-    # Parse year and month as plain integers
     year = int(req.year)
     month = int(req.month)
 
-    # 1) Days of the month: 1..N using days_in_month helper
     days_count = days_in_month(year, month)
     days = list(range(1, days_count + 1))
 
-    # Map each calendar day to its weekday (0=Mon .. 6=Sun)
     weekdays = {day: calendar.weekday(year, month, day) for day in days}
 
-    # 2) Load doctors from DB (requested ids, filtered to is_active=True)
     requested_ids = {int(did) for did in (req.participant_doctor_ids or [])}
     doctors: Dict[int, DoctorInput] = {}
 
@@ -699,7 +837,6 @@ def _build_problem_data_for_generate(session: Session, req: ScheduleGenerateRequ
     active_ids: set[int] = set()
 
     for d in db_doctors:
-        # Build minimal DoctorInput used by the solver
         doctors[int(d.id)] = DoctorInput(
             id=int(d.id),
             role=d.role,
@@ -709,15 +846,10 @@ def _build_problem_data_for_generate(session: Session, req: ScheduleGenerateRequ
         if d.is_active:
             active_ids.add(int(d.id))
 
-    # 3) Participant ids = intersection of requested ids and active doctors from DB
     participant_doctor_ids: set[int] = requested_ids & active_ids
 
-    # 4) Build preferences for each participant doctor
-    #    We use PreferencePointer + PreferenceVersion to read the latest submitted version.
-    #    If anything is missing, we fall back to empty/default PreferencesInput.
     preferences: Dict[int, PreferencesInput] = {}
     if participant_doctor_ids:
-        # Load all pointers for this period and participant doctors in one query
         ptr_rows = session.scalars(
             select(PreferencePointer).where(
                 PreferencePointer.doctor_id.in_(participant_doctor_ids),
@@ -726,31 +858,24 @@ def _build_problem_data_for_generate(session: Session, req: ScheduleGenerateRequ
             )
         ).all()
 
-        # Map doctor_id -> pointer row (only when a version id is present)
         pointers_by_doctor: Dict[int, PreferencePointer] = {
             int(ptr.doctor_id): ptr for ptr in ptr_rows if ptr.current_version_id is not None
         }
 
-        # Collect all version ids that we need to load
         version_ids = {int(ptr.current_version_id) for ptr in ptr_rows if ptr.current_version_id is not None}
 
         versions_by_id: Dict[int, PreferenceVersion] = {}
         if version_ids:
-            # Load all referenced versions in one query
             ver_rows = session.scalars(select(PreferenceVersion).where(PreferenceVersion.id.in_(version_ids))).all()
             versions_by_id = {int(ver.id): ver for ver in ver_rows}
 
-        # Helper to safely convert JSON list fields to a plain list of ints
         def _as_int_list(raw) -> List[int]:
-            # If value is missing or null, return an empty list
             if not raw:
                 return []
             if isinstance(raw, list):
-                # Cast values to int defensively
                 return [int(x) for x in raw]
             return []
 
-        # Build PreferencesInput for each participant doctor
         for doctor_id in participant_doctor_ids:
             payload: Dict[str, Any] = {}
 
@@ -758,39 +883,28 @@ def _build_problem_data_for_generate(session: Session, req: ScheduleGenerateRequ
             if ptr is not None and ptr.current_version_id is not None:
                 ver = versions_by_id.get(int(ptr.current_version_id))
                 if ver is not None and isinstance(ver.payload, dict):
-                    # Copy payload to avoid mutating ORM-attached dict
                     payload = dict(ver.payload or {})
 
-            # Map JSON payload to PreferencesInput; defaults are used when keys are missing
-            # Map JSON payload to PreferencesInput; defaults are used when keys are missing.
-            #
-            # Note: Optional[int] fields can be missing -> None (that's OK).
-            # If later you want stricter typing, you can add a helper like _as_int_or_none().
             preferences[doctor_id] = PreferencesInput(
                 doctor_id=int(doctor_id),
-                # Day-level preferences: 1..31
                 unavailable_onsite_days=_as_int_list(payload.get("unavailable_onsite_days")),
                 unavailable_oncall_days=_as_int_list(payload.get("unavailable_oncall_days")),
                 preferred_onsite_days=_as_int_list(payload.get("preferred_onsite_days")),
                 preferred_oncall_days=_as_int_list(payload.get("preferred_oncall_days")),
-                # Monthly totals (soft caps and targets
                 min_onsite_total=payload.get("min_onsite_total"),
                 max_onsite_total=payload.get("max_onsite_total"),
                 target_onsite_total=payload.get("target_onsite_total"),
                 min_oncall_total=payload.get("min_oncall_total"),
                 max_oncall_total=payload.get("max_oncall_total"),
                 target_oncall_total=payload.get("target_oncall_total"),
-                # Weekend-specific caps and targets
                 max_onsite_weekends=payload.get("max_onsite_weekends"),
                 target_onsite_weekends=payload.get("target_onsite_weekends"),
                 max_oncall_weekends=payload.get("max_oncall_weekends"),
                 target_oncall_weekends=payload.get("target_oncall_weekends"),
-                # Weekly patterns (0=Mon .. 6=Sun)
                 preferred_onsite_weekdays=_as_int_list(payload.get("preferred_onsite_weekdays")),
                 preferred_oncall_weekdays=_as_int_list(payload.get("preferred_oncall_weekdays")),
                 avoid_onsite_weekdays=_as_int_list(payload.get("avoid_onsite_weekdays")),
                 avoid_oncall_weekdays=_as_int_list(payload.get("avoid_oncall_weekdays")),
-                # Flags and relationships
                 allow_weekend_consecutive_onsite_oncall=bool(
                     payload.get("allow_weekend_consecutive_onsite_oncall", False)
                 ),
@@ -798,22 +912,14 @@ def _build_problem_data_for_generate(session: Session, req: ScheduleGenerateRequ
                 comments=payload.get("comments"),
             )
 
-    # When there are no participants, 'preferences' stays empty dict (solver sees no doctors)
-
-    # 5) Ignored days and slots from the request
-    # Keep only days that actually exist in this month (1..days_count).
-    raw_ignore_days: set[int] = {int(day) for day in (req.ignore_days or [])}
-    ignore_days: set[int] = {d for d in raw_ignore_days if 1 <= d <= days_count}
-
+    # ignore_slots from request (validated by Pydantic)
     ignore_slots: set[tuple[int, ShiftType]] = set()
     for slot in req.ignore_slots or []:
-        # slot is IgnoreSlot DTO with day and ShiftType enum
         d = int(slot.day)
         if 1 <= d <= days_count:
             ignore_slots.add((d, slot.shift_type))
 
-    # 6) Build and return ProblemData for the solver
-    return ProblemData(
+    problem = ProblemData(
         year=year,
         month=month,
         days=days,
@@ -821,9 +927,15 @@ def _build_problem_data_for_generate(session: Session, req: ScheduleGenerateRequ
         doctors=doctors,
         preferences=preferences,
         participant_doctor_ids=participant_doctor_ids,
-        ignore_days=ignore_days,
         ignore_slots=ignore_slots,
     )
+
+    try:
+        _apply_head_commitment_resolutions(problem, list(req.head_commitment_resolutions or []))
+    except ValueError:
+        raise ValueError("invalid_head_commitment_resolution")
+
+    return problem
 
 
 def _draft_view(
@@ -880,8 +992,6 @@ class SchedulingService:
 
     # ------------------------------ Working -----------------------------------
     @_translate_sqla_errors
-    # Decorator: wraps this method and translates raw SQLAlchemy exceptions into our domain ValueError codes
-    # (e.g., "edit_conflict", "not_found"), so DB internals don’t leak past the service layer.
     def get_working(self, year: int, month: int) -> ScheduleWorkingRead:
         """
         Read the current working buffer or return a skeleton if it doesn't exist.
@@ -900,26 +1010,17 @@ class SchedulingService:
         if_match_lock_version: Optional[int],
         updated_by_user_id: Optional[int],
     ) -> ScheduleWorkingAck:
-        ...
         with SessionLocal() as session:
-            # Load current working to preserve participant_doctor_ids (and inputs_snapshot).
             w = _get_or_init_working(session, year, month)
             current_payload = dict(w.payload or {})
             current_participants = list(current_payload.get("participant_doctor_ids", []))
-
-            # IMPORTANT:
-            # inputs_snapshot is created once at generate() and must NOT be recalculated on autosave.
             current_inputs_snapshot = current_payload.get("inputs_snapshot")
 
-            # Normalize inputs
             norm_assignments: List[Dict[str, Any]] = normalize_assignments(
                 [a if isinstance(a, dict) else a.model_dump(mode="json") for a in (assignments or [])]
             )
-
             norm_meta = normalize_meta(meta or {"labels": []})
 
-            # Build the new working snapshot WITHOUT touching participant_doctor_ids
-            # and WITHOUT dropping the frozen inputs snapshot.
             payload = {
                 "participant_doctor_ids": current_participants,
                 "assignments": norm_assignments,
@@ -928,7 +1029,6 @@ class SchedulingService:
             if current_inputs_snapshot is not None:
                 payload["inputs_snapshot"] = current_inputs_snapshot
 
-            # OCC write (will raise ValueError("edit_conflict") on mismatch)
             updated_at_dt, lv = _update_working(
                 session,
                 year,
@@ -944,55 +1044,112 @@ class SchedulingService:
     @_translate_sqla_errors
     def generate(self, req: ScheduleGenerateRequest, *, user_id: Optional[int]) -> ScheduleGenerateCreated:
         with SessionLocal() as session:
-            # IMPORTANT:
-            # year/month must be defined in this function scope (Ruff/Pylance errors were about this).
             year = int(req.year)
             month = int(req.month)
 
-            # Build core ProblemData from DB and request
+            # 1) Build ProblemData from DB + request (ignore_slots only)
             problem = _build_problem_data_for_generate(session, req)
 
-            # Lazy import to avoid potential circular imports at module import time
+            # 2) Gatekeeper: feasibility pre-check
+            precheck_issues = core_feasibility.analyze_problem(problem)
+            if precheck_issues:
+                context = _build_issues_context(
+                    year=year, month=month, issues=precheck_issues, limit=ISSUES_SAMPLE_LIMIT
+                )
+                raise DomainError("generate_requires_ignore", context=context)
+
+            # 2b) Gatekeeper: head commitment conflicts must be resolved before solver
+            conflicts = _detect_head_commitment_conflicts(problem)
+            if conflicts:
+                all_ids: set[int] = set()
+                for c in conflicts:
+                    for hid in c.get("head_ids", []):
+                        all_ids.add(int(hid))
+
+                name_by_id: Dict[int, str] = {}
+                if all_ids:
+                    db_heads = session.scalars(select(Doctor).where(Doctor.id.in_(sorted(all_ids)))).all()
+                    for d in db_heads:
+                        name_by_id[int(d.id)] = _doctor_display_name(d)
+
+                conflicts_enriched: List[Dict[str, Any]] = []
+                for c in conflicts:
+                    head_ids = [int(x) for x in (c.get("head_ids") or [])]
+                    conflicts_enriched.append(
+                        {
+                            "day": int(c["day"]),
+                            "shift_type": str(c["shift_type"]),
+                            "head_candidates": [
+                                {"doctor_id": int(hid), "display_name": name_by_id.get(int(hid), f"Doctor {int(hid)}")}
+                                for hid in head_ids
+                            ],
+                        }
+                    )
+
+                conflicts_enriched.sort(key=lambda x: (int(x["day"]), str(x["shift_type"])))
+
+                context = {"year": int(year), "month": int(month), "head_commitment_conflicts": conflicts_enriched}
+                raise DomainError("generate_requires_head_resolution", context=context)
+
             from backend.core import scheduler
 
-            # Call solver to generate schedule result (solution + assignments)
+            # 3) Call solver only when prechecks passed
             result = scheduler.generate_schedule(problem)
-
             solution = result.solution
             solver_assignments = result.assignments
 
-            # Convert solver assignment objects to plain dicts (works for Pydantic, dicts, and simple objects)
+            raw_status = getattr(solution, "status", None)
+            solver_status_value = getattr(raw_status, "value", raw_status)
+
+            if isinstance(solver_status_value, SolverStatus):
+                solver_status_value = solver_status_value.value
+
+            solver_status_value = str(solver_status_value)
+
+            if solver_status_value != SolverStatus.OK.value:
+                context = _build_issues_context(
+                    year=year,
+                    month=month,
+                    issues=(solution.issues or []),
+                    limit=ISSUES_SAMPLE_LIMIT,
+                )
+                context["solver_status"] = solver_status_value
+                raise DomainError("generate_infeasible", context=context)
+
             def _assignment_to_dict(a: Any) -> Dict[str, Any]:
-                # Pydantic v2 models
                 if hasattr(a, "model_dump"):
                     return cast(Dict[str, Any], a.model_dump(mode="json"))
-
-                # Already a dict
                 if isinstance(a, dict):
                     return cast(Dict[str, Any], a)
-
-                # Generic Python object with attributes (fallback)
                 return {
                     "day": int(getattr(a, "day")),
                     "shift_type": getattr(getattr(a, "shift_type"), "value", getattr(a, "shift_type")),
                     "doctor_id": int(getattr(a, "doctor_id")),
                 }
 
-            # Normalize snapshot payload: use participants from ProblemData + solver assignments
+            # Derive ignored full days from ignore_slots (both slots ignored)
+            ignored_days = sorted(
+                {
+                    int(d)
+                    for d in problem.days
+                    if (int(d), ShiftType.onsite) in problem.ignore_slots
+                    and (int(d), ShiftType.oncall) in problem.ignore_slots
+                }
+            )
+
+            exceptions: List[Dict[str, Any]] = []
+            for d in ignored_days:
+                exceptions.append({"code": issues.COVERAGE_IGNORED_DAY, "day": int(d)})
+
+            for d, st in sorted(problem.ignore_slots, key=lambda x: (int(x[0]), str(x[1].value))):
+                exceptions.append({"code": issues.COVERAGE_IGNORED_SLOT, "day": int(d), "shift_type": st.value})
+
             meta = {
                 "labels": ["as_generated"],
-                "exceptions": (
-                    [{"code": issues.COVERAGE_IGNORED_DAY, "day": int(d)} for d in sorted(problem.ignore_days)]
-                    + [
-                        {"code": issues.COVERAGE_IGNORED_SLOT, "day": int(d), "shift_type": st.value}
-                        for (d, st) in sorted(problem.ignore_slots, key=lambda x: (int(x[0]), str(x[1].value)))
-                    ]
-                ),
-                # Store solver status as plain string for JSON/meta
-                "solver_status": solution.status.value,
+                "exceptions": exceptions,
+                "solver_status": solver_status_value,
             }
 
-            # Build inputs_snapshot ONCE here (single source of truth: same period + same participants).
             inputs_snapshot = _build_inputs_snapshot(
                 session,
                 year=year,
@@ -1009,7 +1166,6 @@ class SchedulingService:
                 }
             )
 
-            # Ensure working row exists and overwrite it with the new snapshot
             _get_or_init_working(session, year, month)
             _update_working(
                 session,
@@ -1020,7 +1176,6 @@ class SchedulingService:
                 updated_by_user_id=user_id,
             )
 
-            # Create an immutable draft version based on the same payload (includes inputs_snapshot)
             vid = _insert_version(
                 session,
                 year=year,
@@ -1031,7 +1186,6 @@ class SchedulingService:
                 created_by_role="admin",
             )
 
-            # Snap the pointer to the newest draft id (clear REDO by construction).
             newest_id = (
                 session.scalar(
                     select(func.max(ScheduleVersion.id)).where(
@@ -1079,18 +1233,7 @@ class SchedulingService:
     ) -> ScheduleCheckpointCreated:
         """
         Create a draft checkpoint from current working and move the draft pointer.
-
-        Returns:
-          - Draft view of the just-created checkpoint.
-          - Diagnostics computed for this version.
-
-        Invariant (clear REDO semantics):
-          - New checkpoint becomes the newest snapshot (max version.id) for the month.
-          - The draft pointer is set to this newest id → no "next" (redo) exists.
-          - We enforce this by snapping the pointer to max(id) after insertion.
         """
-
-        # _ensure_editable(year, month)  # Enable later to block edits on past periods
         with SessionLocal() as session:
             w = _get_or_init_working(session, year, month)
             payload = dict(w.payload or {"participant_doctor_ids": [], "assignments": [], "meta": {"labels": []}})
@@ -1107,7 +1250,6 @@ class SchedulingService:
                 created_by_role="admin",
             )
 
-            # Snap the pointer to the newest draft id (clear REDO by construction).
             newest_id = (
                 session.scalar(
                     select(func.max(ScheduleVersion.id)).where(
@@ -1158,26 +1300,16 @@ class SchedulingService:
     ) -> ScheduleRevertRead | SchedulePublishedRevertRead:
         """
         Move pointer backward/forward. For 'draft' also overwrite working with the pointed payload.
-
-        Raises:
-          ValueError("cannot_undo"/"cannot_redo") when movement is not possible.
-          ValueError("not_found") if the pointed version cannot be read.
         """
-        # _ensure_editable(year, month)  # Enable later to block edits on past periods
-
         with SessionLocal() as session:
             ptr = _ensure_pointer(session, year, month)
 
-            # draft branch: pointer move, working overwrite
             if target == "draft":
-                # Guard: there must be a current draft pointer to move from
                 current = ptr.current_draft_version_id
                 if current is None:
                     raise ValueError("cannot_undo" if direction == "prev" else "cannot_redo")
 
-                # Find the neighbor draft version id based on direction
                 if direction == "prev":
-                    # Move pointer to the previous (older) draft version by id
                     prev_id = session.scalar(
                         select(func.max(ScheduleVersion.id)).where(
                             ScheduleVersion.year == year,
@@ -1187,11 +1319,9 @@ class SchedulingService:
                         )
                     )
                     if prev_id is None:
-                        # No older draft exists → cannot undo
                         raise ValueError("cannot_undo")
                     new_id = int(prev_id)
-                else:  # direction == "next"
-                    # Move pointer to the next (newer) draft version by id
+                else:
                     next_id = session.scalar(
                         select(func.min(ScheduleVersion.id)).where(
                             ScheduleVersion.year == year,
@@ -1201,15 +1331,12 @@ class SchedulingService:
                         )
                     )
                     if next_id is None:
-                        # No newer draft exists → cannot redo
                         raise ValueError("cannot_redo")
                     new_id = int(next_id)
 
-                # Update the draft pointer to the newly selected draft
                 ptr.current_draft_version_id = new_id
                 session.add(ptr)
 
-                # Load the pointed draft snapshot and overwrite working payload with it
                 ver = session.get(ScheduleVersion, new_id)
                 if ver is None:
                     raise ValueError("not_found")
@@ -1219,19 +1346,16 @@ class SchedulingService:
                     year,
                     month,
                     payload=ver.payload,
-                    if_match_lock_version=None,  # working overwrite by pointer move is authoritative
+                    if_match_lock_version=None,
                     updated_by_user_id=user_id,
                 )
 
-                # Recompute/refresh diagnostics for the selected draft version
                 diag = _compute_or_upsert_diagnostics(
                     session, year=year, month=month, version_id=new_id, payload=cast(Dict[str, Any], ver.payload)
                 )
 
-                # Read the updated working view for the response
                 working = _read_working_read(session, year, month)
 
-                # Compute flags and counters AFTER the pointer has moved
                 drafts_total = _drafts_total(session, year, month)
                 has_prev, has_next = _draft_neighbors(session, year, month, new_id)
 
@@ -1244,13 +1368,10 @@ class SchedulingService:
                     diagnostics=diag,
                 )
 
-            # published branch: pointer move only (no working overwrite)
             current = ptr.current_published_version_id
             if current is None:
-                # No published head to move from
                 raise ValueError("cannot_undo" if direction == "prev" else "cannot_redo")
 
-            # Choose neighbor published version id based on direction
             if direction == "prev":
                 new_id = session.scalar(
                     select(func.max(ScheduleVersion.id)).where(
@@ -1261,9 +1382,8 @@ class SchedulingService:
                     )
                 )
                 if new_id is None:
-                    # No older published exists → cannot undo
                     raise ValueError("cannot_undo")
-            else:  # direction == "next"
+            else:
                 new_id = session.scalar(
                     select(func.min(ScheduleVersion.id)).where(
                         ScheduleVersion.year == year,
@@ -1273,19 +1393,15 @@ class SchedulingService:
                     )
                 )
                 if new_id is None:
-                    # No newer published exists → cannot redo
                     raise ValueError("cannot_redo")
 
-            # Move the published pointer to the selected neighbor
             ptr.current_published_version_id = int(new_id)
             session.add(ptr)
 
-            # Load the newly pointed published snapshot
             ver = session.get(ScheduleVersion, int(new_id))
             if ver is None:
                 raise ValueError("not_found")
 
-            # Compute flags and counters AFTER the pointer has moved
             publications_total = _published_total(session, year, month)
             has_prev, has_next = _published_neighbors(session, year, month, int(new_id))
 
@@ -1315,19 +1431,14 @@ class SchedulingService:
         user_id: Optional[int],
     ) -> SchedulePublishCreated:
         """
-        Publish current working:
-          - If force=False and hard violations exist → ValueError('publish_blocked_by_hard_rules').
-          - If force=True → append accepted exceptions to payload.meta.exceptions and proceed.
-          - Create a published version and move the published pointer.
+        Publish current working.
         """
-        # _ensure_editable(year, month)  # Enable later to block edits on past periods
         with SessionLocal() as session:
             w = _get_or_init_working(session, year, month)
             payload = dict(w.payload or {"participant_doctor_ids": [], "assignments": [], "meta": {"labels": []}})
 
-            # Normalize entire snapshot in one place (handles enums, sorting, dedup, labels)
             payload = _normalize_snapshot_payload(payload)
-            meta = cast(Dict[str, Any], payload["meta"])  # keep a typed alias for edits below
+            meta = cast(Dict[str, Any], payload["meta"])
 
             hard_violations = _hard_rule_violations(payload)
 
@@ -1343,7 +1454,6 @@ class SchedulingService:
 
                     ex_list = list(meta.get("exceptions", []))
                     for e in accepted_exceptions:
-                        # IMPORTANT: keep JSON-serializable values inside payload JSON.
                         ex_list.append(
                             {
                                 "code": e.code,
@@ -1370,9 +1480,7 @@ class SchedulingService:
 
             _compute_or_upsert_diagnostics(session, year=year, month=month, version_id=vid, payload=payload)
 
-            _prune_published(
-                session, year, month, keep_last=RETAIN_LAST_PUBLISHED
-            )  # no-op for now; retention policy to be defined
+            _prune_published(session, year, month, keep_last=RETAIN_LAST_PUBLISHED)
 
             audit = {"published_at": now_utc(), "published_by_user_id": user_id, "note": note or "Finalize"}
 
@@ -1398,9 +1506,6 @@ class SchedulingService:
     def get_published(self, year: int, month: int) -> SchedulePublishedRead:
         """
         Read the current published snapshot (pointer-based).
-
-        Raises:
-        ValueError("not_found") if there is no published pointer or version.
         """
         with SessionLocal() as session:
             ptr = session.get(SchedulePointer, {"year": year, "month": month})
@@ -1433,13 +1538,6 @@ class SchedulingService:
     def get_my_assignments(self, year: int, month: int, *, doctor_id: int) -> MyAssignmentsRead:
         """
         Return assignments for a single doctor from the current PUBLISHED schedule.
-
-        Important:
-        - This reads ONLY the published pointer (doctor path must be stable).
-        - It filters assignments by doctor_id and returns a small, doctor-focused DTO.
-
-        Raises:
-        ValueError("not_found") when there is no published schedule for the period.
         """
         with SessionLocal() as session:
             ptr = session.get(SchedulePointer, {"year": year, "month": month})
@@ -1450,7 +1548,6 @@ class SchedulingService:
             if ver is None:
                 raise ValueError("not_found")
 
-            # Parse payload through the DTO to safely coerce types (ShiftType enum, day ints, etc.).
             payload_obj = SchedulePayload.model_validate(ver.payload)
 
             mine: List[MyAssignment] = []
@@ -1458,7 +1555,6 @@ class SchedulingService:
                 if int(a.doctor_id) == int(doctor_id):
                     mine.append(MyAssignment(day=int(a.day), shift_type=a.shift_type))
 
-            # Defensive deterministic ordering (should already be normalized).
             mine = sorted(mine, key=lambda x: (int(x.day), str(x.shift_type.value)))
 
             return MyAssignmentsRead(
@@ -1474,11 +1570,6 @@ class SchedulingService:
     ) -> DiagnosticsRead:
         """
         Return diagnostics for the selected stream of {year, month}.
-
-        Streams:
-        - working   -> live autosave buffer (NOT pointer-based, NOT cached in ScheduleDiagnostics)
-        - draft     -> pointer-based immutable version (cached/upserted)
-        - published -> pointer-based immutable version (cached/upserted)
         """
         with SessionLocal() as db:
             if target == "working":
@@ -1488,9 +1579,6 @@ class SchedulingService:
 
                 payload = cast(Dict[str, Any], w.payload or {})
 
-                # Deterministic working diagnostics:
-                # - use payload.inputs_snapshot to load doctors+preference versions used at generation time
-                # - fallback to DB-based loading only if snapshot is missing (older payloads)
                 if payload.get("inputs_snapshot") is not None:
                     problem = diagnostics_service.build_problem_data_from_schedule_snapshot(
                         db=db,
@@ -1503,8 +1591,8 @@ class SchedulingService:
                         year=year,
                         month=month,
                         participant_doctor_ids=list(payload.get("participant_doctor_ids") or []),
-                        ignore_days=[],
                         ignore_slots=[],
+                        head_commitment_resolutions=[],
                     )
                     problem = _build_problem_data_for_generate(db, req)
 
@@ -1525,7 +1613,6 @@ class SchedulingService:
                     details=details,
                 )
 
-            # -------------------------- target=draft/published -------------------------
             ptr = db.get(SchedulePointer, {"year": year, "month": month})
             if not ptr:
                 raise ValueError("not_found")
@@ -1552,36 +1639,20 @@ class SchedulingService:
     def get_period_view(self, year: int, month: int) -> SchedulesPeriodViewRead:
         """
         Build a unified Period View for Admin tab.
-
-        Policy:
-        - Skeleton when nothing exists.
-        - Always include 'working' if present.
-        - Include DRAFT view only when a draft pointer exists (no synthetic draft here).
-        - Include PUBLISHED view only when a published pointer exists.
-        - Include diagnostics only when we have a real draft version_id (pointer-based).
-        - Toggle logic:
-          * default_mode="published" if draft pointer is missing but published exists; else "draft".
-          * toggle_available=True only if both draft and published pointers exist.
         """
         with SessionLocal() as session:
             period_status = PeriodStatus(get_period_status(year, month))
 
-            # Working (explicit read; may return skeleton with exists=False)
             working = _read_working_read(session, year, month)
 
-            # Pointers (may be None)
             ptr = session.get(SchedulePointer, {"year": year, "month": month})
             has_draft_ptr = bool(ptr and ptr.current_draft_version_id is not None)
             has_pub_ptr = bool(ptr and ptr.current_published_version_id is not None)
 
-            # View hint (toggle + default mode) computed from pointers:
-            # - default to "published" only when draft pointer is missing and published exists
-            # - toggle only when both streams exist
             default_mode = "published" if (not has_draft_ptr and has_pub_ptr) else "draft"
             toggle_available = bool(has_draft_ptr and has_pub_ptr)
             view_hint = _ViewHint(default_mode=default_mode, toggle_available=toggle_available)
 
-            # Early skeleton: no working and no pointers at all
             if (not working.exists) and not has_draft_ptr and not has_pub_ptr:
                 return SchedulesPeriodViewRead(
                     year=year,
@@ -1590,12 +1661,11 @@ class SchedulingService:
                     period_status=period_status,
                     view=view_hint,
                     working=working,
-                    draft=ScheduleDraftView(),  # empty
-                    published=SchedulePublishedView(),  # empty
+                    draft=ScheduleDraftView(),
+                    published=SchedulePublishedView(),
                     diagnostics=None,
                 )
 
-            # Build DRAFT (only if a real draft pointer exists)
             draft_view = ScheduleDraftView()
             diagnostics: DiagnosticsRead | None = None
             if has_draft_ptr:
@@ -1615,12 +1685,10 @@ class SchedulingService:
                     count=drafts_total,
                 )
 
-                # Diagnostics only when draft pointer exists (period view shows draft KPIs)
                 diagnostics = _compute_or_upsert_diagnostics(
                     session, year=year, month=month, version_id=did, payload=cast(Dict[str, Any], ver.payload)
                 )
 
-            # Build PUBLISHED (only if published pointer exists)
             published_view = SchedulePublishedView()
             if has_pub_ptr:
                 pid = int(ptr.current_published_version_id)  # type: ignore[union-attr]
@@ -1649,5 +1717,5 @@ class SchedulingService:
                 working=working,
                 draft=draft_view,
                 published=published_view,
-                diagnostics=diagnostics,  # None when no draft pointer
+                diagnostics=diagnostics,
             )
