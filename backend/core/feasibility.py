@@ -9,7 +9,7 @@ impossibilities early and provide clear diagnostics to the caller.
 No SQLAlchemy, no FastAPI, no OR-Tools — pure core logic only.
 
 POLICY (must match constraint_builder.py):
-- ignore_days: whole day is removed from solver scope (no slots required).
+- ignore_days is NOT used anymore.
 - ignore_slots: individual (day, shift_type) slots removed from scope (not required).
 - If BOTH shifts are ignored for a day (via ignore_slots), day is effectively skipped.
 """
@@ -30,7 +30,7 @@ class DayCapacity:
     Capacity summary for a single day.
 
     We count how many doctors of each role can work each shift
-    (taking ignore_days + ignore_slots + unavailable days into account).
+    (taking ignore_slots + unavailable days into account).
 
     IMPORTANT:
     - We also keep candidate ID sets for onsite and oncall.
@@ -56,7 +56,7 @@ def compute_day_capacity(problem: ProblemData) -> Dict[int, DayCapacity]:
     Build capacity summary for each day that is in solver scope.
 
     Rules:
-    - If day is in ignore_days -> day is skipped entirely.
+    - ignore_days is NOT used anymore.
     - If BOTH shifts are ignored via ignore_slots -> day is skipped entirely.
     - For remaining days, build candidate sets/counts only for REQUIRED slots.
     """
@@ -64,10 +64,6 @@ def compute_day_capacity(problem: ProblemData) -> Dict[int, DayCapacity]:
 
     for day in problem.days:
         day = int(day)
-
-        # Whole day ignored -> solver does not schedule it -> no feasibility checks needed.
-        if day in (problem.ignore_days or set()):
-            continue
 
         # If both shifts are ignored, solver does not schedule this day at all.
         both_ignored = (day, ShiftType.onsite) in problem.ignore_slots and (
@@ -116,8 +112,8 @@ def analyze_problem(problem: ProblemData) -> List[FeasibilityIssue]:
     Run quick feasibility checks before building the CP-SAT model.
 
     Rules:
-    - ignore_days: whole day is not checked (not required at all).
     - ignore_slots: ignored slot is not required and is not checked.
+    - A day is skipped only when BOTH slots are ignored via ignore_slots.
     """
     issues: List[FeasibilityIssue] = []
 

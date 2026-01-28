@@ -35,7 +35,8 @@ def validate_head_commitments(model: HardModel) -> List[FeasibilityIssue]:
     Validate "Head commitments" (must-have head preferred slots) using HardModel.allowed_slots.
 
     Rules (confirmed):
-    - If a head prefers a slot that is ignored -> issue
+    - ignore_days is NOT used anymore.
+    - If a head prefers a slot that is ignored (in ignore_slots) -> issue
     - If a head is not allowed for the preferred slot -> issue
     - If multiple heads prefer the same slot -> issue
     - If the same head prefers onsite and oncall on the same day -> issue
@@ -69,7 +70,7 @@ def validate_head_commitments(model: HardModel) -> List[FeasibilityIssue]:
 
         # ---- Onsite commitments ---------------------------------------------
         for d in sorted(pref.preferred_onsite_days):
-            if d in model.ignore_days or (d, ShiftType.onsite) in model.ignore_slots:
+            if (d, ShiftType.onsite) in model.ignore_slots:
                 _add_issue(d, HEAD_COMMITMENT_IGNORED_SLOT, extra=f"(head_id={head_id}, shift=onsite)")
                 continue
 
@@ -91,7 +92,7 @@ def validate_head_commitments(model: HardModel) -> List[FeasibilityIssue]:
 
         # ---- Oncall commitments ---------------------------------------------
         for d in sorted(pref.preferred_oncall_days):
-            if d in model.ignore_days or (d, ShiftType.oncall) in model.ignore_slots:
+            if (d, ShiftType.oncall) in model.ignore_slots:
                 _add_issue(d, HEAD_COMMITMENT_IGNORED_SLOT, extra=f"(head_id={head_id}, shift=oncall)")
                 continue
 

@@ -183,6 +183,11 @@ def build_problem_data_from_schedule_snapshot(
       },
       "meta": {...}
     }
+
+    IMPORTANT POLICY:
+    - ignore_days does NOT exist anywhere in the flow anymore.
+    - ignore_slots is derived inside core from payload.meta.exceptions (coverage_ignored_slot).
+    - We keep ignore_slots empty here (core will compute the effective ignored slots).
     """
     inputs_snapshot = schedule_payload.get("inputs_snapshot") or {}
     if not isinstance(inputs_snapshot, dict):
@@ -216,7 +221,7 @@ def build_problem_data_from_schedule_snapshot(
                 except Exception:
                     pref_version_by_doc[doc_id] = None
 
-    version_ids: set[int] = set(v for v in pref_version_by_doc.values() if isinstance(v, int))
+    version_ids: set[int] = {int(v) for v in pref_version_by_doc.values() if isinstance(v, int)}
     payload_by_version_id = _load_preference_versions_by_id(db, version_ids)
 
     # Build PreferencesInput per participant doctor
@@ -240,9 +245,7 @@ def build_problem_data_from_schedule_snapshot(
         doctors=dict(doctors),
         preferences=dict(preferences),
         participant_doctor_ids=set(participants),
-        # ignore_days/ignore_slots are handled by core via meta.exceptions parsing,
-        # but we keep them here for completeness (future use).
-        ignore_days=set(),
+        # ignore_slots are derived by core from payload.meta.exceptions, so we keep an empty set here.
         ignore_slots=set(),
     )
 

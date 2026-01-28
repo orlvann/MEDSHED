@@ -1,6 +1,6 @@
 # test_objective_weekday_patterns.py
 """
-Soft-objective tests for weekday patterns (ETAP 4A).
+Soft-objective tests for weekday patterns.
 
 We verify that weekday-pattern terms break ties between multiple FEASIBLE solutions:
 
@@ -80,7 +80,6 @@ def test_preferred_weekday_breaks_tie(make_hard_model, make_doctors, make_prefer
         doctors=doctors,
         preferences=prefs,
         participant_doctor_ids=set(doctors.keys()),
-        ignore_days=set(),
         ignore_slots=set(),
         allowed_slots=allowed_slots,
     )
@@ -150,7 +149,6 @@ def test_avoid_weekday_breaks_tie(make_hard_model, make_doctors, make_preference
         doctors=doctors,
         preferences=prefs,
         participant_doctor_ids=set(doctors.keys()),
-        ignore_days=set(),
         ignore_slots=set(),
         allowed_slots=allowed_slots,
     )

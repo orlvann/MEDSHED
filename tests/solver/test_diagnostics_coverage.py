@@ -1,4 +1,3 @@
-# tests/solver/test_diagnostics_coverage.py
 """
 Core diagnostics coverage tests.
 
@@ -11,8 +10,8 @@ Goal:
 We also keep info findings about what was ignored during generation.
 
 IMPORTANT (unified codes):
-- We require code=issues.COVERAGE_IGNORED_DAY / issues.COVERAGE_IGNORED_SLOT everywhere.
-- We do NOT accept legacy "ignored_day"/"ignored_slot" in these tests anymore.
+- We require code=issues.COVERAGE_IGNORED_SLOT everywhere.
+- Day-level ignore is NOT used anymore (admin ignores slots only).
 """
 
 from __future__ import annotations
@@ -56,7 +55,7 @@ def _one_doctor_problem(make_problem_data, *, days: list[int]):
 
 def _gap_findings(out: dict) -> list[dict]:
     """Return only gap findings (missing required slot)."""
-    return [f for f in out["details"]["findings"] if f.get("code") == "coverage_missing_required_slot"]
+    return [f for f in out["details"]["findings"] if f.get("code") == issues.COVERAGE_MISSING_REQUIRED_SLOT]
 
 
 def _info_findings(out: dict) -> list[dict]:
@@ -80,15 +79,23 @@ def test_coverage_gaps_counted_per_slot(make_problem_data):
     assert all(bool(g.get("context", {}).get("was_ignored")) is False for g in gaps)
 
 
-def test_coverage_ignored_day_does_not_hide_gaps_but_marks_them(make_problem_data):
-    # coverage_ignored_day(1) does NOT remove requirements in diagnostics.
-    # Day 1 still has 2 gaps, but both should be marked was_ignored=True.
-    # Day 2 still has 2 gaps, was_ignored=False.
+def test_coverage_two_ignored_slots_same_day_does_not_hide_gaps_but_marks_them(make_problem_data):
+    """
+    Slot-only policy replacement for the old "ignored day" behavior.
+
+    If generation ignored BOTH slots on day 1 (onsite + oncall), diagnostics:
+    - still reports 4 gaps total (2 per day),
+    - marks BOTH gaps on day 1 as was_ignored=True,
+    - keeps TWO info findings: one per ignored slot.
+    """
     problem = _one_doctor_problem(make_problem_data, days=[1, 2])
     payload = _payload(
         participant_ids=[1],
         assignments=[],
-        exceptions=[{"code": issues.COVERAGE_IGNORED_DAY, "day": 1}],
+        exceptions=[
+            {"code": issues.COVERAGE_IGNORED_SLOT, "day": 1, "shift_type": ShiftType.onsite.value},
+            {"code": issues.COVERAGE_IGNORED_SLOT, "day": 1, "shift_type": ShiftType.oncall.value},
+        ],
     )
 
     out = compute_quality(problem=problem, payload=payload)
@@ -96,10 +103,19 @@ def test_coverage_ignored_day_does_not_hide_gaps_but_marks_them(make_problem_dat
     # Still 4 gaps total (2 per day)
     assert out["summary"]["coverage_missing_required_slots"] == 4
 
-    # We keep an info finding that says day 1 was ignored during generation
+    # We keep info findings that say day 1 slots were ignored during generation
     infos = _info_findings(out)
     assert any(
-        f.get("code") == issues.COVERAGE_IGNORED_DAY and int(f.get("context", {}).get("day", 0)) == 1 for f in infos
+        f.get("code") == issues.COVERAGE_IGNORED_SLOT
+        and int(f.get("context", {}).get("day", 0)) == 1
+        and f.get("context", {}).get("shift_type") == "onsite"
+        for f in infos
+    )
+    assert any(
+        f.get("code") == issues.COVERAGE_IGNORED_SLOT
+        and int(f.get("context", {}).get("day", 0)) == 1
+        and f.get("context", {}).get("shift_type") == "oncall"
+        for f in infos
     )
 
     gaps = _gap_findings(out)

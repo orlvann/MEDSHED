@@ -52,7 +52,6 @@ def _mk_problem() -> ProblemData:
         doctors=doctors,
         preferences=preferences,
         participant_doctor_ids={101, 102, 201},
-        ignore_days=set(),
         ignore_slots=set(),
     )
 

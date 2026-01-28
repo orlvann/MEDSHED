@@ -165,9 +165,12 @@ def classify_feasibility_issues_for_day(
         return issues
 
     # Rough "roles cannot be split" based on union size (identity-aware).
+    #
+    # We emit this only when BOTH slots have at least one candidate.
     if onsite_required and oncall_required:
-        if len(onsite_ids.union(oncall_ids)) == 1:
-            issues.append(SINGLE_CANDIDATE_FOR_BOTH_ROLES)
+        if len(onsite_ids) > 0 and len(oncall_ids) > 0:
+            if len(onsite_ids.union(oncall_ids)) == 1:
+                issues.append(SINGLE_CANDIDATE_FOR_BOTH_ROLES)
 
     return issues
 

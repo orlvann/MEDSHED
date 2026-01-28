@@ -294,7 +294,9 @@ def test_totals_objective_is_defensive_when_x_missing_in_ignored_day(make_hard_m
     doctors = make_doctors(num_specialists=1, num_residents=1, include_head=False, start_id=1)
     prefs = make_preferences(doctors=doctors)
 
-    ignore_days = {2}
+    # Ignoring a whole day is now represented by ignoring BOTH slots.
+    ignore_slots = {(2, ShiftType.onsite), (2, ShiftType.oncall)}
+
     allowed_slots = {
         (1, ShiftType.onsite): [1],
         (1, ShiftType.oncall): [2],
@@ -307,8 +309,7 @@ def test_totals_objective_is_defensive_when_x_missing_in_ignored_day(make_hard_m
         doctors=doctors,
         preferences=prefs,
         participant_doctor_ids=set(doctors.keys()),
-        ignore_days=ignore_days,
-        ignore_slots=set(),
+        ignore_slots=ignore_slots,
         active_days=[1],
         allowed_slots=allowed_slots,
     )
@@ -336,8 +337,7 @@ def test_totals_objective_returns_zero_var_when_participants_empty(
         active_days=[1],
         doctors=doctors,
         preferences=prefs,
-        participant_doctor_ids=set(),
-        ignore_days=set(),
+        participant_doctor_ids=set(),  # key edge-case
         ignore_slots=set(),
         allowed_slots={
             (1, ShiftType.onsite): [1],
@@ -355,7 +355,6 @@ def test_totals_objective_returns_zero_var_when_participants_empty(
         doctors=dict(model.doctors),
         preferences=dict(model.preferences),
         participant_doctor_ids=set(model.participant_doctor_ids),
-        ignore_days=set(model.ignore_days),
         ignore_slots=set(model.ignore_slots),
     )
 

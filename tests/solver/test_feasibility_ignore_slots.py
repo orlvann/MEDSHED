@@ -53,7 +53,6 @@ def test_ignored_onsite_does_not_emit_no_onsite_candidate(make_problem_data, mak
         doctors=doctors,
         preferences=prefs,
         participant_doctor_ids=set(doctors.keys()),
-        ignore_days=set(),
         ignore_slots={(1, ShiftType.onsite)},  # onsite is NOT required
     )
 
@@ -87,7 +86,6 @@ def test_single_candidate_for_both_roles_is_not_emitted_when_one_shift_is_ignore
         doctors=doctors,
         preferences=prefs,
         participant_doctor_ids=set(doctors.keys()),
-        ignore_days=set(),
         ignore_slots={(1, ShiftType.onsite)},  # only oncall is required
     )
 
@@ -124,7 +122,6 @@ def test_if_only_oncall_is_required_and_has_no_candidates_we_emit_no_oncall_cand
         doctors=doctors,
         preferences=prefs,
         participant_doctor_ids=set(doctors.keys()),
-        ignore_days=set(),
         ignore_slots={(1, ShiftType.onsite)},  # only oncall required
     )
 

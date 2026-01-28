@@ -48,7 +48,6 @@ def test_forced_double_shift_same_doctor_is_detected(make_problem_data, make_pre
         doctors=doctors,
         preferences=prefs,
         participant_doctor_ids=set(doctors.keys()),
-        ignore_days=set(),
         ignore_slots=set(),  # both required
     )
 
@@ -84,7 +83,6 @@ def test_forced_double_shift_not_emitted_when_candidates_are_different(make_prob
         doctors=doctors,
         preferences=prefs,
         participant_doctor_ids=set(doctors.keys()),
-        ignore_days=set(),
         ignore_slots=set(),  # both required
     )
 

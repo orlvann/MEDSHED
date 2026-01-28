@@ -63,7 +63,6 @@ def test_engine_infeasible_includes_no_onsite_candidate_issue(make_hard_model, m
         doctors=doctors,
         preferences=preferences,
         participant_doctor_ids=set(doctors.keys()),
-        ignore_days=set(),
         ignore_slots=set(),
         # Keep the key with an empty list on purpose: this is a "required but impossible" slot.
         allowed_slots={
@@ -97,7 +96,6 @@ def test_engine_infeasible_includes_no_specialist_issue(make_hard_model, make_pr
         doctors=doctors,
         preferences=preferences,
         participant_doctor_ids=set(doctors.keys()),
-        ignore_days=set(),
         ignore_slots=set(),
         allowed_slots={
             (1, ShiftType.onsite): [1, 2],
@@ -136,7 +134,6 @@ def test_engine_infeasible_includes_forced_double_shift_issue(make_hard_model, m
         doctors=doctors,
         preferences=preferences,
         participant_doctor_ids=set(doctors.keys()),
-        ignore_days=set(),
         ignore_slots=set(),
         allowed_slots={
             (1, ShiftType.onsite): [1],
@@ -175,7 +172,6 @@ def test_engine_derive_fallback_cp_infeasible_when_no_day_reasons(make_hard_mode
         doctors=doctors,
         preferences=preferences,
         participant_doctor_ids=set(doctors.keys()),
-        ignore_days=set(),
         ignore_slots=set(),
         allowed_slots={
             (1, ShiftType.onsite): [1, 2],
@@ -209,7 +205,6 @@ def test_engine_infeasible_always_includes_at_least_one_issue(make_hard_model, m
         doctors=doctors,
         preferences=preferences,
         participant_doctor_ids=set(doctors.keys()),
-        ignore_days=set(),
         ignore_slots=set(),
         allowed_slots={
             (1, ShiftType.onsite): [],
@@ -242,7 +237,6 @@ def test_engine_empty_does_not_include_issues(make_hard_model, make_preferences)
         doctors=doctors,
         preferences=preferences,
         participant_doctor_ids=set(doctors.keys()),
-        ignore_days=set(),
         ignore_slots=set(),
         allowed_slots={},  # <- key part
     )
@@ -284,7 +278,6 @@ def test_engine_not_solved_does_not_include_issues(monkeypatch, make_hard_model,
         doctors=doctors,
         preferences=preferences,
         participant_doctor_ids=set(doctors.keys()),
-        ignore_days=set(),
         ignore_slots=set(),
         allowed_slots={
             (1, ShiftType.onsite): [1, 2],

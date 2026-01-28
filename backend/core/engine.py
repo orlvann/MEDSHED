@@ -74,7 +74,7 @@ def build_and_solve(model: HardModel) -> SolverSolution:
     - exactly one onsite and one oncall doctor per active day,
     - at least one specialist per active day (in any role),
     - no doctor can be onsite and oncall on the same day,
-    - no assignment outside allowed_slots (unavailability + ignore_* are already "cut out").
+    - no assignment outside allowed_slots (unavailability + ignore_slots are already "cut out").
     ```
     """
     # If there are no allowed slots at all, the solver has nothing to work with.
@@ -169,7 +169,6 @@ def build_and_solve(model: HardModel) -> SolverSolution:
         doctors=model.doctors,
         preferences=model.preferences,
         participant_doctor_ids=model.participant_doctor_ids,
-        ignore_days=model.ignore_days,
         ignore_slots=model.ignore_slots,
     )
 
