@@ -20,11 +20,7 @@ from __future__ import annotations
 
 from typing import Dict, List, Set, Tuple
 
-from backend.core.issues import (
-    FORCED_DOUBLE_SHIFT_SAME_DAY,
-    classify_availability_risk_with_reasons,
-    is_forced_double_shift_same_day,
-)
+from backend.core.issues import classify_availability_risk_with_reasons
 from backend.db.session import SessionLocal
 from backend.models.common_enums import DoctorRole, PeriodStatus
 from backend.models.orm.doctor import Doctor
@@ -152,16 +148,6 @@ def get_month_availability(*, year: int, month: int, actor) -> AvailabilityOverv
                 oncall_required=True,
             )
 
-            # Extra signal (still identity-aware): forced double shift if only one doctor can do both
-            if is_forced_double_shift_same_day(
-                onsite_ids=onsite_ids_by_day[d],
-                oncall_ids=oncall_ids_by_day[d],
-                onsite_required=True,
-                oncall_required=True,
-            ):
-                if FORCED_DOUBLE_SHIFT_SAME_DAY not in details.issues:
-                    details.issues.append(FORCED_DOUBLE_SHIFT_SAME_DAY)
-
             day_summaries.append(
                 AvailabilityDaySummary(
                     day=d,
@@ -245,15 +231,6 @@ def get_day_availability(*, year: int, month: int, day: int, actor) -> Availabil
             onsite_required=True,
             oncall_required=True,
         )
-
-        if is_forced_double_shift_same_day(
-            onsite_ids=onsite_ids,
-            oncall_ids=oncall_ids,
-            onsite_required=True,
-            oncall_required=True,
-        ):
-            if FORCED_DOUBLE_SHIFT_SAME_DAY not in details.issues:
-                details.issues.append(FORCED_DOUBLE_SHIFT_SAME_DAY)
 
     return AvailabilityDayRead(
         year=year,

@@ -1,5 +1,4 @@
 # backend/core/issues.py
-# backend/core/issues.py
 """
 Shared issue codes and helpers for solver feasibility and availability risk.
 
@@ -200,10 +199,13 @@ def classify_availability_risk_with_reasons(
     Compute availability risk + machine-readable reasons (ID-aware).
 
     FINAL BUSINESS POLICY:
+    - Availability issues are computed from the SAME classifier as feasibility (single source of truth).
+      This guarantees that heatmap/drilldown and feasibility precheck use identical codes.
     - RiskLevel is: ok / critical.
-    - critical when:
-      1) any REQUIRED slot has zero candidates, OR
-      2) among candidates for the day (union of REQUIRED slots) there is no specialist.
+    - critical when codes contain any of:
+      - NO_ONSITE_CANDIDATE (when onsite_required),
+      - NO_ONCALL_CANDIDATE (when oncall_required),
+      - NO_SPECIALIST (as emitted by classify_feasibility_issues_for_day).
 
     Notes:
     - For "business-required" mode (heatmap + prepublish):
@@ -211,23 +213,22 @@ def classify_availability_risk_with_reasons(
     - For "solver-required" mode (generate gatekeeper + postmortem):
       required flags must respect ignore_slots (slot ignored => not required).
     """
-    issues: List[str] = []
+    issues = classify_feasibility_issues_for_day(
+        onsite_ids=onsite_ids,
+        oncall_ids=oncall_ids,
+        doctor_role_by_id=doctor_role_by_id,
+        onsite_required=onsite_required,
+        oncall_required=oncall_required,
+    )
 
-    if onsite_required and len(onsite_ids) == 0:
-        issues.append(NO_ONSITE_CANDIDATE)
-
-    if oncall_required and len(oncall_ids) == 0:
-        issues.append(NO_ONCALL_CANDIDATE)
-
-    # Specialist rule: only when BOTH shifts are required.
-    if onsite_required and oncall_required:
-        required_union: Set[int] = set(onsite_ids) | set(oncall_ids)
-        has_specialist = any(doctor_role_by_id.get(int(did)) == DoctorRole.specialist for did in required_union)
-        if not has_specialist:
-            issues.append(NO_SPECIALIST)
+    critical_codes: Set[str] = {NO_SPECIALIST}
+    if onsite_required:
+        critical_codes.add(NO_ONSITE_CANDIDATE)
+    if oncall_required:
+        critical_codes.add(NO_ONCALL_CANDIDATE)
 
     risk = RiskLevel.ok
-    if issues:
+    if any(code in critical_codes for code in issues):
         risk = RiskLevel.critical
 
     return AvailabilityRiskDetails(risk=risk, issues=issues)
