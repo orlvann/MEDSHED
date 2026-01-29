@@ -975,6 +975,61 @@ def _published_view(
     )
 
 
+def _payload_for_clean_quality(raw_payload: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Return a COPY of payload suitable for 'clean' diagnostics:
+    - keep everything the same,
+    - but remove meta.exceptions so metrics/violations reflect the final schedule as-is.
+
+    IMPORTANT:
+    - We do NOT delete anything from the stored payload.
+    - This is used only for computing quality.
+    """
+    payload = dict(raw_payload or {})
+    meta = payload.get("meta") or {}
+    if not isinstance(meta, dict):
+        meta = {"labels": []}
+
+    meta_clean = dict(meta)
+    meta_clean["exceptions"] = []  # <-- key rule: compute on clean rules only
+    payload["meta"] = meta_clean
+    return payload
+
+
+def _extract_hard_violations_from_quality(quality_payload: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """
+    Extract hard (critical) violations from diagnostics payload.
+
+    We treat findings with severity='critical' as publish-blocking violations.
+    Returned list is deterministic (sorted by code).
+    """
+    details = quality_payload.get("details") or {}
+    if not isinstance(details, dict):
+        return []
+
+    findings = details.get("findings") or []
+    if not isinstance(findings, list):
+        return []
+
+    hard: List[Dict[str, Any]] = []
+    for f in findings:
+        if not isinstance(f, dict):
+            continue
+        if str(f.get("severity")) != "critical":
+            continue
+
+        hard.append(
+            {
+                "code": str(f.get("code") or "unknown"),
+                "message": str(f.get("message") or ""),
+                "context": f.get("context") or {},
+            }
+        )
+
+    hard.sort(key=lambda x: str(x.get("code", "")))
+    return hard
+
+
 # --------------------------------- Service API --------------------------------
 class SchedulingService:
     """
@@ -1438,21 +1493,70 @@ class SchedulingService:
             payload = dict(w.payload or {"participant_doctor_ids": [], "assignments": [], "meta": {"labels": []}})
 
             payload = _normalize_snapshot_payload(payload)
+
+            # Build ProblemData deterministically (snapshot if present)
+            if payload.get("inputs_snapshot") is not None:
+                problem = diagnostics_service.build_problem_data_from_schedule_snapshot(
+                    db=session,
+                    year=int(year),
+                    month=int(month),
+                    schedule_payload=payload,
+                )
+            else:
+                req = ScheduleGenerateRequest(
+                    year=year,
+                    month=month,
+                    participant_doctor_ids=list(payload.get("participant_doctor_ids") or []),
+                    ignore_slots=[],
+                    head_commitment_resolutions=[],
+                )
+                problem = _build_problem_data_for_generate(session, req)
+
+            # Compute publish decision on CLEAN payload (ignore meta.exceptions)
+            payload_clean = _payload_for_clean_quality(payload)
+            quality_clean = core_diagnostics.compute_quality(problem=problem, payload=payload_clean)
+            hard_violations = _extract_hard_violations_from_quality(quality_clean)
+
+            # Keep "generation-time ignored" only for audit/information (NOT for scoring/violations)
+            meta_raw = payload.get("meta") or {}
+            generation_exceptions = []
+            if isinstance(meta_raw, dict):
+                generation_exceptions = list(meta_raw.get("exceptions") or [])
+
             meta = cast(Dict[str, Any], payload["meta"])
 
             hard_violations = _hard_rule_violations(payload)
 
             if not force and hard_violations:
-                raise ValueError("publish_blocked_by_hard_rules")
+                context = {
+                    "year": int(year),
+                    "month": int(month),
+                    "hard_violations": hard_violations,
+                    "diagnostics_summary": quality_clean.get("summary") or {},
+                    "generation_exceptions": generation_exceptions,
+                }
+                raise DomainError("publish_blocked_by_hard_rules", context=context)
 
             if force:
                 violation_codes = {v.get("code") for v in (hard_violations or []) if v.get("code")}
+
                 if accepted_exceptions:
                     bad = [e.code for e in accepted_exceptions if e.code not in violation_codes]
                     if bad:
                         raise ValueError("invalid_accepted_exception")
 
-                    ex_list = list(meta.get("exceptions", []))
+                    # Append audit entries to meta.exceptions (keep existing generation exceptions too)
+                    meta = cast(Dict[str, Any], payload.get("meta") or {"labels": []})
+                    bad = [e.code for e in accepted_exceptions if e.code not in violation_codes]
+                    if bad:
+                        raise ValueError("invalid_accepted_exception")
+
+                    # 1) Normalize meta FIRST (labels, base shape etc.)
+                    meta_norm = normalize_meta(meta)
+
+                    # 2) Append audit entries AFTER normalization so they are not dropped
+                    ex_list = list(meta_norm.get("exceptions", []))
+
                     for e in accepted_exceptions:
                         ex_list.append(
                             {
@@ -1462,8 +1566,9 @@ class SchedulingService:
                                 "accepted_at": now_utc().isoformat(),
                             }
                         )
-                    meta["exceptions"] = ex_list
-                    payload["meta"] = normalize_meta(meta)
+
+                        meta_norm["exceptions"] = ex_list
+                        payload["meta"] = meta_norm
 
             vid = _insert_version(
                 session,
@@ -1596,7 +1701,8 @@ class SchedulingService:
                     )
                     problem = _build_problem_data_for_generate(db, req)
 
-                quality_payload = core_diagnostics.compute_quality(problem=problem, payload=payload)
+                payload_clean = _payload_for_clean_quality(payload)
+                quality_payload = core_diagnostics.compute_quality(problem=problem, payload=payload_clean)
 
                 summary_dict = quality_payload.get("summary") or {}
                 summary_obj = DiagnosticsSummary.model_validate(summary_dict)

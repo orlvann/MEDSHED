@@ -109,6 +109,7 @@ def _raise(e: ValueError) -> None:
         "invalid_head_commitment_resolution": "Invalid head commitment resolution payload.",
         "db_integrity_error": "Database integrity error.",
         "db_error": "Database error.",
+        "publish_blocked_by_hard_rules": "Publishing blocked: hard rule violations detected.",
     }
 
     if code in mapping:
