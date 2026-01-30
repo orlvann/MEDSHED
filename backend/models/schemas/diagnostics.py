@@ -7,9 +7,8 @@
 #   safely import DiagnosticsRead without creating circular imports.
 #
 # NOTE (contract evolution):
-# - We keep backward compatibility with older payload fields (penalty_total, understaffed_days,
-#   and details as a free JSON dict).
-# - New typed "Read" models are added to provide a stable contract for FE.
+# - `details` is currently a free JSON dict (legacy). It already contains
+#   findings/per_doctor/rankings in a stable shape.
 # -----------------------------------------------------------------------------
 
 from __future__ import annotations
@@ -191,11 +190,6 @@ class DiagnosticsRead(BaseModel):
     details: Optional[dict[str, Any]] = Field(
         default=None,
         description="LEGACY: Optional rich breakdown (free JSON dict).",
-    )
-
-    details_typed: Optional[DiagnosticsDetailsRead] = Field(
-        default=None,
-        description="New typed details contract (optional until services start populating it).",
     )
 
 

@@ -13,11 +13,7 @@ OpenAPI examples are kept consistent with DTOs in:
 - backend/models/schemas/diagnostics.py
 
 IMPORTANT ABOUT DIAGNOSTICS DTO:
-- DiagnosticsRead.details is LEGACY free JSON dict (service currently fills THIS).
-- DiagnosticsRead.details_typed is the new typed contract (often None for now).
-  Therefore examples include:
-  - details: { ... }
-  - details_typed: null
+- DiagnosticsRead.details is a legacy free JSON dict (service fills THIS today).
 """
 
 from __future__ import annotations
@@ -219,8 +215,6 @@ def _raise(e: ValueError) -> None:
                                 "rankings": {"top_unhappy": [], "top_happy": []},
                                 "working_lock_version": None,
                             },
-                            # Typed contract optional (usually None for now):
-                            "details_typed": None,
                         },
                     }
                 }
@@ -417,7 +411,6 @@ def generate_schedule(
                                     },
                                     "working_lock_version": 7,
                                 },
-                                "details_typed": None,
                             },
                         },
                         "draft": {
@@ -438,7 +431,6 @@ def generate_schedule(
                                     "rankings": {"top_unhappy": [], "top_happy": []},
                                     "working_lock_version": None,
                                 },
-                                "details_typed": None,
                             },
                         },
                         "published": {
@@ -465,7 +457,6 @@ def generate_schedule(
                                     "rankings": {"top_unhappy": [], "top_happy": []},
                                     "working_lock_version": None,
                                 },
-                                "details_typed": None,
                             },
                         },
                     }
@@ -611,7 +602,6 @@ def schedules_diagnostics(
                                         "rankings": {"top_unhappy": [], "top_happy": []},
                                         "working_lock_version": None,
                                     },
-                                    "details_typed": None,
                                 },
                             },
                         },
@@ -815,7 +805,6 @@ def schedules_working_put(
                                 "rankings": {"top_unhappy": [], "top_happy": []},
                                 "working_lock_version": None,
                             },
-                            "details_typed": None,
                         },
                     }
                 }
@@ -896,7 +885,6 @@ def schedules_checkpoint(
                                 "rankings": {"top_unhappy": [], "top_happy": []},
                                 "working_lock_version": None,
                             },
-                            "details_typed": None,
                         },
                     }
                 }
@@ -977,7 +965,6 @@ def schedules_draft_undo(
                                 "rankings": {"top_unhappy": [], "top_happy": []},
                                 "working_lock_version": None,
                             },
-                            "details_typed": None,
                         },
                     }
                 }
