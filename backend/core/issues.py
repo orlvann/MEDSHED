@@ -27,19 +27,15 @@ from backend.models.common_enums import DoctorRole, RiskLevel
 
 # ---- Shared issue codes -------------------------------------------------------
 
-# Feasibility (pre-check) primitives (hard / blocking signals)
+# Feasibility / infeasible-explain primitives (shared across pre-check + post-solve explain)
 NO_ONSITE_CANDIDATE = "no_onsite_candidate"
 NO_ONCALL_CANDIDATE = "no_oncall_candidate"
 NO_SPECIALIST = "no_specialist"
-SINGLE_CANDIDATE_FOR_BOTH_ROLES = "single_candidate_for_both_roles"
-
-# Availability warnings (kept as a code for optional UI hints; does NOT change risk level)
-FEW_DOCTORS_TOTAL = "few_doctors_total"
-TOO_FEW_DOCTORS_TOTAL = FEW_DOCTORS_TOTAL  # backward-compat alias
-
-# Solver infeasible (post model-build)
-CP_INFEASIBLE = "cp_infeasible"
 FORCED_DOUBLE_SHIFT_SAME_DAY = "forced_double_shift_same_day"
+
+# Solver status / fallback (used when we cannot derive a day-level reason)
+CP_INFEASIBLE = "cp_infeasible"
+
 
 # Head commitment issues
 HEAD_COMMITMENT_IGNORED_SLOT = "head_commitment_ignored_slot"
@@ -64,21 +60,18 @@ PREFERENCE_MISS = "preference_miss"
 # ---- Default human-readable messages -----------------------------------------
 
 FEASIBILITY_ISSUE_MESSAGES: Dict[str, str] = {
-    # Feasibility pre-check
+    # Feasibility / infeasible-explain (shared)
     NO_ONSITE_CANDIDATE: "No doctor is available for onsite duty on this day.",
     NO_ONCALL_CANDIDATE: "No doctor is available for on-call duty on this day.",
     NO_SPECIALIST: "No specialist is available on this day.",
-    SINGLE_CANDIDATE_FOR_BOTH_ROLES: "Only one doctor is available, roles cannot be split.",
-    # Availability warnings
-    FEW_DOCTORS_TOTAL: "Low availability: only a small number of doctors are available in total.",
+    FORCED_DOUBLE_SHIFT_SAME_DAY: "Only one doctor can cover both shifts on this day, but double shift is forbidden.",
     # Head commitments (must-haves)
     HEAD_COMMITMENT_IGNORED_SLOT: "Head commitment targets an ignored slot.",
     HEAD_COMMITMENT_NOT_ALLOWED: "Head commitment is not allowed (doctor is not available for this slot).",
     HEAD_COMMITMENT_CONFLICT: "Multiple heads have a commitment for the same slot.",
     HEAD_COMMITMENT_DOUBLE_SHIFT_SAME_DAY: "A head commitment requests both onsite and oncall on the same day.",
-    # CP-SAT / post-build solver outcomes
+    # Solver fallback (no derived per-day reasons)
     CP_INFEASIBLE: "No schedule satisfies all hard constraints for this month (CP-SAT infeasible).",
-    FORCED_DOUBLE_SHIFT_SAME_DAY: "Only one doctor can cover both shifts on this day, but double shift is forbidden.",
     # Diagnostics findings (schedule quality)
     COVERAGE_MISSING_REQUIRED_SLOT: "Required coverage slot is missing.",
     COVERAGE_NO_SPECIALIST_DAY: "No specialist is assigned on this day (onsite specialist required).",
@@ -162,14 +155,6 @@ def classify_feasibility_issues_for_day(
     ):
         issues.append(FORCED_DOUBLE_SHIFT_SAME_DAY)
         return issues
-
-    # Rough "roles cannot be split" based on union size (identity-aware).
-    #
-    # We emit this only when BOTH slots have at least one candidate.
-    if onsite_required and oncall_required:
-        if len(onsite_ids) > 0 and len(oncall_ids) > 0:
-            if len(onsite_ids.union(oncall_ids)) == 1:
-                issues.append(SINGLE_CANDIDATE_FOR_BOTH_ROLES)
 
     return issues
 

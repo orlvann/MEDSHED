@@ -1,45 +1,24 @@
 # backend/routers/schedules.py
-# Schedules router — Admin & Doctor paths (thin, typed, no business logic).
-#
-# LAYER CONTRACT
-# --------------
-# - This router performs I/O: request/response validation, RBAC, HTTP codes.
-# - All domain logic and DB writes/reads live in services.SchedulingService.
-# - Errors from service are raised as ValueError with a short code; _raise()
-#   maps them to HTTP responses consistently.
-#
-# ERROR MAPPING (ValueError.code -> HTTP)
-# ---------------------------------------
-# - "period_closed"                         -> 403
-# - "edit_conflict"                          -> 409
-# - "cannot_undo" / "cannot_redo"            -> 409
-# - "publish_blocked_by_hard_rules"          -> 409
-# - "invalid_accepted_exception"             -> 400
-# - "invalid_head_commitment_resolution"     -> 400
-# - "not_found"                              -> 404
-# - "generate_requires_ignore"               -> 409   (FE uses .context.issues_* to propose ignores)
-# - "generate_requires_head_resolution"      -> 409   (FE shows modal to pick a head per conflicting slot)
-# - "generate_infeasible"                    -> 409   (FE shows solver_status + issues_sample from .context)
-# - "db_integrity_error"                     -> 500   (unexpected; indicates a bug)
-#
-# API SHAPE
-# ---------
-# - DTOs are defined in backend/models/schemas/schedule.py (framework agnostic).
-# - All responses are typed with response_model=... for stable Swagger/OpenAPI.
-# - Status codes:
-#     * 201 on generate / checkpoint / publish
-#     * 200 on reads and revert endpoints
-#
-# TIME & ENUMS
-# ------------
-# - org timezone is provided by ORG_TZ.
-# - period_status is derived via get_period_status and cast to PeriodStatus enum.
-#
-# SECURITY / RBAC (MVP)
-# ---------------------
-# - Admin-only: generate, working read/put, checkpoint, revert, publish.
-# - Doctor: can read current published and (later) export personal data.
-# - Auth/JWT is stubbed; require_admin / require_doctor simulate roles.
+"""
+Schedules router — thin I/O layer.
+
+This router:
+- validates I/O shapes (Pydantic schemas),
+- performs RBAC (admin/doctor),
+- maps domain ValueError codes -> HTTP errors,
+- delegates ALL business logic and DB access to SchedulingService.
+
+OpenAPI examples are kept consistent with DTOs in:
+- backend/models/schemas/schedule.py
+- backend/models/schemas/diagnostics.py
+
+IMPORTANT ABOUT DIAGNOSTICS DTO:
+- DiagnosticsRead.details is LEGACY free JSON dict (service currently fills THIS).
+- DiagnosticsRead.details_typed is the new typed contract (often None for now).
+  Therefore examples include:
+  - details: { ... }
+  - details_typed: null
+"""
 
 from __future__ import annotations
 
@@ -47,6 +26,7 @@ from typing import Literal, Optional, cast
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Path, Query, status
 
+from backend.core import issues
 from backend.models.schemas.diagnostics import DiagnosticsRead
 from backend.models.schemas.dto_common import make_error
 from backend.models.schemas.schedule import (
@@ -72,14 +52,20 @@ router = APIRouter(prefix="/api/v1/schedules")
 svc = SchedulingService()
 
 
+def _err_example(code: str, *, detail: str | None = None, context: dict | None = None) -> dict:
+    """
+    Helper for OpenAPI examples.
+
+    Runtime always returns: {"detail": {code, detail, context}}
+    and context is always a dict (never None).
+    """
+    safe_context = context if isinstance(context, dict) else {}
+    return {"detail": make_error(code, detail=detail, context=safe_context)}
+
+
 def _raise(e: ValueError) -> None:
     """
-    Convert domain ValueError(code) -> HTTPException.
-
-    Rules:
-    - Map known codes to HTTP status.
-    - Always include `context` in the response (at least {}), so FE never loses data.
-    - Optionally override `detail` with a short human-friendly message (code stays stable).
+    Convert ValueError(code) from service -> HTTPException with a stable error payload.
     """
     code = str(e)
 
@@ -92,42 +78,41 @@ def _raise(e: ValueError) -> None:
         "invalid_accepted_exception": status.HTTP_400_BAD_REQUEST,
         "invalid_head_commitment_resolution": status.HTTP_400_BAD_REQUEST,
         "not_found": status.HTTP_404_NOT_FOUND,
-        # generate gatekeeper errors
         "generate_requires_ignore": status.HTTP_409_CONFLICT,
         "generate_requires_head_resolution": status.HTTP_409_CONFLICT,
         "generate_infeasible": status.HTTP_409_CONFLICT,
-        # DB integrity fallback (see SchedulingService._translate_sqla_errors)
         "db_integrity_error": status.HTTP_500_INTERNAL_SERVER_ERROR,
         "db_error": status.HTTP_500_INTERNAL_SERVER_ERROR,
     }
 
-    # Short, human-friendly descriptions (optional cosmetic layer).
     human_detail = {
-        "generate_requires_ignore": "Generation requires ignore_days/ignore_slots to proceed.",
+        "generate_requires_ignore": "Generation requires ignore_slots to proceed.",
         "generate_requires_head_resolution": "Generation requires choosing a head for conflicting commitment slots.",
         "generate_infeasible": "Generation failed: solver could not find a feasible solution.",
         "invalid_head_commitment_resolution": "Invalid head commitment resolution payload.",
+        "publish_blocked_by_hard_rules": "Publishing blocked: hard rule violations detected.",
         "db_integrity_error": "Database integrity error.",
         "db_error": "Database error.",
-        "publish_blocked_by_hard_rules": "Publishing blocked: hard rule violations detected.",
     }
 
     if code in mapping:
-        # Always return a dict for context (never None), so FE can rely on it.
-        context = getattr(e, "context", None) or {}
+        context = getattr(e, "context", None)
+        if not isinstance(context, dict):
+            context = {}
 
-        # Prefer explicit human-friendly detail; otherwise keep any attached detail; fallback to code.
         detail = human_detail.get(code) or getattr(e, "detail", None) or code
 
         raise HTTPException(
             status_code=mapping[code],
-            detail=make_error(code, context=context, detail=detail),
+            detail=make_error(code, detail=detail, context=context),
         )
 
     raise e
 
 
 # ------------------------------- ADMIN: generate -------------------------------
+
+
 @router.post(
     "/generate",
     status_code=status.HTTP_201_CREATED,
@@ -152,17 +137,30 @@ def _raise(e: ValueError) -> None:
                                 {"day": 1, "shift_type": "onsite", "doctor_id": 101},
                                 {"day": 1, "shift_type": "oncall", "doctor_id": 102},
                             ],
-                            "meta": {"labels": ["as_generated"], "exceptions": [], "solver_status": "OK"},
+                            "meta": {"labels": ["as_generated"], "solver_status": "OK", "exceptions": []},
                             "updated_at": "2026-01-28T09:15:00Z",
                             "lock_version": 2,
                             "inputs_snapshot": {
+                                # NOTE: JSON object keys are strings; InputsSnapshotRead will coerce to int.
                                 "doctors": {
                                     "101": {
                                         "role": "specialist",
                                         "is_head": True,
                                         "display_name": "Jan Kowalski",
                                         "is_active_at_snapshot": True,
-                                    }
+                                    },
+                                    "102": {
+                                        "role": "resident",
+                                        "is_head": False,
+                                        "display_name": "Doctor 102",
+                                        "is_active_at_snapshot": True,
+                                    },
+                                    "103": {
+                                        "role": "resident",
+                                        "is_head": False,
+                                        "display_name": "Doctor 103",
+                                        "is_active_at_snapshot": True,
+                                    },
                                 },
                                 "preference_version_id_by_doctor": {"101": 55, "102": 56, "103": None},
                             },
@@ -185,18 +183,44 @@ def _raise(e: ValueError) -> None:
                                             "is_head": True,
                                             "display_name": "Jan Kowalski",
                                             "is_active_at_snapshot": True,
-                                        }
+                                        },
+                                        "102": {
+                                            "role": "resident",
+                                            "is_head": False,
+                                            "display_name": "Doctor 102",
+                                            "is_active_at_snapshot": True,
+                                        },
+                                        "103": {
+                                            "role": "resident",
+                                            "is_head": False,
+                                            "display_name": "Doctor 103",
+                                            "is_active_at_snapshot": True,
+                                        },
                                     },
                                     "preference_version_id_by_doctor": {"101": 55, "102": 56, "103": None},
                                 },
-                                "meta": {"labels": ["as_generated"], "exceptions": [], "solver_status": "OK"},
+                                "meta": {"labels": ["as_generated"], "solver_status": "OK", "exceptions": []},
                             },
                         },
                         "diagnostics": {
                             "version_id": "123",
                             "computed_at": "2026-01-28T09:15:01Z",
-                            "summary": {"score_total": 0.83, "coverage_gaps_total": 0, "hard_violations_total": 0},
-                            "details": {},
+                            "summary": {
+                                "coverage_missing_required_slots": 0,
+                                "hard_issues_count": 0,
+                                "rest_violations": 0,
+                                "fairness_index": 1.0,
+                                "preference_fulfillment_pct": 100.0,
+                            },
+                            # Service currently fills legacy free dict:
+                            "details": {
+                                "findings": [],
+                                "per_doctor": [],
+                                "rankings": {"top_unhappy": [], "top_happy": []},
+                                "working_lock_version": None,
+                            },
+                            # Typed contract optional (usually None for now):
+                            "details_typed": None,
                         },
                     }
                 }
@@ -207,57 +231,95 @@ def _raise(e: ValueError) -> None:
             "content": {
                 "application/json": {
                     "examples": {
-                        "requires_ignore_days_or_slots": {
-                            "summary": "Feasibility pre-check: requires ignore_days/ignore_slots",
-                            "value": {
-                                "code": "generate_requires_ignore",
-                                "detail": "Generation requires ignore_days/ignore_slots to proceed.",
-                                "context": {
+                        "requires_ignore_slots": {
+                            "summary": "Feasibility pre-check: requires ignore_slots",
+                            "value": _err_example(
+                                "generate_requires_ignore",
+                                detail="Generation requires ignore_slots to proceed.",
+                                context={
                                     "year": 2026,
                                     "month": 2,
                                     "issues_total": 2,
                                     "issues_truncated": False,
                                     "issues_summary": [
-                                        {"code": "no_specialist", "count": 1},
-                                        {"code": "no_onsite_candidate", "count": 1},
+                                        {"code": issues.NO_SPECIALIST, "count": 1},
+                                        {"code": issues.NO_ONSITE_CANDIDATE, "count": 1},
                                     ],
                                     "issues_sample": [
                                         {
                                             "day": 3,
-                                            "code": "no_specialist",
+                                            "code": issues.NO_SPECIALIST,
                                             "message": "No specialist is available on this day.",
                                         },
                                         {
                                             "day": 3,
-                                            "code": "no_onsite_candidate",
+                                            "code": issues.NO_ONSITE_CANDIDATE,
                                             "message": "No doctor is available for onsite duty on this day.",
                                         },
                                     ],
                                 },
-                            },
+                            ),
                         },
-                        "infeasible_head_commitments_or_solver": {
-                            "summary": "Head commitments invalid or CP-SAT infeasible",
-                            "value": {
-                                "code": "generate_infeasible",
-                                "detail": "Generation failed: solver could not find a feasible solution.",
-                                "context": {
+                        "requires_head_resolution": {
+                            "summary": "Head commitments conflict: admin must resolve",
+                            "value": _err_example(
+                                "generate_requires_head_resolution",
+                                detail="Generation requires choosing a head for conflicting commitment slots.",
+                                context={
+                                    "year": 2026,
+                                    "month": 2,
+                                    "head_commitment_conflicts": [
+                                        {
+                                            "day": 3,
+                                            "shift_type": "onsite",
+                                            "head_candidates": [
+                                                {"doctor_id": 101, "display_name": "Jan Kowalski"},
+                                                {"doctor_id": 110, "display_name": "Doctor 110"},
+                                            ],
+                                        }
+                                    ],
+                                },
+                            ),
+                        },
+                        "infeasible": {
+                            "summary": "Solver infeasible / not OK",
+                            "value": _err_example(
+                                "generate_infeasible",
+                                detail="Generation failed: solver could not find a feasible solution.",
+                                context={
                                     "year": 2026,
                                     "month": 2,
                                     "solver_status": "INFEASIBLE",
                                     "issues_total": 1,
                                     "issues_truncated": False,
-                                    "issues_summary": [{"code": "head_commitment_conflict", "count": 1}],
+                                    "issues_summary": [{"code": issues.CP_INFEASIBLE, "count": 1}],
                                     "issues_sample": [
                                         {
-                                            "day": 5,
-                                            "code": "head_commitment_conflict",
-                                            "message": "Multiple heads have a commitment for the same slot. "
-                                            "(shift=onsite, head_id=101, other_head_id=102)",
+                                            "day": 0,
+                                            "code": issues.CP_INFEASIBLE,
+                                            "message": "No schedule satisfies all hard constraints for this month"
+                                            "(CP-SAT infeasible).",
                                         }
                                     ],
                                 },
-                            },
+                            ),
+                        },
+                    }
+                }
+            },
+        },
+        500: {
+            "description": "Unexpected DB error.",
+            "content": {
+                "application/json": {
+                    "examples": {
+                        "db_integrity_error": {
+                            "summary": "Database integrity error",
+                            "value": _err_example("db_integrity_error", detail="Database integrity error.", context={}),
+                        },
+                        "db_error": {
+                            "summary": "Database error",
+                            "value": _err_example("db_error", detail="Database error.", context={}),
                         },
                     }
                 }
@@ -271,25 +333,17 @@ def generate_schedule(
 ) -> ScheduleGenerateCreated:
     """
     Generate a new schedule for {year, month}.
-
-    Possible blocking outcomes (409) returned as a structured error:
-    - generate_requires_ignore:
-        context contains issues_* describing which days/slots have no feasible coverage.
-        FE should propose ignore_days/ignore_slots based on issues_sample.
-    - generate_requires_head_resolution:
-        context.head_commitment_conflicts contains conflicting slots and head_candidates.
-        FE should show a modal and resend the request with head_commitment_resolutions[].
-    - generate_infeasible:
-        solver ran but returned non-OK status; context.solver_status + issues_sample help explain why.
     """
     try:
         return svc.generate(body, user_id=user.user_id if user else None)
     except ValueError as e:
         _raise(e)
-        assert False  # for type checker
+        assert False
 
 
 # --------------------------- ADMIN: diagnostics --------------------------
+
+
 @router.get(
     "/{year}/{month}/diagnostics",
     response_model=DiagnosticsRead,
@@ -303,21 +357,115 @@ def generate_schedule(
                 "application/json": {
                     "examples": {
                         "working": {
-                            "summary": "Working diagnostics (includes working_lock_version)",
+                            "summary": "Working diagnostics (details contains working_lock_version)",
                             "value": {
                                 "version_id": "working",
                                 "computed_at": "2026-01-28T09:20:00Z",
-                                "summary": {"score_total": 0.74, "coverage_gaps_total": 2, "hard_violations_total": 0},
-                                "details": {"working_lock_version": 7},
+                                "summary": {
+                                    "coverage_missing_required_slots": 2,
+                                    "hard_issues_count": 1,
+                                    "rest_violations": 0,
+                                    "fairness_index": 0.93,
+                                    "preference_fulfillment_pct": 78.0,
+                                },
+                                # Service fills legacy dict today:
+                                "details": {
+                                    "findings": [
+                                        {
+                                            "code": issues.COVERAGE_IGNORED_SLOT,
+                                            "severity": "info",
+                                            "context": {"day": 2, "shift_type": "onsite"},
+                                        },
+                                        {
+                                            "code": issues.COVERAGE_MISSING_REQUIRED_SLOT,
+                                            "severity": "critical",
+                                            "context": {"day": 2, "shift_type": "onsite", "was_ignored": True},
+                                        },
+                                        {
+                                            "code": issues.COVERAGE_MISSING_REQUIRED_SLOT,
+                                            "severity": "critical",
+                                            "context": {"day": 2, "shift_type": "oncall", "was_ignored": False},
+                                        },
+                                    ],
+                                    "per_doctor": [
+                                        {
+                                            "doctor_id": 101,
+                                            "display_name": "Doctor 101",
+                                            "assigned_onsite_total": 5,
+                                            "assigned_oncall_total": 3,
+                                            "rest_violations": 0,
+                                            "preference_fulfillment_pct": 78.0,
+                                            "preferred_days_missed": 2,
+                                            "score": -120.0,
+                                        }
+                                    ],
+                                    "rankings": {
+                                        "top_unhappy": [
+                                            {
+                                                "doctor_id": 101,
+                                                "score": -120.0,
+                                                "reasons_codes": ["preferred_days_missed", "preferences_not_fully_met"],
+                                            }
+                                        ],
+                                        "top_happy": [
+                                            {
+                                                "doctor_id": 101,
+                                                "score": -120.0,
+                                                "reasons_codes": ["good_rest"],
+                                            }
+                                        ],
+                                    },
+                                    "working_lock_version": 7,
+                                },
+                                "details_typed": None,
                             },
                         },
                         "draft": {
-                            "summary": "Draft diagnostics (version_id from pointer)",
+                            "summary": "Draft diagnostics (version_id is checkpoint id)",
                             "value": {
                                 "version_id": "123",
                                 "computed_at": "2026-01-28T09:15:01Z",
-                                "summary": {"score_total": 0.83, "coverage_gaps_total": 0, "hard_violations_total": 0},
-                                "details": {},
+                                "summary": {
+                                    "coverage_missing_required_slots": 0,
+                                    "hard_issues_count": 0,
+                                    "rest_violations": 0,
+                                    "fairness_index": 1.0,
+                                    "preference_fulfillment_pct": 100.0,
+                                },
+                                "details": {
+                                    "findings": [],
+                                    "per_doctor": [],
+                                    "rankings": {"top_unhappy": [], "top_happy": []},
+                                    "working_lock_version": None,
+                                },
+                                "details_typed": None,
+                            },
+                        },
+                        "published": {
+                            "summary": "Published diagnostics (version_id is published version id)",
+                            "value": {
+                                "version_id": "200",
+                                "computed_at": "2026-01-28T10:05:01Z",
+                                "summary": {
+                                    "coverage_missing_required_slots": 1,
+                                    "hard_issues_count": 1,
+                                    "rest_violations": 0,
+                                    "fairness_index": 0.95,
+                                    "preference_fulfillment_pct": 82.0,
+                                },
+                                "details": {
+                                    "findings": [
+                                        {
+                                            "code": issues.COVERAGE_MISSING_REQUIRED_SLOT,
+                                            "severity": "critical",
+                                            "context": {"day": 10, "shift_type": "oncall", "was_ignored": False},
+                                        }
+                                    ],
+                                    "per_doctor": [],
+                                    "rankings": {"top_unhappy": [], "top_happy": []},
+                                    "working_lock_version": None,
+                                },
+                                "details_typed": None,
                             },
                         },
                     }
@@ -326,36 +474,30 @@ def generate_schedule(
         },
         404: {
             "description": "Not found (no working row or pointer/version missing).",
+            "content": {"application/json": {"example": _err_example("not_found")}},
+        },
+        500: {
+            "description": "Database error.",
+            "content": {
+                "application/json": {"example": _err_example("db_error", detail="Database error.", context={})}
+            },
         },
     },
 )
 def schedules_diagnostics(
-    user: UserCtx = Depends(require_admin),  # RBAC: admin only (dopasuj do swojej polityki)
+    user: UserCtx = Depends(require_admin),
     year: int = Path(..., ge=1900, le=2100, description="Calendar year"),
     month: int = Path(..., ge=1, le=12, description="Month 1..12"),
     target: Literal["working", "draft", "published"] = Query(
         ...,
         description=(
             "Which schedule source to analyze: "
-            "'working' = live autosave buffer (includes details.working_lock_version), "
+            "'working' = live autosave buffer, "
             "'draft' = current draft pointer, "
             "'published' = current published pointer."
         ),
     ),
 ) -> DiagnosticsRead:
-    """
-    Admin diagnostics endpoint.
-
-    Important behavior:
-    - target='working' reads the LIVE working buffer (autosave). It returns
-      details.working_lock_version so the frontend can keep it and later use it
-      for optimistic concurrency / “publish what I see” confirmation (ACK).
-    - target='draft' or 'published' resolves the pointer to a version_id and returns
-      diagnostics for that immutable version (computed and cached).
-
-    The router is thin: it delegates pointer resolution and diagnostics computation
-    to SchedulingService.
-    """
     try:
         return svc.get_diagnostics(year=year, month=month, target=target)
     except ValueError as e:
@@ -363,22 +505,137 @@ def schedules_diagnostics(
         assert False
 
 
-# --------------------------- ADMIN: period view (MVP) --------------------------
+# --------------------------- ADMIN: period view --------------------------
+
+
 @router.get(
     "/{year}/{month}",
     response_model=SchedulesPeriodViewRead,
     tags=["schedules:admin"],
     summary="Period view (working + pointers + diagnostics) — service-built",
+    responses={
+        200: {
+            "description": "Unified view for a period (includes empty skeleton when nothing exists).",
+            "content": {
+                "application/json": {
+                    "examples": {
+                        "empty_skeleton": {
+                            "summary": "No data for the period yet",
+                            "value": {
+                                "year": 2026,
+                                "month": 2,
+                                "org_timezone": "Europe/Warsaw",
+                                "period_status": "current",
+                                "view": {"default_mode": "draft", "toggle_available": True},
+                                "working": {
+                                    "year": 2026,
+                                    "month": 2,
+                                    "exists": False,
+                                    "participant_doctor_ids": [],
+                                    "assignments": [],
+                                    "meta": {"labels": []},
+                                    "updated_at": None,
+                                    "lock_version": None,
+                                    "inputs_snapshot": None,
+                                },
+                                "draft": {
+                                    "version_id": None,
+                                    "checkpoints_count": 0,
+                                    "can_undo": False,
+                                    "can_redo": False,
+                                    "payload": None,
+                                },
+                                "published": {
+                                    "version_id": None,
+                                    "publications_count": 0,
+                                    "can_undo": False,
+                                    "can_redo": False,
+                                    "audit": None,
+                                    "payload": None,
+                                },
+                                "diagnostics": None,
+                            },
+                        },
+                        "with_draft": {
+                            "summary": "Working exists and a draft pointer exists",
+                            "value": {
+                                "year": 2026,
+                                "month": 2,
+                                "org_timezone": "Europe/Warsaw",
+                                "period_status": "current",
+                                "view": {"default_mode": "draft", "toggle_available": False},
+                                "working": {
+                                    "year": 2026,
+                                    "month": 2,
+                                    "exists": True,
+                                    "participant_doctor_ids": [101, 102, 103],
+                                    "assignments": [{"day": 1, "shift_type": "onsite", "doctor_id": 101}],
+                                    "meta": {"labels": []},
+                                    "updated_at": "2026-01-28T09:30:00Z",
+                                    "lock_version": 8,
+                                    "inputs_snapshot": None,
+                                },
+                                "draft": {
+                                    "version_id": "124",
+                                    "checkpoints_count": 2,
+                                    "can_undo": True,
+                                    "can_redo": False,
+                                    "payload": {
+                                        "participant_doctor_ids": [101, 102, 103],
+                                        "assignments": [{"day": 1, "shift_type": "onsite", "doctor_id": 101}],
+                                        "inputs_snapshot": None,
+                                        "meta": {"labels": []},
+                                    },
+                                },
+                                "published": {
+                                    "version_id": None,
+                                    "publications_count": 0,
+                                    "can_undo": False,
+                                    "can_redo": False,
+                                    "audit": None,
+                                    "payload": None,
+                                },
+                                "diagnostics": {
+                                    "version_id": "124",
+                                    "computed_at": "2026-01-28T09:40:00Z",
+                                    "summary": {
+                                        "coverage_missing_required_slots": 0,
+                                        "hard_issues_count": 0,
+                                        "rest_violations": 0,
+                                        "fairness_index": 1.0,
+                                        "preference_fulfillment_pct": 100.0,
+                                    },
+                                    "details": {
+                                        "findings": [],
+                                        "per_doctor": [],
+                                        "rankings": {"top_unhappy": [], "top_happy": []},
+                                        "working_lock_version": None,
+                                    },
+                                    "details_typed": None,
+                                },
+                            },
+                        },
+                    }
+                }
+            },
+        },
+        404: {
+            "description": "Not found (pointer exists but version row missing, etc.).",
+            "content": {"application/json": {"example": _err_example("not_found")}},
+        },
+        500: {
+            "description": "Database error.",
+            "content": {
+                "application/json": {"example": _err_example("db_error", detail="Database error.", context={})}
+            },
+        },
+    },
 )
 def schedules_period_view(
     year: int = Path(..., ge=1900, le=2100),
     month: int = Path(..., ge=1, le=12),
     user: UserCtx = Depends(require_admin),
 ) -> SchedulesPeriodViewRead:
-    """
-    Thin router: delegate composition to SchedulingService.get_period_view.
-    Router no longer composes the view; it calls the service and maps errors.
-    """
     try:
         return svc.get_period_view(year, month)
     except ValueError as e:
@@ -387,20 +644,65 @@ def schedules_period_view(
 
 
 # -------------------------- ADMIN: working read/put ----------------------------
+
+
 @router.get(
     "/{year}/{month}/working",
     response_model=ScheduleWorkingRead,
     tags=["schedules:admin"],
     summary="Read working draft (explicit)",
+    responses={
+        200: {
+            "description": "Working buffer (or skeleton if it doesn't exist).",
+            "content": {
+                "application/json": {
+                    "examples": {
+                        "exists_false": {
+                            "summary": "No working row yet",
+                            "value": {
+                                "year": 2026,
+                                "month": 2,
+                                "exists": False,
+                                "participant_doctor_ids": [],
+                                "assignments": [],
+                                "meta": {"labels": []},
+                                "updated_at": None,
+                                "lock_version": None,
+                                "inputs_snapshot": None,
+                            },
+                        },
+                        "exists_true": {
+                            "summary": "Working exists",
+                            "value": {
+                                "year": 2026,
+                                "month": 2,
+                                "exists": True,
+                                "participant_doctor_ids": [101, 102, 103],
+                                "assignments": [{"day": 1, "shift_type": "onsite", "doctor_id": 101}],
+                                "meta": {"labels": []},
+                                "updated_at": "2026-01-28T09:30:00Z",
+                                "lock_version": 8,
+                                "inputs_snapshot": None,
+                            },
+                        },
+                    }
+                }
+            },
+        },
+        404: {"description": "Not found.", "content": {"application/json": {"example": _err_example("not_found")}}},
+        500: {
+            "description": "Database error.",
+            "content": {
+                "application/json": {"example": _err_example("db_error", detail="Database error.", context={})}
+            },
+        },
+    },
 )
 def schedules_working_read(
     year: int = Path(..., ge=1900, le=2100),
     month: int = Path(..., ge=1, le=12),
     user: UserCtx = Depends(require_admin),
 ) -> ScheduleWorkingRead:
-    """
-    Return the current working buffer or a skeleton with exists=False.
-    """
     try:
         return svc.get_working(year, month)
     except ValueError as e:
@@ -413,6 +715,37 @@ def schedules_working_read(
     response_model=ScheduleWorkingAck,
     tags=["schedules:admin"],
     summary="Autosave working (OCC via lock_version)",
+    responses={
+        200: {
+            "description": "Working saved; lock_version may be bumped.",
+            "content": {
+                "application/json": {
+                    "example": {"year": 2026, "month": 2, "updated_at": "2026-01-28T09:30:00Z", "lock_version": 8}
+                }
+            },
+        },
+        409: {
+            "description": "OCC conflict (if_match_lock_version mismatched) or similar edit conflict.",
+            "content": {"application/json": {"example": _err_example("edit_conflict")}},
+        },
+        500: {
+            "description": "Database errors (unexpected).",
+            "content": {
+                "application/json": {
+                    "examples": {
+                        "db_integrity_error": {
+                            "summary": "Database integrity error",
+                            "value": _err_example("db_integrity_error", detail="Database integrity error.", context={}),
+                        },
+                        "db_error": {
+                            "summary": "Database error",
+                            "value": _err_example("db_error", detail="Database error.", context={}),
+                        },
+                    }
+                }
+            },
+        },
+    },
 )
 def schedules_working_put(
     year: int = Path(..., ge=1900, le=2100),
@@ -420,9 +753,6 @@ def schedules_working_put(
     body: ScheduleWorkingPut = Body(...),
     user: UserCtx = Depends(require_admin),
 ) -> ScheduleWorkingAck:
-    """
-    Autosave the working buffer. If if_match_lock_version mismatches → 409.
-    """
     try:
         return svc.save_working(
             year,
@@ -438,12 +768,70 @@ def schedules_working_put(
 
 
 # ----------------------------- ADMIN: checkpoint -------------------------------
+
+
 @router.post(
     "/{year}/{month}/checkpoint",
     status_code=status.HTTP_201_CREATED,
     response_model=ScheduleCheckpointCreated,
     tags=["schedules:admin"],
     summary="Create draft checkpoint from working (+diagnostics)",
+    responses={
+        201: {
+            "description": "Draft checkpoint created from working; diagnostics computed.",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "year": 2026,
+                        "month": 2,
+                        "draft": {
+                            "version_id": "124",
+                            "checkpoints_count": 2,
+                            "can_undo": True,
+                            "can_redo": False,
+                            "payload": {
+                                "participant_doctor_ids": [101, 102, 103],
+                                "assignments": [
+                                    {"day": 1, "shift_type": "onsite", "doctor_id": 101},
+                                    {"day": 1, "shift_type": "oncall", "doctor_id": 102},
+                                ],
+                                "inputs_snapshot": None,
+                                "meta": {"labels": []},
+                            },
+                        },
+                        "diagnostics": {
+                            "version_id": "124",
+                            "computed_at": "2026-01-28T09:40:00Z",
+                            "summary": {
+                                "coverage_missing_required_slots": 0,
+                                "hard_issues_count": 0,
+                                "rest_violations": 0,
+                                "fairness_index": 1.0,
+                                "preference_fulfillment_pct": 100.0,
+                            },
+                            "details": {
+                                "findings": [],
+                                "per_doctor": [],
+                                "rankings": {"top_unhappy": [], "top_happy": []},
+                                "working_lock_version": None,
+                            },
+                            "details_typed": None,
+                        },
+                    }
+                }
+            },
+        },
+        404: {
+            "description": "Not found (e.g., working missing).",
+            "content": {"application/json": {"example": _err_example("not_found")}},
+        },
+        500: {
+            "description": "Database error.",
+            "content": {
+                "application/json": {"example": _err_example("db_error", detail="Database error.", context={})}
+            },
+        },
+    },
 )
 def schedules_checkpoint(
     year: int = Path(..., ge=1900, le=2100),
@@ -451,9 +839,6 @@ def schedules_checkpoint(
     body: ScheduleCheckpointRequest | None = Body(None),
     user: UserCtx = Depends(require_admin),
 ) -> ScheduleCheckpointCreated:
-    """
-    Create an immutable draft version from working and compute diagnostics.
-    """
     try:
         return svc.checkpoint(year, month, note=(body.note if body else None), user_id=user.user_id if user else None)
     except ValueError as e:
@@ -462,20 +847,79 @@ def schedules_checkpoint(
 
 
 # ----------------------------- ADMIN: draft undo/redo --------------------------
+
+
 @router.post(
     "/{year}/{month}/revert-last",
     response_model=ScheduleRevertRead,
     tags=["schedules:admin"],
     summary="Draft UNDO (pointer → previous checkpoint + overwrite working)",
+    responses={
+        200: {
+            "description": "Draft pointer moved to previous checkpoint; working overwritten; diagnostics returned.",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "year": 2026,
+                        "month": 2,
+                        "draft": {
+                            "version_id": "120",
+                            "checkpoints_count": 5,
+                            "can_undo": True,
+                            "can_redo": True,
+                            "payload": None,
+                        },
+                        "working": {
+                            "year": 2026,
+                            "month": 2,
+                            "exists": True,
+                            "participant_doctor_ids": [101, 102, 103],
+                            "assignments": [{"day": 1, "shift_type": "onsite", "doctor_id": 101}],
+                            "meta": {"labels": []},
+                            "updated_at": "2026-01-28T09:45:00Z",
+                            "lock_version": 9,
+                            "inputs_snapshot": None,
+                        },
+                        "diagnostics": {
+                            "version_id": "120",
+                            "computed_at": "2026-01-28T09:45:01Z",
+                            "summary": {
+                                "coverage_missing_required_slots": 0,
+                                "hard_issues_count": 0,
+                                "rest_violations": 0,
+                                "fairness_index": 1.0,
+                                "preference_fulfillment_pct": 100.0,
+                            },
+                            "details": {
+                                "findings": [],
+                                "per_doctor": [],
+                                "rankings": {"top_unhappy": [], "top_happy": []},
+                                "working_lock_version": None,
+                            },
+                            "details_typed": None,
+                        },
+                    }
+                }
+            },
+        },
+        409: {
+            "description": "No earlier version available.",
+            "content": {"application/json": {"example": _err_example("cannot_undo")}},
+        },
+        404: {"description": "Not found.", "content": {"application/json": {"example": _err_example("not_found")}}},
+        500: {
+            "description": "Database error.",
+            "content": {
+                "application/json": {"example": _err_example("db_error", detail="Database error.", context={})}
+            },
+        },
+    },
 )
 def schedules_draft_undo(
     year: int = Path(..., ge=1900, le=2100),
     month: int = Path(..., ge=1, le=12),
     user: UserCtx = Depends(require_admin),
 ) -> ScheduleRevertRead:
-    """
-    Move the draft pointer backward and overwrite working with that snapshot.
-    """
     try:
         return cast(
             ScheduleRevertRead,
@@ -491,15 +935,72 @@ def schedules_draft_undo(
     response_model=ScheduleRevertRead,
     tags=["schedules:admin"],
     summary="Draft REDO (pointer → next checkpoint + overwrite working)",
+    responses={
+        200: {
+            "description": "Draft pointer moved to next checkpoint; working overwritten; diagnostics returned.",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "year": 2026,
+                        "month": 2,
+                        "draft": {
+                            "version_id": "121",
+                            "checkpoints_count": 5,
+                            "can_undo": True,
+                            "can_redo": True,
+                            "payload": None,
+                        },
+                        "working": {
+                            "year": 2026,
+                            "month": 2,
+                            "exists": True,
+                            "participant_doctor_ids": [101, 102, 103],
+                            "assignments": [{"day": 1, "shift_type": "oncall", "doctor_id": 102}],
+                            "meta": {"labels": []},
+                            "updated_at": "2026-01-28T09:50:00Z",
+                            "lock_version": 10,
+                            "inputs_snapshot": None,
+                        },
+                        "diagnostics": {
+                            "version_id": "121",
+                            "computed_at": "2026-01-28T09:50:01Z",
+                            "summary": {
+                                "coverage_missing_required_slots": 0,
+                                "hard_issues_count": 0,
+                                "rest_violations": 0,
+                                "fairness_index": 1.0,
+                                "preference_fulfillment_pct": 100.0,
+                            },
+                            "details": {
+                                "findings": [],
+                                "per_doctor": [],
+                                "rankings": {"top_unhappy": [], "top_happy": []},
+                                "working_lock_version": None,
+                            },
+                            "details_typed": None,
+                        },
+                    }
+                }
+            },
+        },
+        409: {
+            "description": "No later version available.",
+            "content": {"application/json": {"example": _err_example("cannot_redo")}},
+        },
+        404: {"description": "Not found.", "content": {"application/json": {"example": _err_example("not_found")}}},
+        500: {
+            "description": "Database error.",
+            "content": {
+                "application/json": {"example": _err_example("db_error", detail="Database error.", context={})}
+            },
+        },
+    },
 )
 def schedules_draft_redo(
     year: int = Path(..., ge=1900, le=2100),
     month: int = Path(..., ge=1, le=12),
     user: UserCtx = Depends(require_admin),
 ) -> ScheduleRevertRead:
-    """
-    Move the draft pointer forward and overwrite working with that snapshot.
-    """
     try:
         return cast(
             ScheduleRevertRead,
@@ -511,12 +1012,82 @@ def schedules_draft_redo(
 
 
 # -------------------------------- ADMIN: publish -------------------------------
+
+
 @router.post(
     "/{year}/{month}/publish",
     status_code=status.HTTP_201_CREATED,
     response_model=SchedulePublishCreated,
     tags=["schedules:admin"],
     summary="Publish from working (hard-rule guard; force supported)",
+    responses={
+        201: {
+            "description": "Published version created from working.",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "year": 2026,
+                        "month": 2,
+                        "published": {
+                            "version_id": "200",
+                            "publications_count": 1,
+                            "can_undo": False,
+                            "can_redo": False,
+                            "audit": {
+                                "published_at": "2026-01-28T10:00:00Z",
+                                "published_by_user_id": 1,
+                                "note": "Finalize",
+                            },
+                            "payload": None,
+                        },
+                    }
+                }
+            },
+        },
+        409: {
+            "description": "Publishing blocked by hard-rule violations (unless force=True).",
+            "content": {
+                "application/json": {
+                    "example": _err_example(
+                        "publish_blocked_by_hard_rules",
+                        detail="Publishing blocked: hard rule violations detected.",
+                        context={
+                            "year": 2026,
+                            "month": 2,
+                            "hard_violations": [
+                                {
+                                    "code": issues.COVERAGE_MISSING_REQUIRED_SLOT,
+                                    "message": "Required coverage slot is missing.",
+                                    "context": {"day": 10, "shift_type": "oncall", "was_ignored": False},
+                                }
+                            ],
+                            "diagnostics_summary": {
+                                "coverage_missing_required_slots": 1,
+                                "hard_issues_count": 1,
+                                "rest_violations": 0,
+                                "fairness_index": 0.95,
+                                "preference_fulfillment_pct": 82.0,
+                            },
+                            "generation_exceptions": [
+                                {"code": issues.COVERAGE_IGNORED_SLOT, "day": 2, "shift_type": "onsite"},
+                            ],
+                        },
+                    )
+                }
+            },
+        },
+        400: {
+            "description": "Invalid accepted exception payload.",
+            "content": {"application/json": {"example": _err_example("invalid_accepted_exception")}},
+        },
+        404: {"description": "Not found.", "content": {"application/json": {"example": _err_example("not_found")}}},
+        500: {
+            "description": "Database error.",
+            "content": {
+                "application/json": {"example": _err_example("db_error", detail="Database error.", context={})}
+            },
+        },
+    },
 )
 def schedules_publish(
     year: int = Path(..., ge=1900, le=2100),
@@ -524,11 +1095,6 @@ def schedules_publish(
     body: SchedulePublishRequest = Body(...),
     user: UserCtx = Depends(require_admin),
 ) -> SchedulePublishCreated:
-    """
-    Publish the current working snapshot.
-    - If force=False and hard violations exist → 409.
-    - If force=True → accept exceptions and proceed.
-    """
     try:
         return svc.publish(
             year,
@@ -543,21 +1109,52 @@ def schedules_publish(
         assert False
 
 
-# ----------------------- ADMIN: published undo/redo (stub) ---------------------
+# ----------------------- ADMIN: published undo/redo ---------------------
+
+
 @router.post(
     "/{year}/{month}/revert-last-published",
     response_model=SchedulePublishedRevertRead,
     tags=["schedules:admin"],
     summary="Published rollback (pointer → previous published)",
+    responses={
+        200: {
+            "description": "Published pointer moved to previous published version (does not touch working).",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "year": 2026,
+                        "month": 2,
+                        "published": {
+                            "version_id": "199",
+                            "publications_count": 2,
+                            "can_undo": False,
+                            "can_redo": True,
+                            "audit": None,
+                            "payload": None,
+                        },
+                    }
+                }
+            },
+        },
+        409: {
+            "description": "No earlier published version available.",
+            "content": {"application/json": {"example": _err_example("cannot_undo")}},
+        },
+        404: {"description": "Not found.", "content": {"application/json": {"example": _err_example("not_found")}}},
+        500: {
+            "description": "Database error.",
+            "content": {
+                "application/json": {"example": _err_example("db_error", detail="Database error.", context={})}
+            },
+        },
+    },
 )
 def schedules_published_undo(
     year: int = Path(..., ge=1900, le=2100),
     month: int = Path(..., ge=1, le=12),
     user: UserCtx = Depends(require_admin),
 ) -> SchedulePublishedRevertRead:
-    """
-    Move the published pointer backward (does not touch working).
-    """
     try:
         return cast(
             SchedulePublishedRevertRead,
@@ -573,15 +1170,44 @@ def schedules_published_undo(
     response_model=SchedulePublishedRevertRead,
     tags=["schedules:admin"],
     summary="Published redo (pointer → next published)",
+    responses={
+        200: {
+            "description": "Published pointer moved to next published version (does not touch working).",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "year": 2026,
+                        "month": 2,
+                        "published": {
+                            "version_id": "200",
+                            "publications_count": 2,
+                            "can_undo": True,
+                            "can_redo": False,
+                            "audit": None,
+                            "payload": None,
+                        },
+                    }
+                }
+            },
+        },
+        409: {
+            "description": "No later published version available.",
+            "content": {"application/json": {"example": _err_example("cannot_redo")}},
+        },
+        404: {"description": "Not found.", "content": {"application/json": {"example": _err_example("not_found")}}},
+        500: {
+            "description": "Database error.",
+            "content": {
+                "application/json": {"example": _err_example("db_error", detail="Database error.", context={})}
+            },
+        },
+    },
 )
 def schedules_published_redo(
     year: int = Path(..., ge=1900, le=2100),
     month: int = Path(..., ge=1, le=12),
     user: UserCtx = Depends(require_admin),
 ) -> SchedulePublishedRevertRead:
-    """
-    Move the published pointer forward (does not touch working).
-    """
     try:
         return cast(
             SchedulePublishedRevertRead,
@@ -592,50 +1218,90 @@ def schedules_published_redo(
         assert False
 
 
-# --------------------------- EXPORT ----------------------------
+# --------------------------- EXPORT (placeholder) ----------------------------
+
+
 @router.get(
     "/export",
     tags=["schedules:export"],
-    summary="Unified export for admins & doctors (pointer-based, xlsx/pdf/ics)",
+    summary="Unified export for admins & doctors (xlsx/pdf/ics)",
     operation_id="schedules_export_get",
+    responses={
+        501: {
+            "description": "Not implemented.",
+            "content": {"application/json": {"example": _err_example("not_implemented", context={})}},
+        },
+    },
 )
 def schedules_export(
-    year: int = Query(..., ge=1900, le=2100, description="Calendar year"),
-    month: int = Query(..., ge=1, le=12, description="Month 1..12"),
-    mode: Literal["draft", "published"] = Query(..., description="Which stream to export"),
-    format: Literal["xlsx", "pdf", "ics"] = Query(..., description="Export format"),
-    doctor_id: Optional[int] = Query(None, ge=1, description="Required for ICS (admin may choose a doctor)"),
-    user: UserCtx = Depends(require_admin),  # TODO: unify with doctor path rules
+    year: int = Query(..., ge=1900, le=2100),
+    month: int = Query(..., ge=1, le=12),
+    mode: Literal["draft", "published"] = Query(...),
+    format: Literal["xlsx", "pdf", "ics"] = Query(...),
+    doctor_id: Optional[int] = Query(None, ge=1),
+    user: UserCtx = Depends(require_admin),
 ):
-    """
-    Export placeholder.
-
-    IMPORTANT:
-    - Keep the path relative ("/export") because router has the prefix "/api/v1/schedules".
-    - Tag "schedules:export" creates a separate visual section in Swagger.
-
-    TODO:
-    - Implement RBAC rules from API contract (doctors vs admins, ics rules).
-    - Stream file with correct headers.
-    """
-    raise HTTPException(status_code=status.HTTP_501_NOT_IMPLEMENTED, detail=make_error("not_implemented"))
+    raise HTTPException(
+        status_code=status.HTTP_501_NOT_IMPLEMENTED,
+        detail=make_error("not_implemented", context={}),
+    )
 
 
 # --------------------------- DOCTOR: read published ----------------------------
+
+
 @router.get(
     "/{year}/{month}/published",
     response_model=SchedulePublishedRead,
     tags=["schedules:doctor"],
     summary="Read current PUBLISHED schedule for the period (pointer-based)",
+    responses={
+        200: {
+            "description": "Current published schedule snapshot for the period.",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "year": 2026,
+                        "month": 2,
+                        "org_timezone": "Europe/Warsaw",
+                        "period_status": "current",
+                        "published": {
+                            "version_id": "200",
+                            "publications_count": 1,
+                            "can_undo": False,
+                            "can_redo": False,
+                            "audit": {"published_at": "2026-01-28T10:00:00Z"},
+                            "payload": {
+                                "participant_doctor_ids": [101, 102, 103],
+                                "assignments": [
+                                    {"day": 1, "shift_type": "onsite", "doctor_id": 101},
+                                    {"day": 1, "shift_type": "oncall", "doctor_id": 102},
+                                ],
+                                "inputs_snapshot": None,
+                                "meta": {"labels": []},
+                            },
+                        },
+                    }
+                }
+            },
+        },
+        404: {
+            "description": "Not found (no published pointer/version).",
+            "content": {"application/json": {"example": _err_example("not_found")}},
+        },
+        500: {
+            "description": "Database error.",
+            "content": {
+                "application/json": {"example": _err_example("db_error", detail="Database error.", context={})}
+            },
+        },
+    },
 )
 def schedules_published_read(
     year: int = Path(..., ge=1900, le=2100),
     month: int = Path(..., ge=1, le=12),
     user: UserCtx = Depends(require_doctor),
 ) -> SchedulePublishedRead:
-    """
-    Return the currently published snapshot for the period (404 if missing).
-    """
     try:
         return svc.get_published(year, month)
     except ValueError as e:
@@ -643,25 +1309,48 @@ def schedules_published_read(
         assert False
 
 
-# ---------------------- DOCTOR: my assignments (placeholder) -------------------
+# ---------------------- DOCTOR: my assignments -------------------
+
+
 @router.get(
     "/{year}/{month}/my-assignments",
     response_model=MyAssignmentsRead,
     tags=["schedules:doctor"],
     summary="List my assignments from the current PUBLISHED schedule",
+    responses={
+        200: {
+            "description": "My assignments extracted from current published schedule.",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "doctor_id": 101,
+                        "year": 2026,
+                        "month": 2,
+                        "assignments": [
+                            {"day": 1, "shift_type": "onsite"},
+                            {"day": 5, "shift_type": "oncall"},
+                        ],
+                    }
+                }
+            },
+        },
+        404: {
+            "description": "Not found (no published pointer/version).",
+            "content": {"application/json": {"example": _err_example("not_found")}},
+        },
+        500: {
+            "description": "Database error.",
+            "content": {
+                "application/json": {"example": _err_example("db_error", detail="Database error.", context={})}
+            },
+        },
+    },
 )
 def schedules_my_assignments(
     year: int = Path(..., ge=1900, le=2100),
     month: int = Path(..., ge=1, le=12),
     user: UserCtx = Depends(require_doctor),
 ) -> MyAssignmentsRead:
-    """
-    Doctor endpoint: return ONLY my assignments for the period.
-
-    Rules:
-    - Source of truth is the current PUBLISHED pointer (stable doctor view).
-    - Doctor id is taken from auth context (user.user_id in MVP).
-    """
     try:
         return svc.get_my_assignments(year=year, month=month, doctor_id=user.user_id if user else -1)
     except ValueError as e:

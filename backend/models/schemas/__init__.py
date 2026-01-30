@@ -27,11 +27,7 @@ from backend.models.common_enums import (
 from .auth import LoginRequest, SetPasswordRequest, SetPasswordResponse, TokenResponse
 
 # Availability
-from .availability import (
-    AvailabilityDayRead,
-    AvailabilityDaySummary,
-    AvailabilityOverviewRead,
-)
+from .availability import AvailabilityDayRead, AvailabilityDaySummary, AvailabilityIgnoreSlot, AvailabilityOverviewRead
 
 # Diagnostics
 from .diagnostics import DiagnosticsRead, DiagnosticsSummary
@@ -160,4 +156,5 @@ __all__ = [
     "ScheduleExportQuery",
     # Availability
     "AvailabilityDaySummary",
+    "AvailabilityIgnoreSlot",
 ]

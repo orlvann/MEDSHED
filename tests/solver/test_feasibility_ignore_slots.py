@@ -1,11 +1,9 @@
-# tests/solver/test_feasibility_ignore_slots.py
 """
 Guarantees for feasibility pre-check behavior with ignore_slots.
 
 Main goal:
 - If a slot is ignored, it is NOT required, so feasibility must NOT emit
   "no_*_candidate" for that slot.
-- SINGLE_CANDIDATE_FOR_BOTH_ROLES must be emitted only when BOTH shifts are required.
 - Specialist requirement is enforced only when BOTH shifts are required.
 """
 
@@ -18,7 +16,6 @@ from backend.core.issues import (
     NO_ONCALL_CANDIDATE,
     NO_ONSITE_CANDIDATE,
     NO_SPECIALIST,
-    SINGLE_CANDIDATE_FOR_BOTH_ROLES,
 )
 from backend.core.types import DoctorInput
 from backend.models.common_enums import DoctorRole, ShiftType
@@ -64,40 +61,6 @@ def test_ignored_onsite_does_not_emit_no_onsite_candidate(make_problem_data, mak
     assert codes == []
 
 
-def test_single_candidate_for_both_roles_is_not_emitted_when_one_shift_is_ignored(make_problem_data, make_preferences):
-    """
-    SINGLE_CANDIDATE_FOR_BOTH_ROLES only makes sense when BOTH shifts are required.
-    If onsite is ignored, we must NOT emit it even if oncall has only one candidate.
-    """
-    doctors = {
-        1: DoctorInput(id=1, role=DoctorRole.specialist, is_head=False),
-        2: DoctorInput(id=2, role=DoctorRole.resident, is_head=False),
-    }
-
-    # Only doctor 1 can do oncall on day 1, and onsite is ignored.
-    prefs = make_preferences(
-        doctors=doctors,
-        unavailable_oncall_by_doc={2: [1]},  # resident cannot do oncall -> only specialist remains
-        unavailable_onsite_by_doc={},  # does not matter, onsite is ignored
-    )
-
-    problem = make_problem_data(
-        days=[1],
-        doctors=doctors,
-        preferences=prefs,
-        participant_doctor_ids=set(doctors.keys()),
-        ignore_slots={(1, ShiftType.onsite)},  # only oncall is required
-    )
-
-    issues = analyze_problem(problem)
-    codes = _codes(issues)
-
-    assert SINGLE_CANDIDATE_FOR_BOTH_ROLES not in codes
-    # Still feasible: oncall has a candidate.
-    # Specialist requirement is NOT enforced when only one shift is required.
-    assert codes == []
-
-
 def test_if_only_oncall_is_required_and_has_no_candidates_we_emit_no_oncall_candidate(
     make_problem_data, make_preferences
 ):
@@ -131,4 +94,3 @@ def test_if_only_oncall_is_required_and_has_no_candidates_we_emit_no_oncall_cand
     assert NO_ONCALL_CANDIDATE in codes
     assert NO_ONSITE_CANDIDATE not in codes
     assert NO_SPECIALIST not in codes
-    assert SINGLE_CANDIDATE_FOR_BOTH_ROLES not in codes

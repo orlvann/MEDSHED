@@ -32,7 +32,7 @@ from backend.db.session import SessionLocal
 from backend.models.common_enums import DoctorRole, PeriodStatus, RiskLevel, ShiftType
 from backend.models.orm.doctor import Doctor
 from backend.models.orm.preference import PreferencePointer, PreferenceVersion
-from backend.models.schemas.availability import (
+from backend.models.schemas import (
     AvailabilityDayRead,
     AvailabilityDaySummary,
     AvailabilityIgnoreSlot,

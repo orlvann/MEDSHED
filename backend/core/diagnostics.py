@@ -26,6 +26,37 @@ IGNORE POLICY (final):
 - Backward compatibility: if meta.exceptions contains ignored_day / coverage_ignored_day,
   we treat it as BOTH slots ignored for that day by converting it into ignored_slots
   for (day, onsite) and (day, oncall) during diagnostics parsing.
+
+Example (input payload shape, minimal):
+{
+  "participant_doctor_ids": [101, 102],
+  "assignments": [
+    {"day": 1, "shift_type": "onsite", "doctor_id": 101},
+    {"day": 1, "shift_type": "oncall", "doctor_id": 102},
+  ],
+  "meta": {"labels": [], "exceptions": [{"code":"coverage_ignored_slot","day":2,"shift_type":"onsite"}]},
+  "inputs_snapshot": {"doctors": {"101": {
+  "display_name":"Alice","role":"specialist","is_head":True,"is_active_at_snapshot":True}}}
+}
+
+Example (output shape):
+{
+  "summary": {
+    "coverage_missing_required_slots": 0,
+    "hard_issues_count": 0,
+    "rest_violations": 0,
+    "fairness_index": 1.0,
+    "preference_fulfillment_pct": 100.0,
+    "penalty_total": 0,
+    "understaffed_days": 0
+  },
+  "details": {
+    "findings": [...],
+    "per_doctor": [...],
+    "rankings": {"top_unhappy":[...],"top_happy":[...]},
+    "components": {...}
+  }
+}
 """
 
 from __future__ import annotations
@@ -37,6 +68,33 @@ from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 from backend.core import issues, scoring
 from backend.core.types import ProblemData
 from backend.models.common_enums import DoctorRole, ShiftType
+
+# ----------------------------- issues codes (safe) -----------------------------
+
+
+def _issue_code(name: str, fallback: str) -> str:
+    """
+    Safely get a string code from backend.core.issues.
+
+    Why:
+    - We want stable codes, but we also want this module to not crash
+      if an attribute name changes in issues.py.
+    """
+    v = getattr(issues, name, None)
+    if v is None:
+        return str(fallback)
+    return str(getattr(v, "value", v))
+
+
+# Stable codes used by this module (with safe fallbacks).
+_CODE_COVERAGE_IGNORED_DAY = _issue_code("COVERAGE_IGNORED_DAY", "coverage_ignored_day")
+_CODE_COVERAGE_IGNORED_SLOT = _issue_code("COVERAGE_IGNORED_SLOT", "coverage_ignored_slot")
+_CODE_COVERAGE_MISSING_REQUIRED_SLOT = _issue_code("COVERAGE_MISSING_REQUIRED_SLOT", "coverage_missing_required_slot")
+_CODE_COVERAGE_NO_SPECIALIST_DAY = _issue_code("COVERAGE_NO_SPECIALIST_DAY", "coverage_no_specialist_day")
+_CODE_HARD_DOUBLE_SHIFT_SAME_DAY = _issue_code("HARD_DOUBLE_SHIFT_SAME_DAY", "hard_double_shift_same_day")
+_CODE_REST_CONSECUTIVE_VIOLATION = _issue_code("REST_CONSECUTIVE_VIOLATION", "rest_consecutive_violation")
+_CODE_PREFERENCE_MISS = _issue_code("PREFERENCE_MISS", "preference_miss")
+
 
 # ----------------------------- small parsing helpers -----------------------------
 
@@ -116,11 +174,11 @@ def _extract_ignored_slots_from_meta(meta: Dict[str, Any]) -> Set[Tuple[int, Shi
 
     ignored_day_codes = {
         "ignored_day",
-        str(getattr(issues, "COVERAGE_IGNORED_DAY", "coverage_ignored_day")).strip().lower(),
+        str(_CODE_COVERAGE_IGNORED_DAY).strip().lower(),
     }
     ignored_slot_codes = {
         "ignored_slot",
-        str(getattr(issues, "COVERAGE_IGNORED_SLOT", "coverage_ignored_slot")).strip().lower(),
+        str(_CODE_COVERAGE_IGNORED_SLOT).strip().lower(),
     }
 
     for e in exceptions:
@@ -341,7 +399,7 @@ def compute_preference_fulfillment_pct(
     - preferred_oncall_days
 
     Notes:
-    - If a preferred SLOT is ignored/doesn't exist -> it's skipped (not counted).
+    - If a preferred SLOT is ignored -> it's skipped (not counted).
     - If there are no preferences at all -> return 100.0.
     """
     total = 0
@@ -468,7 +526,6 @@ def compute_rest_penalty_and_violations(*, problem: ProblemData, idx: _Index) ->
     total_penalty, total_violations, _viol_by_doc, _pen_by_doc, _rest_findings = _compute_rest_stats(
         problem=problem, idx=idx
     )
-
     return int(total_penalty), int(total_violations)
 
 
@@ -479,7 +536,13 @@ def _compute_rest_stats(
     Compute rest penalty and violations both globally and per-doctor.
 
     Returns:
-        (total_penalty, total_violations, violations_by_doctor, penalty_by_doctor)
+        (
+          total_penalty,
+          total_violations,
+          violations_by_doctor,
+          penalty_by_doctor,
+          rest_findings
+        )
     """
     total_penalty = 0
     total_violations = 0
@@ -516,7 +579,7 @@ def _compute_rest_stats(
                 penalty_by_doctor[int(doc_id)] += w
                 rest_findings.append(
                     _finding(
-                        code=issues.REST_CONSECUTIVE_VIOLATION,
+                        code=_CODE_REST_CONSECUTIVE_VIOLATION,
                         severity="warning",
                         context={"doctor_id": int(doc_id), "day": int(d), "kind": "onsite_onsite"},
                     )
@@ -533,7 +596,7 @@ def _compute_rest_stats(
                 penalty_by_doctor[int(doc_id)] += w
                 rest_findings.append(
                     _finding(
-                        code=issues.REST_CONSECUTIVE_VIOLATION,
+                        code=_CODE_REST_CONSECUTIVE_VIOLATION,
                         severity="warning",
                         context={"doctor_id": int(doc_id), "day": int(d), "kind": "oncall_oncall"},
                     )
@@ -552,7 +615,7 @@ def _compute_rest_stats(
                     penalty_by_doctor[int(doc_id)] += cross_w
                     rest_findings.append(
                         _finding(
-                            code=issues.REST_CONSECUTIVE_VIOLATION,
+                            code=_CODE_REST_CONSECUTIVE_VIOLATION,
                             severity="warning",
                             context={"doctor_id": int(doc_id), "day": int(d), "kind": "cross"},
                         )
@@ -568,7 +631,7 @@ def _compute_rest_stats(
                     penalty_by_doctor[int(doc_id)] += cross_w
                     rest_findings.append(
                         _finding(
-                            code=issues.REST_CONSECUTIVE_VIOLATION,
+                            code=_CODE_REST_CONSECUTIVE_VIOLATION,
                             severity="warning",
                             context={"doctor_id": int(doc_id), "day": int(d), "kind": "cross"},
                         )
@@ -592,9 +655,7 @@ def _weekend_days(problem: ProblemData) -> Set[int]:
 
 
 def compute_totals_penalty(*, problem: ProblemData, idx: _Index) -> int:
-    """
-    Backward-compatible wrapper (total penalty).
-    """
+    """Backward-compatible wrapper (total penalty)."""
     total_penalty, _pen_by_doc = _compute_totals_penalty_per_doctor(problem=problem, idx=idx)
     return int(total_penalty)
 
@@ -605,6 +666,9 @@ def _compute_totals_penalty_per_doctor(*, problem: ProblemData, idx: _Index) -> 
     - max_* -> excess^2
     - target_* -> (over^2 + under^2)
     Separate for monthly totals and weekend totals.
+
+    Returns:
+        (total_penalty, penalty_by_doctor)
     """
     total_penalty = 0
     penalty_by_doctor: Dict[int, int] = {int(d): 0 for d in problem.participant_doctor_ids}
@@ -693,9 +757,7 @@ def _compute_totals_penalty_per_doctor(*, problem: ProblemData, idx: _Index) -> 
 
 
 def compute_fairness_penalty_and_index(*, problem: ProblemData, idx: _Index) -> tuple[int, float]:
-    """
-    Backward-compatible wrapper (total penalty + index).
-    """
+    """Backward-compatible wrapper (total penalty + index)."""
     total_penalty, fairness_index, _pen_by_doc = _compute_fairness_stats(problem=problem, idx=idx)
     return int(total_penalty), float(fairness_index)
 
@@ -843,9 +905,7 @@ def _compute_fairness_stats(*, problem: ProblemData, idx: _Index) -> tuple[int, 
 
 
 def compute_weekday_patterns_penalty(*, problem: ProblemData, idx: _Index) -> int:
-    """
-    Backward-compatible wrapper (total penalty).
-    """
+    """Backward-compatible wrapper (total penalty)."""
     total_penalty, _pen_by_doc = _compute_weekday_patterns_penalty_per_doctor(problem=problem, idx=idx)
     return int(total_penalty)
 
@@ -900,9 +960,7 @@ def _compute_weekday_patterns_penalty_per_doctor(*, problem: ProblemData, idx: _
 
 
 def compute_preferred_partners_penalty(*, problem: ProblemData, idx: _Index) -> int:
-    """
-    Backward-compatible wrapper (total penalty).
-    """
+    """Backward-compatible wrapper (total penalty)."""
     total_penalty, _bonus_by_doctor = _compute_preferred_partners_bonus_by_doctor(problem=problem, idx=idx)
     return int(total_penalty)
 
@@ -959,9 +1017,7 @@ def _compute_preferred_partners_bonus_by_doctor(*, problem: ProblemData, idx: _I
 
 
 def compute_friday_free_weekend_penalty(*, problem: ProblemData, idx: _Index) -> int:
-    """
-    Backward-compatible wrapper (total penalty).
-    """
+    """Backward-compatible wrapper (total penalty)."""
     total_penalty, _pen_by_doc = _compute_friday_free_weekend_penalty_per_doctor(problem=problem, idx=idx)
     return int(total_penalty)
 
@@ -1027,9 +1083,7 @@ def compute_preferred_days_penalty(
     idx: _Index,
     ignored_slots: Set[Tuple[int, ShiftType]],
 ) -> int:
-    """
-    Backward-compatible wrapper (total penalty).
-    """
+    """Backward-compatible wrapper (total penalty)."""
     total_penalty, _pen_by_doc = _compute_preferred_days_penalty_per_doctor(
         problem=problem, idx=idx, ignored_slots=ignored_slots
     )
@@ -1097,9 +1151,7 @@ def _compute_preferred_days_penalty_per_doctor(
 
 
 def _assigned_totals_per_doctor(*, problem: ProblemData, idx: _Index) -> tuple[Dict[int, int], Dict[int, int]]:
-    """
-    Count assigned totals for each doctor (onsite and oncall).
-    """
+    """Count assigned totals for each doctor (onsite and oncall)."""
     onsite_by_doctor: Dict[int, int] = {int(d): 0 for d in problem.participant_doctor_ids}
     oncall_by_doctor: Dict[int, int] = {int(d): 0 for d in problem.participant_doctor_ids}
 
@@ -1142,7 +1194,7 @@ def _build_findings(
     for d, st in sorted(ignored_slots, key=lambda x: (int(x[0]), str(x[1].value))):
         findings.append(
             _finding(
-                code=issues.COVERAGE_IGNORED_SLOT,
+                code=_CODE_COVERAGE_IGNORED_SLOT,
                 severity="info",
                 context={"day": int(d), "shift_type": st.value},
             )
@@ -1155,7 +1207,7 @@ def _build_findings(
         was_ignored = bool((int(d), st) in ignored_slots)
         findings.append(
             _finding(
-                code=issues.COVERAGE_MISSING_REQUIRED_SLOT,
+                code=_CODE_COVERAGE_MISSING_REQUIRED_SLOT,
                 severity="critical",
                 context={"day": int(d), "shift_type": st.value, "was_ignored": was_ignored},
             )
@@ -1170,20 +1222,13 @@ def _build_findings(
             double_shift_days_by_doctor[int(doc_id)] += 1
             findings.append(
                 _finding(
-                    code=issues.HARD_DOUBLE_SHIFT_SAME_DAY,
+                    code=_CODE_HARD_DOUBLE_SHIFT_SAME_DAY,
                     severity="critical",
                     context={"doctor_id": int(doc_id), "day": int(day)},
                 )
             )
 
-    # Critical: in this day there must be at least 1 specialist assigned
-    # on ANY shift (onsite OR oncall).
-    #
-    # IMPORTANT:
-    # - This finding is independent from "coverage missing slot" findings.
-    #   Even if a slot/day is empty, we still report "no specialist".
-    # - We do NOT skip ignored slots in diagnostics; we only annotate them
-    #   so UI can show "this was previously accepted/ignored".
+    # Critical: in this day there must be at least 1 specialist assigned on ANY shift.
     for d_raw in problem.days:
         d = int(d_raw)
 
@@ -1204,7 +1249,7 @@ def _build_findings(
             )
             findings.append(
                 _finding(
-                    code=issues.COVERAGE_NO_SPECIALIST_DAY,
+                    code=_CODE_COVERAGE_NO_SPECIALIST_DAY,
                     severity="critical",
                     context={
                         "day": int(d),
@@ -1223,7 +1268,6 @@ def _build_findings(
             findings.append(dict(f))
 
     # Warning: preferred concrete days missed (per preferred day that was not assigned)
-    # Policy: keep this severity consistent (warning).
     days_set = set(int(x) for x in problem.days)
 
     for doc_id in sorted(problem.participant_doctor_ids):
@@ -1239,7 +1283,7 @@ def _build_findings(
             if not _doctor_has(idx, doctor_id=int(doc_id), day=int(d), shift_type=ShiftType.onsite):
                 findings.append(
                     _finding(
-                        code=issues.PREFERENCE_MISS,
+                        code=_CODE_PREFERENCE_MISS,
                         severity="warning",
                         context={"doctor_id": int(doc_id), "day": int(d), "shift_type": ShiftType.onsite.value},
                     )
@@ -1253,7 +1297,7 @@ def _build_findings(
             if not _doctor_has(idx, doctor_id=int(doc_id), day=int(d), shift_type=ShiftType.oncall):
                 findings.append(
                     _finding(
-                        code=issues.PREFERENCE_MISS,
+                        code=_CODE_PREFERENCE_MISS,
                         severity="warning",
                         context={"doctor_id": int(doc_id), "day": int(d), "shift_type": ShiftType.oncall.value},
                     )
@@ -1268,6 +1312,7 @@ def _build_findings(
 def _build_rankings(
     *,
     per_doctor_rows: List[Dict[str, Any]],
+    double_shift_days_by_doctor: Dict[int, int],
     top_n: int = 5,
 ) -> Dict[str, Any]:
     """
@@ -1275,37 +1320,41 @@ def _build_rankings(
     - score = points (higher => better/happier)
     - top_happy: highest score first
     - top_unhappy: lowest score first (often negative)
+
+    Output shape:
+    {
+      "top_unhappy": [{"doctor_id": 1, "score": -123.0, "reasons_codes":[...]}],
+      "top_happy":   [{"doctor_id": 2, "score": 0.0, "reasons_codes":[...]}]
+    }
     """
 
-    # Defensive: if score is missing, treat it as 0.0
     def _score(row: Dict[str, Any]) -> float:
+        # Defensive: if score is missing, treat it as 0.0
         try:
             v = row.get("score")
             return float(v) if v is not None else 0.0
         except Exception:
             return 0.0
 
-    # Unhappy: lowest points first
-    unhappy_sorted = sorted(per_doctor_rows, key=lambda r: (_score(r), int(r.get("doctor_id", 0))))
-    unhappy = unhappy_sorted[: int(top_n)]
-
-    # Happy: highest points first
-    happy_sorted = sorted(per_doctor_rows, key=lambda r: (-_score(r), int(r.get("doctor_id", 0))))
-    happy = happy_sorted[: int(top_n)]
-
     def _reasons_codes(row: Dict[str, Any]) -> List[str]:
         # Stable, short reason codes for FE (no messages here).
+        doc_id = int(row.get("doctor_id", 0))
         reasons: List[str] = []
         if int(row.get("rest_violations", 0)) > 0:
             reasons.append("rest_violations")
         if int(row.get("preferred_days_missed", 0)) > 0:
             reasons.append("preferred_days_missed")
-        if int(row.get("_double_shift_days", 0)) > 0:
-            reasons.append(issues.HARD_DOUBLE_SHIFT_SAME_DAY)
+        if int(double_shift_days_by_doctor.get(doc_id, 0)) > 0:
+            reasons.append(_CODE_HARD_DOUBLE_SHIFT_SAME_DAY)
         if float(row.get("preference_fulfillment_pct", 100.0)) < 100.0:
             reasons.append("preferences_not_fully_met")
-        # Keep list short and stable
         return reasons[:3]
+
+    unhappy_sorted = sorted(per_doctor_rows, key=lambda r: (_score(r), int(r.get("doctor_id", 0))))
+    unhappy = unhappy_sorted[: int(top_n)]
+
+    happy_sorted = sorted(per_doctor_rows, key=lambda r: (-_score(r), int(r.get("doctor_id", 0))))
+    happy = happy_sorted[: int(top_n)]
 
     top_unhappy = [
         {
@@ -1348,7 +1397,7 @@ def compute_quality(*, problem: ProblemData, payload: Dict[str, Any]) -> Dict[st
         "findings": [...],
         "per_doctor": [...],
         "rankings": {...},
-        "components": {...}  # optional, useful for debugging
+        "components": {...}
       }
     }
     """
@@ -1436,6 +1485,9 @@ def compute_quality(*, problem: ProblemData, payload: Dict[str, Any]) -> Dict[st
 
         score_points = float(-penalty_like)
 
+        # IMPORTANT:
+        # Keep per_doctor rows aligned with the public DTO contract.
+        # Do NOT add internal helper keys here.
         row: Dict[str, Any] = {
             "doctor_id": doc_id_i,
             "display_name": _display_name_from_snapshot(payload, doc_id_i),
@@ -1444,14 +1496,16 @@ def compute_quality(*, problem: ProblemData, payload: Dict[str, Any]) -> Dict[st
             "rest_violations": int(rest_viol_by_doc.get(doc_id_i, 0)),
             "preference_fulfillment_pct": float(pref_pct_by_doc.get(doc_id_i, 100.0)),
             "preferred_days_missed": int(pref_missed_by_doc.get(doc_id_i, 0)),
-            # "score" is now points: higher => happier/better
+            # "score" is points: higher => happier/better
             "score": float(score_points),
-            # Internal helper fields for rankings reasons (not part of DTO, but still pure dict)
-            "_double_shift_days": int(double_shift_days_by_doc.get(doc_id_i, 0)),
         }
         per_doctor.append(row)
 
-    rankings = _build_rankings(per_doctor_rows=per_doctor, top_n=5)
+    rankings = _build_rankings(
+        per_doctor_rows=per_doctor,
+        double_shift_days_by_doctor=double_shift_days_by_doc,
+        top_n=5,
+    )
 
     summary: Dict[str, Any] = {
         # NEW (final contract KPIs)

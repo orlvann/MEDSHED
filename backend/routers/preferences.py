@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Path, Query, status
 
+from backend.db.session import get_db
+from backend.models.orm import Doctor
 from backend.models.schemas import (
     PreferenceAutosaveAck,
     PreferenceCheckpointCreated,
@@ -16,6 +18,7 @@ from backend.models.schemas import (
 )
 from backend.models.schemas.dto_common import MonthInt, YearInt, make_error
 from backend.routers.deps import UserCtx, require_admin, require_doctor, require_user
+from backend.services.email_service import send_deadline_changed_email
 from backend.services.preference_service import (
     create_checkpoint,
     get_deadline,
@@ -28,9 +31,6 @@ from backend.services.preference_service import (
     upsert_deadline,
 )
 from backend.utils.timez import is_period_closed
-from backend.services.email_service import send_deadline_changed_email
-from backend.db.session import get_db
-from backend.models.orm import Doctor
 
 router: APIRouter = APIRouter()
 
@@ -155,7 +155,7 @@ def deadline_put(
     if result.deadline:
         db = next(get_db())
         try:
-            active_doctors = db.query(Doctor).filter(Doctor.is_active == True).all()
+            active_doctors = db.query(Doctor).filter(Doctor.is_active.is_(True)).all()
             for doctor in active_doctors:
                 if doctor.email:
                     send_deadline_changed_email(
@@ -230,11 +230,10 @@ def me_put_working(
     month: MonthInt = Path(...),
     payload: PreferenceWorkingPut = Body(...),
 ):
-    # Doctor-specific lock: history + deadline (also checks user.doctor_id is not None).
     _guard_doctor_preferences_locked(year, month, user)
-
-    # user.doctor_id is guaranteed non-None after _guard_doctor_preferences_locked
-    return save_working_autosave(year=year, month=month, doctor_id=user.doctor_id, payload=payload, actor=user)  # type: ignore[arg-type]
+    doctor_id = user.doctor_id
+    assert doctor_id is not None
+    return save_working_autosave(year=year, month=month, doctor_id=doctor_id, payload=payload, actor=user)
 
 
 @router.post(
@@ -249,13 +248,12 @@ def me_create_checkpoint(
     user: UserCtx = Depends(require_doctor),
     year: YearInt = Path(...),
     month: MonthInt = Path(...),
-    body: dict = Body(default_factory=dict),
+    body: dict = Body(default={}),
 ):
-    # Doctor-specific lock: history + deadline (also checks user.doctor_id is not None).
     _guard_doctor_preferences_locked(year, month, user)
-
-    # user.doctor_id is guaranteed non-None after _guard_doctor_preferences_locked
-    return create_checkpoint(year=year, month=month, doctor_id=user.doctor_id, actor=user)  # type: ignore[arg-type]
+    doctor_id = user.doctor_id
+    assert doctor_id is not None  # after guard this must be present
+    return create_checkpoint(year=year, month=month, doctor_id=doctor_id, actor=user)
 
 
 @router.post(
@@ -270,13 +268,10 @@ def me_revert_last(
     year: YearInt = Path(...),
     month: MonthInt = Path(...),
 ):
-    # Doctor-specific lock: history + deadline (also checks user.doctor_id is not None).
     _guard_doctor_preferences_locked(year, month, user)
-
-    # user.doctor_id is guaranteed non-None after _guard_doctor_preferences_locked
-    doctor_id = user.doctor_id  # type: ignore[assignment]
+    doctor_id = user.doctor_id
+    assert doctor_id is not None
     try:
-        # Service may raise ValueError("cannot_undo").
         return revert_last(year=year, month=month, doctor_id=doctor_id, actor=user)
     except ValueError as exc:
         _map_preference_error(exc, year=year, month=month, doctor_id=doctor_id)
@@ -294,13 +289,10 @@ def me_revert_next(
     year: YearInt = Path(...),
     month: MonthInt = Path(...),
 ):
-    # Doctor-specific lock: history + deadline (also checks user.doctor_id is not None).
     _guard_doctor_preferences_locked(year, month, user)
-
-    # user.doctor_id is guaranteed non-None after _guard_doctor_preferences_locked
-    doctor_id = user.doctor_id  # type: ignore[assignment]
+    doctor_id = user.doctor_id
+    assert doctor_id is not None
     try:
-        # Service may raise ValueError("cannot_redo").
         return revert_next(year=year, month=month, doctor_id=doctor_id, actor=user)
     except ValueError as exc:
         _map_preference_error(exc, year=year, month=month, doctor_id=doctor_id)
@@ -356,10 +348,9 @@ def admin_create_checkpoint(
     year: YearInt = Path(...),
     month: MonthInt = Path(...),
     doctor_id: int = Path(..., ge=1),
-    body: dict = Body(default_factory=dict),
+    body: dict = Body(default={}),
 ):
     _guard_period_closed(year, month)
-    # body reserved for future flags
     return create_checkpoint(year=year, month=month, doctor_id=doctor_id, actor=user)
 
 

@@ -1,3 +1,4 @@
+# tests/solver/test_diagnostics_coverage.py
 """
 Core diagnostics coverage tests.
 

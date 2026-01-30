@@ -53,15 +53,15 @@ class DiagnosticsSummaryRead(BaseModel):
         description="Satisfied preferences in percent (0..100).",
     )
 
-    # OLD (deprecated in API; kept for compatibility with current service payload)
-    penalty_total: int = Field(
-        0,
-        description="DEPRECATED: Total optimization penalty (lower is better).",
-    )
-    understaffed_days: int = Field(
-        0,
-        description="DEPRECATED: Number of days with missing required assignments.",
-    )
+    # # OLD (deprecated in API; kept for compatibility with current service payload)
+    # penalty_total: int = Field(
+    #     0,
+    #     description="DEPRECATED: Total optimization penalty (lower is better).",
+    # )
+    # understaffed_days: int = Field(
+    #     0,
+    #     description="DEPRECATED: Number of days with missing required assignments.",
+    # )
 
 
 def _make_diag_summary() -> "DiagnosticsSummaryRead":
@@ -73,8 +73,8 @@ def _make_diag_summary() -> "DiagnosticsSummaryRead":
         rest_violations=0,
         fairness_index=1.0,
         preference_fulfillment_pct=100.0,
-        penalty_total=0,
-        understaffed_days=0,
+        # penalty_total=0,
+        # understaffed_days=0,
     )
 
 
