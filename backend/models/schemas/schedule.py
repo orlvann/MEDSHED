@@ -346,6 +346,7 @@ class ScheduleGenerateRequest(BaseModel):
                         {"day": 3, "shift_type": "onsite"},
                         {"day": 7, "shift_type": "oncall"},
                     ],
+                    "justification": "Accept coverage gaps for these slots due to known staffing shortage.",
                     "head_commitment_resolutions": [{"day": 5, "shift_type": "onsite", "chosen_head_id": 101}],
                 }
             ]

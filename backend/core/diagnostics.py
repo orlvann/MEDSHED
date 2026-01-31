@@ -220,9 +220,6 @@ def _extract_audit_common_fields(e: Dict[str, Any]) -> Dict[str, Any]:
             out["accepted_by_user_id"] = accepted_by
 
     justification = e.get("justification")
-    if not (isinstance(justification, str) and justification.strip()):
-        justification = e.get("justification")
-
     if isinstance(justification, str) and justification.strip():
         out["justification"] = justification.strip()
 

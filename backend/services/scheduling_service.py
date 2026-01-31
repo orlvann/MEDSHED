@@ -105,6 +105,13 @@ from backend.services import diagnostics_service
 from backend.services.errors import DomainError
 from backend.utils import ORG_TZ, days_in_month, get_period_status, normalize_assignments, normalize_meta, now_utc
 
+# NOTE ABOUT AUDIT CODES (IMPORTANT):
+# - Slot markers use code=issues.COVERAGE_IGNORED_SLOT (e.g. "coverage_ignored_slot") AND must include day+shift_type.
+# - Action-level audit rows (justification for the whole decision) MUST NOT reuse that same code,
+#   otherwise core audit parser will treat them as malformed slot markers and drop them.
+# - Therefore we use a separate stable code for the action row below.
+_CODE_GENERATION_IGNORE_ACTION = "generation_ignore"
+
 # Retention policy (FIFO): tune here
 # Change these to keep more/fewer historical snapshots.
 RETAIN_LAST_DRAFTS = 5
@@ -1284,7 +1291,9 @@ class SchedulingService:
             if isinstance(justification, str) and justification.strip():
                 action_row: Dict[str, Any] = {
                     "kind": "generation_ignore",
-                    "code": ignored_slot_code,
+                    # IMPORTANT: do NOT reuse coverage_ignored_slot here (that's a slot marker code).
+                    # Use a separate stable code so core projects this into details.audit[] as an action row.
+                    "code": _CODE_GENERATION_IGNORE_ACTION,
                     "justification": justification.strip(),
                     "accepted_at": ignore_decision_at,
                 }
@@ -1609,7 +1618,7 @@ class SchedulingService:
                 )
                 problem = _build_problem_data_for_generate(session, req)
 
-            # Compute publish decision on CLEAN payload (ignore meta.exceptions)
+            # Compute publish decision on a sanitized payload (exceptions kept as audit only; do not affect metrics).
             payload_clean = _payload_for_clean_quality(payload)
             quality_clean = core_diagnostics.compute_quality(problem=problem, payload=payload_clean)
             hard_violations = _extract_hard_violations_from_quality(quality_clean)
