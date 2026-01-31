@@ -6,9 +6,10 @@
 # - It does NOT import schedule schemas (or other app schemas), so others can
 #   safely import DiagnosticsRead without creating circular imports.
 #
-# NOTE (contract evolution):
-# - `details` is currently a free JSON dict (legacy). It already contains
-#   findings/per_doctor/rankings in a stable shape.
+# NOTE (contract):
+# - The API returns a stable typed `details` structure (findings/per_doctor/rankings/audit/components).
+# - We may still compute extra debug fields in core, and we keep them inside the typed model
+#   as a free dict (components) to avoid losing useful diagnostics.
 # -----------------------------------------------------------------------------
 
 from __future__ import annotations
@@ -25,7 +26,7 @@ class DiagnosticsSummaryRead(BaseModel):
     """Compact KPIs for a single schedule version (working/draft/published).
 
     Backward compatibility:
-    - Older payloads may still send `penalty_total` and `understaffed_days`.
+    - Older payloads may still send legacy fields.
     - New contract uses `coverage_missing_required_slots` and `hard_issues_count`.
     - All fields have safe defaults so the server can always return a minimal payload.
     """
@@ -52,15 +53,8 @@ class DiagnosticsSummaryRead(BaseModel):
         description="Satisfied preferences in percent (0..100).",
     )
 
-    # # OLD (deprecated in API; kept for compatibility with current service payload)
-    # penalty_total: int = Field(
-    #     0,
-    #     description="DEPRECATED: Total optimization penalty (lower is better).",
-    # )
-    # understaffed_days: int = Field(
-    #     0,
-    #     description="DEPRECATED: Number of days with missing required assignments.",
-    # )
+    # OLD (deprecated) fields intentionally removed from the public DTO.
+    # They may exist in legacy internal payloads, but they are not part of the API contract.
 
 
 def _make_diag_summary() -> "DiagnosticsSummaryRead":
@@ -72,8 +66,6 @@ def _make_diag_summary() -> "DiagnosticsSummaryRead":
         rest_violations=0,
         fairness_index=1.0,
         preference_fulfillment_pct=100.0,
-        # penalty_total=0,
-        # understaffed_days=0,
     )
 
 
@@ -123,7 +115,7 @@ class DoctorDiagnosticsRead(BaseModel):
     score: Optional[float] = Field(
         default=None,
         description=(
-            "Optional per-doctor score used by rankings " "(higher=better or lower=better depending on convention)."
+            "Optional per-doctor score used by rankings (higher=better or lower=better depending on convention)."
         ),
     )
 
@@ -145,16 +137,95 @@ class RankingsRead(BaseModel):
 # ------------------------------ Details envelope ------------------------------
 
 
+AuditKind = Literal[
+    "generation_ignore",
+    "publish_acceptance",
+    "head_commitment_resolution",
+]
+
+
+class DiagnosticsAuditItemRead(BaseModel):
+    """
+    One audit row extracted from payload.meta.exceptions.
+
+    What "audit" means here:
+    - It is a history of human decisions and accepted exceptions.
+    - This includes BOTH:
+      * generation-time ignore decisions (slot-level markers),
+      * force-publish acceptances (with justification/accepted_at/by),
+      * head commitment resolutions (when multiple heads wanted the same slot).
+    """
+
+    # Helps FE decide where/how to render the row (tabs/sections/icons),
+    # without needing to infer it from the code string.
+    kind: Optional[AuditKind] = Field(
+        default=None,
+        description=(
+            "Audit category for UI grouping. "
+            "Examples: 'generation_ignore', 'publish_acceptance', 'head_commitment_resolution'."
+        ),
+    )
+
+    code: str = Field(..., description="Stable exception code accepted by user/admin.")
+
+    # Slot context (used for slot-level exceptions like coverage_ignored_slot).
+    # Optional to keep DTO flexible for different exception types.
+    day: Optional[int] = Field(
+        default=None,
+        description="Day number (1..31) if this audit entry refers to a concrete day (e.g., ignored slot).",
+    )
+    shift_type: Optional[str] = Field(
+        default=None,
+        description="Shift type string (e.g., 'onsite'/'oncall') if this audit entry refers to a slot.",
+    )
+
+    # Human acceptance context (mostly used for publish-time acceptances).
+    justification: Optional[str] = Field(
+        default=None,
+        description="Human justification provided when accepting the exception (if any).",
+    )
+    accepted_by_user_id: Optional[int] = Field(
+        default=None,
+        description="User id who accepted the exception (if known).",
+    )
+    accepted_at: Optional[datetime] = Field(
+        default=None,
+        description="UTC timestamp when the exception was accepted (if known).",
+    )
+
+
 class DiagnosticsDetailsRead(BaseModel):
     findings: list[DiagnosticsFindingRead] = Field(default_factory=list)
     per_doctor: list[DoctorDiagnosticsRead] = Field(default_factory=list)
     rankings: RankingsRead = Field(default_factory=RankingsRead)
 
+    # Decision history (generation ignores, publish acceptances, etc.).
+    # It is extracted from payload.meta.exceptions to keep FE compatible:
+    # - payload.meta.exceptions stays unchanged,
+    # - diagnostics returns this separate projection for UI display.
+    audit: list[DiagnosticsAuditItemRead] = Field(
+        default_factory=list,
+        description="Audit decision history extracted from payload.meta.exceptions.",
+    )
+
+    # Optional debug breakdown from core (safe free-form dict).
+    # Example keys depend on the core diagnostics implementation (scoring components, penalties, etc.).
+    components: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Optional debug breakdown of scoring components (free-form JSON).",
+    )
+
+    # This field is only used when diagnostics target="working".
+    # It helps the UI detect whether diagnostics were computed for the latest
+    # working buffer version without needing an extra /working call.
+    #
     # NOTE:
-    # - Field always exists in this DTO.
     # - For draft/published it should be None.
     # - For working it should be an int (OCC lock version).
-    working_lock_version: Optional[int] = None
+    working_lock_version: Optional[int] = Field(
+        default=None,
+        description="OCC lock version used only for target=working diagnostics.",
+    )
 
 
 # ------------------------------ Root payload ------------------------------
@@ -184,12 +255,9 @@ class DiagnosticsRead(BaseModel):
         description="Compact KPIs for quick UI consumption.",
     )
 
-    # Backward compatibility:
-    # - Keep the legacy free JSON dict in `details` so existing services/tests won't break.
-    # - New typed contract can be filled later in `details_typed` (no behavior change now).
-    details: Optional[dict[str, Any]] = Field(
+    details: Optional[DiagnosticsDetailsRead] = Field(
         default=None,
-        description="LEGACY: Optional rich breakdown (free JSON dict).",
+        description="Typed diagnostics breakdown for UI (findings, per-doctor, rankings, audit, components).",
     )
 
 
@@ -203,4 +271,6 @@ __all__ = [
     "DiagnosticsDetailsRead",
     "DiagnosticsSummary",
     "DiagnosticsRead",
+    "DiagnosticsAuditItemRead",
+    "AuditKind",
 ]

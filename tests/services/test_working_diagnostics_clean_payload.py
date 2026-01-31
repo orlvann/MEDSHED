@@ -35,8 +35,9 @@ def _insert_working_with_exceptions(db, *, year: int, month: int) -> None:
             "labels": ["as_generated"],
             # IMPORTANT: these should be ignored by working diagnostics
             "exceptions": [
-                {"code": "coverage_ignored_day", "day": 3},
-                {"code": "coverage_ignored_slot", "day": 5, "shift_type": "onsite"},
+                {"code": "coverage_ignored_slot", "day": 3, "shift_type": "onsite"},
+                # This one mimics "force publish accepted exception" style records.
+                {"code": "hard_missing_coverage", "justification": "force publish example", "accepted_by_user_id": 7},
             ],
             "solver_status": "OK",
         },
@@ -57,6 +58,10 @@ def test_working_diagnostics_ignores_meta_exceptions(monkeypatch, db_session):
     """
     SchedulingService.get_diagnostics(target='working') should call compute_quality()
     with a payload that does NOT include meta.exceptions.
+
+    Why:
+    - working diagnostics must describe CURRENT state, not previous accept/ignore decisions,
+      and not carry publish audit history.
     """
     year, month = 2026, 2
     _insert_working_with_exceptions(db_session, year=year, month=month)
@@ -71,11 +76,21 @@ def test_working_diagnostics_ignores_meta_exceptions(monkeypatch, db_session):
         captured["payload_seen"] = dict(payload or {})
         return {
             "summary": {
-                "score_total": 0.0,
-                "coverage_gaps_total": 0,
-                "hard_violations_total": 0,
+                "coverage_missing_required_slots": 0,
+                "hard_issues_count": 0,
+                "rest_violations": 0,
+                "fairness_index": 1.0,
+                "preference_fulfillment_pct": 100.0,
+                "penalty_total": 0,
+                "understaffed_days": 0,
             },
-            "details": {},
+            "details": {
+                "findings": [],
+                "audit": [],
+                "per_doctor": [],
+                "rankings": {"top_unhappy": [], "top_happy": []},
+                "components": {},
+            },
         }
 
     monkeypatch.setattr(core_diag, "compute_quality", _fake_compute_quality)

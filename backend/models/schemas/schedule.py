@@ -114,7 +114,10 @@ class SchedulePayload(BaseModel):
         description="Frozen inputs used to create the schedule (doctors + preference version ids).",
     )
 
-    # meta.labels must exist; meta.exceptions is optional, untyped metadata for now
+    # meta.labels must exist; meta.exceptions is optional, untyped metadata for now.
+    # We keep it untyped here on purpose for backward compatibility:
+    # - older payloads may have different exception shapes,
+    # - diagnostics projects "audit" into diagnostics.details.audit[].
     meta: Dict = Field(default_factory=lambda: {"labels": []})
 
 
@@ -284,6 +287,18 @@ class ScheduleGenerateRequest(BaseModel):
                 {"day": 12, "shift_type": "oncall", "chosen_head_id": 102},
             ]
         ],
+    )
+
+    # Action-level justification (NOT per slot).
+    # Used for: "I accept ignores for this generation because ..." etc.
+    justification: Optional[str] = Field(
+        default=None,
+        description=(
+            "Optional human justification for the whole generate action (action-level). "
+            "This is NOT per ignored slot."
+        ),
+        max_length=500,
+        examples=["We are short-staffed this month; accepting gaps to proceed with generation."],
     )
 
     @field_validator("head_commitment_resolutions", mode="before")

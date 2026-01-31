@@ -1,3 +1,4 @@
+# tests/solver/test_publish_audit_and_blocking.py
 """
 Publish flow tests.
 
@@ -13,6 +14,11 @@ What we verify:
 Notes:
 - We monkeypatch _hard_rule_violations() because MVP may return [] in prod code.
 - We keep the payload minimal: empty assignments are fine for these tests.
+
+Important (separation of concerns):
+- Storage stays backward compatible: publish writes audit entries into payload.meta.exceptions.
+- Diagnostics response will later PROJECT those audit entries into details.audit[],
+  but this test verifies persistence only (DB payload).
 """
 
 from __future__ import annotations
@@ -158,7 +164,7 @@ def test_force_publish_records_accepted_exceptions_audit(monkeypatch, db_session
     assert resp.published.version_id is not None
     published_id = int(resp.published.version_id)
 
-    # Verify DB payload was stored with audit info in meta.exceptions
+    # Verify DB payload was stored with audit info in meta.exceptions (storage stays compatible)
     ver = db_session.execute(select(ScheduleVersion).where(ScheduleVersion.id == published_id)).scalar_one()
     payload = dict(ver.payload or {})
     meta = dict(payload.get("meta") or {})

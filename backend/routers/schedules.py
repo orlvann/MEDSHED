@@ -13,7 +13,11 @@ OpenAPI examples are kept consistent with DTOs in:
 - backend/models/schemas/diagnostics.py
 
 IMPORTANT ABOUT DIAGNOSTICS DTO:
-- DiagnosticsRead.details is a legacy free JSON dict (service fills THIS today).
+- DiagnosticsRead.details is a typed structure (findings/per_doctor/rankings/audit/components).
+- Slot ignores (COVERAGE_IGNORED_SLOT) are NOT emitted as findings anymore.
+  They only mark matching coverage gaps with context.was_ignored=True.
+- Human decisions (e.g. force-publish acceptances) are exposed via details.audit[]
+  (extracted from payload.meta.exceptions).
 """
 
 from __future__ import annotations
@@ -208,11 +212,12 @@ def _raise(e: ValueError) -> None:
                                 "fairness_index": 1.0,
                                 "preference_fulfillment_pct": 100.0,
                             },
-                            # Service currently fills legacy free dict:
                             "details": {
                                 "findings": [],
                                 "per_doctor": [],
                                 "rankings": {"top_unhappy": [], "top_happy": []},
+                                "audit": [],
+                                "components": {},
                                 "working_lock_version": None,
                             },
                         },
@@ -362,14 +367,11 @@ def generate_schedule(
                                     "fairness_index": 0.93,
                                     "preference_fulfillment_pct": 78.0,
                                 },
-                                # Service fills legacy dict today:
                                 "details": {
+                                    # IMPORTANT:
+                                    # - There is NO COVERAGE_IGNORED_SLOT info finding anymore.
+                                    # - We only mark actual missing slots with was_ignored=True/False.
                                     "findings": [
-                                        {
-                                            "code": issues.COVERAGE_IGNORED_SLOT,
-                                            "severity": "info",
-                                            "context": {"day": 2, "shift_type": "onsite"},
-                                        },
                                         {
                                             "code": issues.COVERAGE_MISSING_REQUIRED_SLOT,
                                             "severity": "critical",
@@ -409,6 +411,9 @@ def generate_schedule(
                                             }
                                         ],
                                     },
+                                    # Not forcing audit content in working.
+                                    "audit": [],
+                                    "components": {},
                                     "working_lock_version": 7,
                                 },
                             },
@@ -429,6 +434,9 @@ def generate_schedule(
                                     "findings": [],
                                     "per_doctor": [],
                                     "rankings": {"top_unhappy": [], "top_happy": []},
+                                    # Draft usually has no "human decision audit" rows.
+                                    "audit": [],
+                                    "components": {},
                                     "working_lock_version": None,
                                 },
                             },
@@ -455,6 +463,17 @@ def generate_schedule(
                                     ],
                                     "per_doctor": [],
                                     "rankings": {"top_unhappy": [], "top_happy": []},
+                                    # Example: a human accepted a hard violation during force publish.
+                                    "audit": [
+                                        {
+                                            "code": issues.COVERAGE_MISSING_REQUIRED_SLOT,
+                                            "justification": "Force publish: "
+                                            "Duty shortage accepted for day 10 oncall.",
+                                            "accepted_by_user_id": 1,
+                                            "accepted_at": "2026-01-28T10:00:10Z",
+                                        }
+                                    ],
+                                    "components": {},
                                     "working_lock_version": None,
                                 },
                             },
@@ -600,6 +619,8 @@ def schedules_diagnostics(
                                         "findings": [],
                                         "per_doctor": [],
                                         "rankings": {"top_unhappy": [], "top_happy": []},
+                                        "audit": [],
+                                        "components": {},
                                         "working_lock_version": None,
                                     },
                                 },
@@ -803,6 +824,8 @@ def schedules_working_put(
                                 "findings": [],
                                 "per_doctor": [],
                                 "rankings": {"top_unhappy": [], "top_happy": []},
+                                "audit": [],
+                                "components": {},
                                 "working_lock_version": None,
                             },
                         },
@@ -883,6 +906,8 @@ def schedules_checkpoint(
                                 "findings": [],
                                 "per_doctor": [],
                                 "rankings": {"top_unhappy": [], "top_happy": []},
+                                "audit": [],
+                                "components": {},
                                 "working_lock_version": None,
                             },
                         },
@@ -963,6 +988,8 @@ def schedules_draft_undo(
                                 "findings": [],
                                 "per_doctor": [],
                                 "rankings": {"top_unhappy": [], "top_happy": []},
+                                "audit": [],
+                                "components": {},
                                 "working_lock_version": None,
                             },
                         },
@@ -1055,6 +1082,9 @@ def schedules_draft_redo(
                                 "fairness_index": 0.95,
                                 "preference_fulfillment_pct": 82.0,
                             },
+                            # NOTE:
+                            # - Generation exceptions still contain COVERAGE_IGNORED_SLOT markers.
+                            # - They are NOT diagnostics findings; they are decision/run metadata.
                             "generation_exceptions": [
                                 {"code": issues.COVERAGE_IGNORED_SLOT, "day": 2, "shift_type": "onsite"},
                             ],

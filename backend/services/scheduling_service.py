@@ -78,7 +78,7 @@ from backend.models.orm.schedule import (
     ScheduleVersion,
     ScheduleWorking,
 )
-from backend.models.schemas.diagnostics import DiagnosticsRead, DiagnosticsSummary
+from backend.models.schemas.diagnostics import DiagnosticsDetailsRead, DiagnosticsRead, DiagnosticsSummary
 from backend.models.schemas.schedule import (
     AcceptedException,
     Assignment,
@@ -685,11 +685,18 @@ def _compute_or_upsert_diagnostics(
     summary_dict = quality_payload.get("summary") or {}
     summary_obj = DiagnosticsSummary.model_validate(summary_dict)
 
+    # Pydantic can parse dict -> DiagnosticsDetailsRead at runtime,
+    # but type-checkers (Pylance) require we do it explicitly.
+    details_obj: DiagnosticsDetailsRead | None = None
+    details_raw: Any = quality_payload.get("details")
+    if details_raw is not None:
+        details_obj = DiagnosticsDetailsRead.model_validate(details_raw)
+
     return DiagnosticsRead(
         version_id=str(version_id),
         computed_at=row.computed_at,
         summary=summary_obj,
-        details=quality_payload.get("details"),
+        details=details_obj,
     )
 
 
@@ -977,21 +984,30 @@ def _published_view(
 
 def _payload_for_clean_quality(raw_payload: Dict[str, Any]) -> Dict[str, Any]:
     """
-    Return a COPY of payload suitable for 'clean' diagnostics:
-    - keep everything the same,
-    - but remove meta.exceptions so metrics/violations reflect the final schedule as-is.
+    Return a COPY of payload suitable for diagnostics computation.
 
-    IMPORTANT:
-    - We do NOT delete anything from the stored payload.
-    - This is used only for computing quality.
+    IMPORTANT (new rule):
+    - We KEEP meta.exceptions, because they are part of the schedule state and UI context:
+      * core uses them to mark gaps with context.was_ignored=True
+      * core can project decision-like exceptions into details.audit[] (when present)
+    - This helper only SANITIZES the structure (defensive), it does NOT wipe exceptions.
+
+    We do NOT delete anything from the stored payload.
+    This is used only for computing quality, not for persistence.
     """
     payload = dict(raw_payload or {})
+
     meta = payload.get("meta") or {}
     if not isinstance(meta, dict):
         meta = {"labels": []}
 
     meta_clean = dict(meta)
-    meta_clean["exceptions"] = []  # <-- key rule: compute on clean rules only
+
+    # Ensure exceptions is always a list (defensive), but DO NOT wipe it.
+    exc = meta_clean.get("exceptions")
+    if not isinstance(exc, list):
+        meta_clean["exceptions"] = []
+
     payload["meta"] = meta_clean
     return payload
 
@@ -1182,22 +1198,56 @@ class SchedulingService:
                     "doctor_id": int(getattr(a, "doctor_id")),
                 }
 
-            # Derive ignored full days from ignore_slots (both slots ignored)
-            ignored_days = sorted(
-                {
-                    int(d)
-                    for d in problem.days
-                    if (int(d), ShiftType.onsite) in problem.ignore_slots
-                    and (int(d), ShiftType.oncall) in problem.ignore_slots
-                }
-            )
-
             exceptions: List[Dict[str, Any]] = []
-            for d in ignored_days:
-                exceptions.append({"code": issues.COVERAGE_IGNORED_DAY, "day": int(d)})
 
+            # IMPORTANT:
+            # - "ignore day" does NOT exist.
+            # - A whole day is represented by TWO slot-level exceptions:
+            #   (day, onsite) and (day, oncall).
+            #
+            # POLICY (human decision + audit trail):
+            # - Slot markers exist to mark gaps as "was_ignored" (UI hint on the gap).
+            # - A SINGLE "action-level" audit row can carry justification for the whole decision
+            #   (ignore suggested slots / publish with broken rules / etc.).
+            #
+            # Backend sets accepted_at itself and already knows the user id.
+            ignore_decision_at = now_utc().isoformat()
+
+            # A) Slot-level markers (NO justification here — not per-slot)
             for d, st in sorted(problem.ignore_slots, key=lambda x: (int(x[0]), str(x[1].value))):
-                exceptions.append({"code": issues.COVERAGE_IGNORED_SLOT, "day": int(d), "shift_type": st.value})
+                row: Dict[str, Any] = {
+                    "kind": "generation_ignore",
+                    "code": issues.COVERAGE_IGNORED_SLOT,
+                    "day": int(d),
+                    "shift_type": st.value,
+                    "accepted_at": ignore_decision_at,
+                }
+                if user_id is not None:
+                    row["accepted_by_user_id"] = int(user_id)
+
+                exceptions.append(row)
+
+            # B) One action-level audit row (WITH justification, no day/shift_type)
+            # NOTE:
+            # - ScheduleGenerateRequest does not necessarily have `justification` yet.
+            # - This is defensive: when you add it later, this code will start storing it.
+            justification: Optional[str] = None
+            try:
+                justification = getattr(req, "justification", None)
+            except Exception:
+                justification = None
+
+            if isinstance(justification, str) and justification.strip():
+                action_row: Dict[str, Any] = {
+                    "kind": "generation_ignore",
+                    "code": issues.COVERAGE_IGNORED_SLOT,
+                    "justification": justification.strip(),
+                    "accepted_at": ignore_decision_at,
+                }
+                if user_id is not None:
+                    action_row["accepted_by_user_id"] = int(user_id)
+
+                exceptions.append(action_row)
 
             meta = {
                 "labels": ["as_generated"],
@@ -1701,22 +1751,35 @@ class SchedulingService:
                     )
                     problem = _build_problem_data_for_generate(db, req)
 
-                payload_clean = _payload_for_clean_quality(payload)
-                quality_payload = core_diagnostics.compute_quality(problem=problem, payload=payload_clean)
-
+                    # IMPORTANT:
+                # Working diagnostics MUST be computed on the SAME payload that admin is editing.
+                #
+                # That means we keep payload.meta.exceptions:
+                # - core can mark real gaps with context.was_ignored=True based on ignore-slot exceptions,
+                # - diagnostics can also project decision-like exceptions into details.audit[] (when present).
+                #
+                # "Ignore" does NOT fix gaps — it is only a UI/history hint, so diagnostics still counts gaps.
+                quality_payload = core_diagnostics.compute_quality(problem=problem, payload=payload)
                 summary_dict = quality_payload.get("summary") or {}
                 summary_obj = DiagnosticsSummary.model_validate(summary_dict)
 
-                details = quality_payload.get("details") or {}
-                if not isinstance(details, dict):
-                    details = {}
-                details["working_lock_version"] = w.lock_version
+                # Build typed details and attach working_lock_version in a typed way.
+                details_obj: DiagnosticsDetailsRead | None = None
+                details_raw: Any = quality_payload.get("details")
+                if details_raw is not None:
+                    details_obj = DiagnosticsDetailsRead.model_validate(details_raw)
+                else:
+                    details_obj = DiagnosticsDetailsRead()
+
+                # w.lock_version can be None in edge-cases (defensive),
+                # so set it only when present to avoid type-checker errors.
+                details_obj.working_lock_version = int(w.lock_version) if w.lock_version is not None else None
 
                 return DiagnosticsRead(
                     version_id="working",
                     computed_at=now_utc(),
                     summary=summary_obj,
-                    details=details,
+                    details=details_obj,
                 )
 
             ptr = db.get(SchedulePointer, {"year": year, "month": month})

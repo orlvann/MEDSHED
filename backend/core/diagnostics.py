@@ -23,9 +23,8 @@ Important contract notes (final contract alignment):
 IGNORE POLICY (final):
 - ignore_days does not exist anymore.
 - Required/ignored scheduling scope is controlled ONLY by ignore_slots: set[(day, shift_type)].
-- Backward compatibility: if meta.exceptions contains ignored_day / coverage_ignored_day,
-  we treat it as BOTH slots ignored for that day by converting it into ignored_slots
-  for (day, onsite) and (day, oncall) during diagnostics parsing.
+- Diagnostics parsing supports ONLY slot-level ignore markers in meta.exceptions:
+  {"code":"coverage_ignored_slot","day":<int>,"shift_type":"onsite"|"oncall"}.
 
 Example (input payload shape, minimal):
 {
@@ -87,7 +86,6 @@ def _issue_code(name: str, fallback: str) -> str:
 
 
 # Stable codes used by this module (with safe fallbacks).
-_CODE_COVERAGE_IGNORED_DAY = _issue_code("COVERAGE_IGNORED_DAY", "coverage_ignored_day")
 _CODE_COVERAGE_IGNORED_SLOT = _issue_code("COVERAGE_IGNORED_SLOT", "coverage_ignored_slot")
 _CODE_COVERAGE_MISSING_REQUIRED_SLOT = _issue_code("COVERAGE_MISSING_REQUIRED_SLOT", "coverage_missing_required_slot")
 _CODE_COVERAGE_NO_SPECIALIST_DAY = _issue_code("COVERAGE_NO_SPECIALIST_DAY", "coverage_no_specialist_day")
@@ -145,7 +143,12 @@ def _weekday(problem: ProblemData, day: int) -> int:
     Return weekday for a given day (0=Mon .. 6=Sun).
     Uses precomputed problem.weekdays when present, otherwise falls back to datetime().
     """
-    wd = problem.weekdays.get(day)
+    # Defensive: some ProblemData builders may leave weekdays=None.
+    weekdays = getattr(problem, "weekdays", None)
+    if isinstance(weekdays, dict):
+        wd = weekdays.get(day)
+    else:
+        wd = None
     if wd is not None:
         return int(wd)
     return int(datetime(problem.year, problem.month, day).weekday())
@@ -155,13 +158,11 @@ def _extract_ignored_slots_from_meta(meta: Dict[str, Any]) -> Set[Tuple[int, Shi
     """
     Parse ignored slots out of meta.exceptions.
 
-    Current expected records:
-    - {"code": "ignored_slot" | "coverage_ignored_slot", "day": 12, "shift_type": "onsite", ...}
+    Supported records (preferred, stable):
+    - {"code": "coverage_ignored_slot", "day": 12, "shift_type": "onsite"|"oncall", ...}
 
-    Backward compatibility:
-    - If we see {"code": "ignored_day" | "coverage_ignored_day", "day": 12, ...}
-      we convert it into TWO ignored slots:
-        (12, onsite) and (12, oncall)
+    Backward compatible (legacy):
+    - {"code": "ignored_slot", "day": 12, "shift_type": "onsite"|"oncall", ...}
 
     Returns:
         ignored_slots set[(day, ShiftType)]
@@ -172,38 +173,165 @@ def _extract_ignored_slots_from_meta(meta: Dict[str, Any]) -> Set[Tuple[int, Shi
     if not isinstance(exceptions, list):
         return ignored_slots
 
-    ignored_day_codes = {
-        "ignored_day",
-        str(_CODE_COVERAGE_IGNORED_DAY).strip().lower(),
-    }
-    ignored_slot_codes = {
-        "ignored_slot",
-        str(_CODE_COVERAGE_IGNORED_SLOT).strip().lower(),
-    }
+    # We support both stable and legacy codes to avoid breaking old payloads.
+    stable_code = str(_CODE_COVERAGE_IGNORED_SLOT).strip().lower()
+    legacy_code = "ignored_slot"
 
     for e in exceptions:
         if not isinstance(e, dict):
             continue
 
         code = str(e.get("code") or "").strip().lower()
-
-        # Legacy: ignored_day -> treat as BOTH slots ignored (onsite + oncall).
-        if code in ignored_day_codes:
-            day = _safe_int(e.get("day"))
-            if day is not None:
-                ignored_slots.add((day, ShiftType.onsite))
-                ignored_slots.add((day, ShiftType.oncall))
+        if code not in (stable_code, legacy_code):
             continue
 
-        # Current: ignored_slot
-        if code in ignored_slot_codes:
-            day = _safe_int(e.get("day"))
-            st = _normalize_shift_type(e.get("shift_type"))
-            if day is not None and st is not None:
-                ignored_slots.add((day, st))
-            continue
+        day = _safe_int(e.get("day"))
+        st = _normalize_shift_type(e.get("shift_type"))
+        if day is not None and st is not None:
+            ignored_slots.add((day, st))
 
     return ignored_slots
+
+
+def _extract_audit_from_meta(meta: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """
+    Project "decision history" into a dedicated diagnostics field: details.audit[].
+
+    Rule (final):
+    - Audit is "what a human decided / accepted / clicked".
+    - We MUST distinguish:
+      1) slot marker rows: have (day + shift_type) and represent a decision about a concrete slot,
+      2) action rows: have NO (day/shift_type) and represent a decision about the whole action,
+         with an optional justification (e.g., force publish, generate with ignores).
+    """
+    out: List[Dict[str, Any]] = []
+
+    exceptions = meta.get("exceptions") or []
+    if not isinstance(exceptions, list):
+        return out
+
+    stable_ignore_code = str(_CODE_COVERAGE_IGNORED_SLOT).strip().lower()
+    legacy_ignore_code = "ignored_slot"
+
+    # Allowed kind values (must match DTO expectations).
+    allowed_kinds = {"generation_ignore", "publish_acceptance", "head_commitment_resolution"}
+
+    for e in exceptions:
+        if not isinstance(e, dict):
+            continue
+
+        code_raw = str(e.get("code") or "").strip()
+        code_lc = code_raw.lower()
+        if not code_lc:
+            continue
+
+        # Optional kind passed through from payload (if present).
+        kind_raw = e.get("kind")
+        kind: Optional[str] = None
+        if isinstance(kind_raw, str) and kind_raw.strip() in allowed_kinds:
+            kind = kind_raw.strip()
+
+        has_acceptance_context = any(k in e for k in ("justification", "accepted_by_user_id", "accepted_at"))
+
+        # -------------------------
+        # 1) SLOT MARKERS
+        # -------------------------
+        # A) ignore-slot -> slot marker
+        if code_lc in (stable_ignore_code, legacy_ignore_code):
+            day = _safe_int(e.get("day"))
+            st = _normalize_shift_type(e.get("shift_type"))
+            if day is None or st is None:
+                continue
+
+            # If payload didn't provide kind, enforce it here.
+            if kind is None:
+                kind = "generation_ignore"
+
+            out.append(
+                {
+                    "kind": kind,
+                    "code": code_raw,
+                    "day": int(day),
+                    "shift_type": st.value,
+                }
+            )
+            continue
+
+        # B) head commitment resolution -> slot marker (must have day+shift_type)
+        if kind == "head_commitment_resolution":
+            day = _safe_int(e.get("day"))
+            st = _normalize_shift_type(e.get("shift_type"))
+            if day is None or st is None:
+                # This kind is defined as slot-scoped, so skip malformed rows.
+                continue
+
+            out.append(
+                {
+                    "kind": kind,
+                    "code": code_raw,
+                    "day": int(day),
+                    "shift_type": st.value,
+                }
+            )
+            continue
+
+        # -------------------------
+        # 2) ACTION ROWS
+        # -------------------------
+        # Publish acceptance is action-level; it must NOT carry day/shift_type in audit,
+        # because justification is for the whole action, not for a single slot.
+        #
+        # Include action rows when:
+        # - kind is explicitly publish_acceptance, OR
+        # - kind is missing but acceptance context exists (backward compatible).
+        if kind is None and has_acceptance_context:
+            kind = "publish_acceptance"
+
+        if kind != "publish_acceptance":
+            # Not a recognized audit row (and not a slot marker handled above).
+            continue
+
+        row: Dict[str, Any] = {"kind": kind, "code": code_raw}
+
+        # Action-level justification (optional)
+        justification = e.get("justification")
+        if isinstance(justification, str) and justification.strip():
+            row["justification"] = justification.strip()
+
+        accepted_by = e.get("accepted_by_user_id")
+        if accepted_by is not None:
+            if isinstance(accepted_by, int):
+                row["accepted_by_user_id"] = int(accepted_by)
+            else:
+                try:
+                    row["accepted_by_user_id"] = int(accepted_by)
+                except Exception:
+                    # If it's not an int, keep raw value (defensive).
+                    row["accepted_by_user_id"] = accepted_by
+
+        accepted_at = e.get("accepted_at")
+        # Keep accepted_at as ISO string in core output (JSON-friendly).
+        if isinstance(accepted_at, str) and accepted_at.strip():
+            row["accepted_at"] = accepted_at.strip()
+
+        out.append(row)
+
+    # Deterministic order for stable tests/UI:
+    # - action rows first (no day/shift_type), then slot rows (with day/shift_type)
+    # - within group: by kind, code, day, shift_type, accepted_at
+    def _sort_key(x: Dict[str, Any]) -> tuple:
+        is_slot_marker = x.get("day") is not None and x.get("shift_type") is not None
+        return (
+            0 if not is_slot_marker else 1,  # action first
+            str(x.get("kind", "")),
+            str(x.get("code", "")),
+            int(x.get("day", 0)) if x.get("day") is not None else 0,
+            str(x.get("shift_type", "")),
+            str(x.get("accepted_at", "")),
+        )
+
+    out.sort(key=_sort_key)
+    return out
 
 
 def _display_name_from_snapshot(payload: Dict[str, Any], doctor_id: int) -> str:
@@ -1190,16 +1318,6 @@ def _build_findings(
     """
     findings: List[Dict[str, Any]] = []
 
-    # Info: ignored slot context (NOT a KPI, but helpful for UI debugging).
-    for d, st in sorted(ignored_slots, key=lambda x: (int(x[0]), str(x[1].value))):
-        findings.append(
-            _finding(
-                code=_CODE_COVERAGE_IGNORED_SLOT,
-                severity="info",
-                context={"day": int(d), "shift_type": st.value},
-            )
-        )
-
     # Critical: missing coverage slots (Gaps)
     # Even if a gap was previously "accepted" (ignored during generation),
     # diagnostics must still show it as a real gap.
@@ -1404,6 +1522,9 @@ def compute_quality(*, problem: ProblemData, payload: Dict[str, Any]) -> Dict[st
     meta_any = payload.get("meta") or {"labels": []}
     meta: Dict[str, Any] = dict(meta_any) if isinstance(meta_any, dict) else {"labels": []}
 
+    # Separate "admin decisions history" into details.audit[] (projection from meta.exceptions).
+    audit_rows = _extract_audit_from_meta(meta)
+
     assignments_any = payload.get("assignments") or []
     assignments: List[Any] = list(assignments_any) if isinstance(assignments_any, list) else []
 
@@ -1521,6 +1642,7 @@ def compute_quality(*, problem: ProblemData, payload: Dict[str, Any]) -> Dict[st
 
     details: Dict[str, Any] = {
         "findings": list(findings),
+        "audit": list(audit_rows),
         "per_doctor": list(per_doctor),
         "rankings": dict(rankings),
         "components": {

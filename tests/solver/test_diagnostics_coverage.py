@@ -8,8 +8,6 @@ Goal:
   They only mark matching gaps with context.was_ignored=True, so UI can show:
   "this gap was accepted during generation" but it is still a real gap.
 
-We also keep info findings about what was ignored during generation.
-
 IMPORTANT (unified codes):
 - We require code=issues.COVERAGE_IGNORED_SLOT everywhere.
 - Day-level ignore is NOT used anymore (admin ignores slots only).
@@ -31,12 +29,21 @@ def _payload(*, participant_ids: list[int], assignments: list[dict], exceptions:
     - inputs_snapshot is not needed for coverage math, but we include it to match real payload shape.
     """
     doctors_snapshot = {
-        str(did): {"display_name": f"Doctor {did}", "role": "resident", "is_head": False} for did in participant_ids
+        str(did): {
+            "display_name": f"Doctor {did}",
+            "role": "resident",
+            "is_head": False,
+            "is_active_at_snapshot": True,
+        }
+        for did in participant_ids
     }
     return {
         "participant_doctor_ids": list(participant_ids),
         "assignments": list(assignments),
-        "inputs_snapshot": {"doctors": doctors_snapshot, "preference_version_id_by_doctor": {}},
+        "inputs_snapshot": {
+            "doctors": doctors_snapshot,
+            "preference_version_id_by_doctor": {int(did): None for did in participant_ids},
+        },
         "meta": {"labels": [], "exceptions": list(exceptions)},
     }
 
@@ -59,9 +66,28 @@ def _gap_findings(out: dict) -> list[dict]:
     return [f for f in out["details"]["findings"] if f.get("code") == issues.COVERAGE_MISSING_REQUIRED_SLOT]
 
 
-def _info_findings(out: dict) -> list[dict]:
-    """Return only info findings."""
-    return [f for f in out["details"]["findings"] if f.get("severity") == "info"]
+def _ignored_slot_findings(out: dict) -> list[dict]:
+    """
+    There should be NO findings with code=COVERAGE_IGNORED_SLOT anymore.
+
+    We keep "was_ignored" markers on gaps, and decision history goes to details.audit[].
+    """
+    return [f for f in out["details"]["findings"] if f.get("code") == issues.COVERAGE_IGNORED_SLOT]
+
+
+def _audit_rows(out: dict) -> list[dict]:
+    """
+    Return details.audit[] rows.
+
+    Contract:
+    - Decision history is projected into details.audit[] by diagnostics.
+    - Slot-ignore markers like COVERAGE_IGNORED_SLOT must NOT appear here.
+    """
+    details = out.get("details") or {}
+    if not isinstance(details, dict):
+        return []
+    rows = details.get("audit") or []
+    return list(rows) if isinstance(rows, list) else []
 
 
 def test_coverage_gaps_counted_per_slot(make_problem_data):
@@ -76,6 +102,9 @@ def test_coverage_gaps_counted_per_slot(make_problem_data):
     gaps = _gap_findings(out)
     assert len(gaps) == 4
 
+    # No informational findings about ignored slots (moved to details.audit[])
+    assert _ignored_slot_findings(out) == []
+
     # None of them should be marked as ignored
     assert all(bool(g.get("context", {}).get("was_ignored")) is False for g in gaps)
 
@@ -87,7 +116,7 @@ def test_coverage_two_ignored_slots_same_day_does_not_hide_gaps_but_marks_them(m
     If generation ignored BOTH slots on day 1 (onsite + oncall), diagnostics:
     - still reports 4 gaps total (2 per day),
     - marks BOTH gaps on day 1 as was_ignored=True,
-    - keeps TWO info findings: one per ignored slot.
+    - does NOT emit info findings for ignored slots (audit is separate).
     """
     problem = _one_doctor_problem(make_problem_data, days=[1, 2])
     payload = _payload(
@@ -104,20 +133,8 @@ def test_coverage_two_ignored_slots_same_day_does_not_hide_gaps_but_marks_them(m
     # Still 4 gaps total (2 per day)
     assert out["summary"]["coverage_missing_required_slots"] == 4
 
-    # We keep info findings that say day 1 slots were ignored during generation
-    infos = _info_findings(out)
-    assert any(
-        f.get("code") == issues.COVERAGE_IGNORED_SLOT
-        and int(f.get("context", {}).get("day", 0)) == 1
-        and f.get("context", {}).get("shift_type") == "onsite"
-        for f in infos
-    )
-    assert any(
-        f.get("code") == issues.COVERAGE_IGNORED_SLOT
-        and int(f.get("context", {}).get("day", 0)) == 1
-        and f.get("context", {}).get("shift_type") == "oncall"
-        for f in infos
-    )
+    # No informational findings about ignored slots (moved to details.audit[])
+    assert _ignored_slot_findings(out) == []
 
     gaps = _gap_findings(out)
     assert len(gaps) == 4
@@ -146,14 +163,8 @@ def test_coverage_ignored_slot_does_not_hide_gaps_but_marks_that_slot(make_probl
     # Still 4 gaps total (2 per day)
     assert out["summary"]["coverage_missing_required_slots"] == 4
 
-    # We keep an info finding that says this slot was ignored during generation
-    infos = _info_findings(out)
-    assert any(
-        f.get("code") == issues.COVERAGE_IGNORED_SLOT
-        and int(f.get("context", {}).get("day", 0)) == 2
-        and f.get("context", {}).get("shift_type") == "onsite"
-        for f in infos
-    )
+    # No informational findings about ignored slots (moved to details.audit[])
+    assert _ignored_slot_findings(out) == []
 
     gaps = _gap_findings(out)
     assert len(gaps) == 4
@@ -173,3 +184,39 @@ def test_coverage_ignored_slot_does_not_hide_gaps_but_marks_that_slot(make_probl
     ]
     assert len(day2_oncall) == 1
     assert bool(day2_oncall[0].get("context", {}).get("was_ignored")) is False
+
+
+def test_audit_is_extracted_from_meta_exceptions_but_ignored_slot_is_not_audit(make_problem_data):
+    """
+    New rule:
+    - payload.meta.exceptions stays as-is (compat),
+    - diagnostics extracts "audit-like" records into details.audit[],
+    - but it must NOT treat COVERAGE_IGNORED_SLOT as audit.
+    """
+    problem = _one_doctor_problem(make_problem_data, days=[1, 2])
+    payload = _payload(
+        participant_ids=[1],
+        assignments=[],
+        exceptions=[
+            # ignore marker (NOT audit)
+            {"code": issues.COVERAGE_IGNORED_SLOT, "day": 1, "shift_type": ShiftType.onsite.value},
+            # audit-like decision (HAS audit keys -> should go to details.audit[])
+            {
+                "code": "hard_double_shift_same_day",
+                "justification": "Allowed as an exception for training month",
+                "accepted_by_user_id": 777,
+                "accepted_at": "2026-01-30T10:00:00Z",
+            },
+        ],
+    )
+
+    out = compute_quality(problem=problem, payload=payload)
+
+    # Still: no info findings for ignored slots
+    assert _ignored_slot_findings(out) == []
+
+    # Audit is extracted and contains ONLY the audit-like record
+    audit = _audit_rows(out)
+    assert len(audit) == 1
+    assert audit[0].get("code") == "hard_double_shift_same_day"
+    assert audit[0].get("accepted_by_user_id") == 777
