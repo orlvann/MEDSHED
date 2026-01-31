@@ -35,6 +35,7 @@ CORE INVARIANTS & TYPES
   * "not_found"      — requested entity/pointer/version does not exist
   * "generate_requires_ignore" — feasibility pre-check found blocking issues (see .context)
   * "generate_infeasible" — solver did not return SolverStatus.OK (see .context.solver_status)
+  * "generate_requires_head_resolution" — head commitment conflicts must be resolved (see .context)
 
 
 TRANSACTIONAL POLICY (MVP)
@@ -693,7 +694,7 @@ def _compute_or_upsert_diagnostics(
         details_obj = DiagnosticsDetailsRead.model_validate(details_raw)
 
     return DiagnosticsRead(
-        version_id=str(version_id),
+        version_id=int(version_id),
         computed_at=row.computed_at,
         summary=summary_obj,
         details=details_obj,
@@ -952,7 +953,7 @@ def _draft_view(
     Build a ScheduleDraftView from raw payload with flags and counters.
     """
     return ScheduleDraftView(
-        version_id=str(version_id),
+        version_id=int(version_id),
         checkpoints_count=count,
         can_undo=can_undo,
         can_redo=can_redo,
@@ -973,7 +974,7 @@ def _published_view(
     Build a SchedulePublishedView from raw payload with flags, counters and audit.
     """
     return SchedulePublishedView(
-        version_id=str(version_id),
+        version_id=int(version_id),
         publications_count=count,
         can_undo=can_undo,
         can_redo=can_redo,
@@ -1002,6 +1003,15 @@ def _payload_for_clean_quality(raw_payload: Dict[str, Any]) -> Dict[str, Any]:
         meta = {"labels": []}
 
     meta_clean = dict(meta)
+
+    # Ensure labels is ALWAYS a list, even if legacy payload stored a wrong shape.
+    # NOTE: normalize_meta() is the single source of truth on writes,
+    # but this function is used for defensive reads/quality computation.
+    labels_raw = meta_clean.get("labels", [])
+    if not isinstance(labels_raw, list):
+        meta_clean["labels"] = []
+    else:
+        meta_clean["labels"] = labels_raw
 
     # Ensure exceptions is always a list (defensive), but DO NOT wipe it.
     exc = meta_clean.get("exceptions")
@@ -1034,9 +1044,17 @@ def _extract_hard_violations_from_quality(quality_payload: Dict[str, Any]) -> Li
         if str(f.get("severity")) != "critical":
             continue
 
+        code = str(f.get("code") or "unknown")
+
+        # IMPORTANT:
+        # "hard_violations" for publish-blocking should contain only hard-rule findings.
+        # Coverage gaps may be critical for UI attention, but they are NOT the "hard publish validator" list.
+        if not code.startswith("hard_"):
+            continue
+
         hard.append(
             {
-                "code": str(f.get("code") or "unknown"),
+                "code": code,
                 "message": str(f.get("message") or ""),
                 "context": f.get("context") or {},
             }
@@ -1204,20 +1222,53 @@ class SchedulingService:
             # - "ignore day" does NOT exist.
             # - A whole day is represented by TWO slot-level exceptions:
             #   (day, onsite) and (day, oncall).
-            #
+
             # POLICY (human decision + audit trail):
             # - Slot markers exist to mark gaps as "was_ignored" (UI hint on the gap).
             # - A SINGLE "action-level" audit row can carry justification for the whole decision
             #   (ignore suggested slots / publish with broken rules / etc.).
-            #
+
             # Backend sets accepted_at itself and already knows the user id.
+
+            # One timestamp for the entire "ignore decision" in this generate call.
             ignore_decision_at = now_utc().isoformat()
 
+            # ALSO: record head commitment resolutions into meta.exceptions as audit rows,
+            # so diagnostics.details.audit[] can show them in UI (history of decisions).
+            # This is action-level history; it does not change assignments directly.
+
+            # Store head commitment resolutions as audit rows in meta.exceptions.
+            def _append_head_resolution_audit(ex_list: List[Dict[str, Any]]) -> None:
+                for r in req.head_commitment_resolutions or []:
+                    st_value = getattr(r.shift_type, "value", r.shift_type)
+                    row: Dict[str, Any] = {
+                        "kind": "head_commitment_resolution",
+                        "code": "head_commitment_resolution",
+                        "day": int(r.day),
+                        "shift_type": str(st_value),
+                        "chosen_head_id": int(r.chosen_head_id),
+                        "accepted_at": now_utc().isoformat(),
+                    }
+                    if user_id is not None:
+                        row["accepted_by_user_id"] = int(user_id)
+                    ex_list.append(row)
+
             # A) Slot-level markers (NO justification here — not per-slot)
+            def _issue_code_value(v: Any) -> str:
+                """
+                Convert issue enum/constant to a stable string code for JSON payloads.
+                """
+                try:
+                    return str(getattr(v, "value", v))
+                except Exception:
+                    return str(v)
+
+            ignored_slot_code = _issue_code_value(issues.COVERAGE_IGNORED_SLOT)
+
             for d, st in sorted(problem.ignore_slots, key=lambda x: (int(x[0]), str(x[1].value))):
                 row: Dict[str, Any] = {
                     "kind": "generation_ignore",
-                    "code": issues.COVERAGE_IGNORED_SLOT,
+                    "code": ignored_slot_code,
                     "day": int(d),
                     "shift_type": st.value,
                     "accepted_at": ignore_decision_at,
@@ -1227,20 +1278,13 @@ class SchedulingService:
 
                 exceptions.append(row)
 
-            # B) One action-level audit row (WITH justification, no day/shift_type)
-            # NOTE:
-            # - ScheduleGenerateRequest does not necessarily have `justification` yet.
-            # - This is defensive: when you add it later, this code will start storing it.
-            justification: Optional[str] = None
-            try:
-                justification = getattr(req, "justification", None)
-            except Exception:
-                justification = None
-
+            # Action-level justification row (NO day/shift_type).
+            # This is what FE modal should fill in for the whole ignore decision.
+            justification = req.justification
             if isinstance(justification, str) and justification.strip():
                 action_row: Dict[str, Any] = {
                     "kind": "generation_ignore",
-                    "code": issues.COVERAGE_IGNORED_SLOT,
+                    "code": ignored_slot_code,
                     "justification": justification.strip(),
                     "accepted_at": ignore_decision_at,
                 }
@@ -1248,6 +1292,9 @@ class SchedulingService:
                     action_row["accepted_by_user_id"] = int(user_id)
 
                 exceptions.append(action_row)
+
+            # B) Head commitment resolution audit rows (if any)
+            _append_head_resolution_audit(exceptions)
 
             meta = {
                 "labels": ["as_generated"],
@@ -1575,7 +1622,12 @@ class SchedulingService:
 
             meta = cast(Dict[str, Any], payload["meta"])
 
-            hard_violations = _hard_rule_violations(payload)
+            # NOTE:
+            # _hard_rule_violations is currently a stub in MVP (returns []).
+            # Do NOT overwrite diagnostics-derived violations, because that would disable publish blocking.
+            extra_hard = _hard_rule_violations(payload)
+            if extra_hard:
+                hard_violations = list(hard_violations) + list(extra_hard)
 
             if not force and hard_violations:
                 context = {
@@ -1597,9 +1649,6 @@ class SchedulingService:
 
                     # Append audit entries to meta.exceptions (keep existing generation exceptions too)
                     meta = cast(Dict[str, Any], payload.get("meta") or {"labels": []})
-                    bad = [e.code for e in accepted_exceptions if e.code not in violation_codes]
-                    if bad:
-                        raise ValueError("invalid_accepted_exception")
 
                     # 1) Normalize meta FIRST (labels, base shape etc.)
                     meta_norm = normalize_meta(meta)
@@ -1607,18 +1656,22 @@ class SchedulingService:
                     # 2) Append audit entries AFTER normalization so they are not dropped
                     ex_list = list(meta_norm.get("exceptions", []))
 
-                    for e in accepted_exceptions:
-                        ex_list.append(
-                            {
-                                "code": e.code,
-                                "justification": e.justification,
-                                "accepted_by_user_id": user_id,
-                                "accepted_at": now_utc().isoformat(),
-                            }
-                        )
+                    accepted_at = now_utc().isoformat()
 
-                        meta_norm["exceptions"] = ex_list
-                        payload["meta"] = meta_norm
+                    for e in accepted_exceptions:
+                        row: Dict[str, Any] = {
+                            "kind": "publish_acceptance",
+                            "code": e.code,
+                            "justification": e.justification,
+                            "accepted_at": accepted_at,
+                        }
+                        if user_id is not None:
+                            row["accepted_by_user_id"] = int(user_id)
+                        ex_list.append(row)
+
+                    # IMPORTANT: set AFTER the loop (not inside it)
+                    meta_norm["exceptions"] = ex_list
+                    payload["meta"] = meta_norm
 
             vid = _insert_version(
                 session,
@@ -1751,7 +1804,7 @@ class SchedulingService:
                     )
                     problem = _build_problem_data_for_generate(db, req)
 
-                    # IMPORTANT:
+                # IMPORTANT:
                 # Working diagnostics MUST be computed on the SAME payload that admin is editing.
                 #
                 # That means we keep payload.meta.exceptions:
@@ -1776,7 +1829,7 @@ class SchedulingService:
                 details_obj.working_lock_version = int(w.lock_version) if w.lock_version is not None else None
 
                 return DiagnosticsRead(
-                    version_id="working",
+                    version_id=None,
                     computed_at=now_utc(),
                     summary=summary_obj,
                     details=details_obj,

@@ -16,8 +16,12 @@ IMPORTANT ABOUT DIAGNOSTICS DTO:
 - DiagnosticsRead.details is a typed structure (findings/per_doctor/rankings/audit/components).
 - Slot ignores (COVERAGE_IGNORED_SLOT) are NOT emitted as findings anymore.
   They only mark matching coverage gaps with context.was_ignored=True.
-- Human decisions (e.g. force-publish acceptances) are exposed via details.audit[]
-  (extracted from payload.meta.exceptions).
+- Human decisions are exposed via details.audit[] (extracted from payload.meta.exceptions).
+  We support TWO audit shapes:
+  1) slot-level markers (MUST include day + shift_type) used to mark coverage gaps as was_ignored=True,
+  2) action-level decisions/justifications (may omit day/shift_type) that explain "why" an admin
+     chose to proceed (e.g. ignore slots before generation, force publish acceptances).
+  FE should offer justification fields as OPTIONAL.
 """
 
 from __future__ import annotations
@@ -112,6 +116,45 @@ def _raise(e: ValueError) -> None:
 
 # ------------------------------- ADMIN: generate -------------------------------
 
+_OPENAPI_EXAMPLES_GENERATE_REQUEST = {
+    "basic": {
+        "summary": "Generate with ignore_slots + head commitment resolutions",
+        "value": {
+            "year": 2026,
+            "month": 2,
+            "participant_doctor_ids": [101, 102, 103],
+            "ignore_slots": [
+                {"day": 3, "shift_type": "onsite"},
+                {"day": 7, "shift_type": "oncall"},
+            ],
+            "justification": "Holiday month staffing shortage; proceeding with known gaps.",
+            "head_commitment_resolutions": [
+                {"day": 5, "shift_type": "onsite", "chosen_head_id": 101},
+            ],
+        },
+    }
+}
+
+_OPENAPI_EXAMPLES_PUBLISH_REQUEST = {
+    "normal": {
+        "summary": "Publish (no force)",
+        "value": {"force": False, "note": "Finalize"},
+    },
+    "force_with_action_justification": {
+        "summary": "Force publish with accepted exceptions (action-level justification)",
+        "value": {
+            "force": True,
+            "note": "Emergency publish",
+            "accepted_exceptions": [
+                {
+                    "code": issues.COVERAGE_MISSING_REQUIRED_SLOT,
+                    "justification": "Emergency staffing shortage; publishing despite known gaps.",
+                }
+            ],
+        },
+    },
+}
+
 
 @router.post(
     "/generate",
@@ -119,6 +162,15 @@ def _raise(e: ValueError) -> None:
     response_model=ScheduleGenerateCreated,
     tags=["schedules:admin"],
     summary="Generate schedule: writes working + creates first draft checkpoint",
+    openapi_extra={
+        "requestBody": {
+            "content": {
+                "application/json": {
+                    "examples": _OPENAPI_EXAMPLES_GENERATE_REQUEST,
+                }
+            }
+        }
+    },
     responses={
         201: {
             "description": "Working saved + first draft checkpoint created + diagnostics returned.",
@@ -137,7 +189,33 @@ def _raise(e: ValueError) -> None:
                                 {"day": 1, "shift_type": "onsite", "doctor_id": 101},
                                 {"day": 1, "shift_type": "oncall", "doctor_id": 102},
                             ],
-                            "meta": {"labels": ["as_generated"], "solver_status": "OK", "exceptions": []},
+                            "meta": {
+                                "labels": ["as_generated"],
+                                "solver_status": "OK",
+                                # IMPORTANT (policy):
+                                # - meta.exceptions are audit hints only (do NOT affect diagnostics metrics).
+                                # - We support TWO shapes of exceptions:
+                                #   1) slot-level markers: MUST include day + shift_type
+                                #      (used to mark missing required slots as was_ignored=True)
+                                #   2) action-level justification rows: may omit day/shift_type
+                                #      (explains WHY admin decided to proceed; optional)
+                                "exceptions": [
+                                    {
+                                        "kind": "generation_ignore",
+                                        "code": issues.COVERAGE_IGNORED_SLOT,
+                                        "day": 3,
+                                        "shift_type": "onsite",
+                                    },
+                                    # Optional action-level justification row (no day/shift_type).
+                                    # This is intended to be stored when admin provides
+                                    # justification in the request.
+                                    {
+                                        "kind": "generation_ignore",
+                                        "code": issues.COVERAGE_IGNORED_SLOT,
+                                        "justification": "Holiday month staffing shortage; proceeding with known gaps.",
+                                    },
+                                ],
+                            },
                             "updated_at": "2026-01-28T09:15:00Z",
                             "lock_version": 2,
                             "inputs_snapshot": {
@@ -166,7 +244,7 @@ def _raise(e: ValueError) -> None:
                             },
                         },
                         "draft": {
-                            "version_id": "123",
+                            "version_id": 123,
                             "checkpoints_count": 1,
                             "can_undo": False,
                             "can_redo": False,
@@ -203,7 +281,7 @@ def _raise(e: ValueError) -> None:
                             },
                         },
                         "diagnostics": {
-                            "version_id": "123",
+                            "version_id": 123,
                             "computed_at": "2026-01-28T09:15:01Z",
                             "summary": {
                                 "coverage_missing_required_slots": 0,
@@ -358,7 +436,7 @@ def generate_schedule(
                         "working": {
                             "summary": "Working diagnostics (details contains working_lock_version)",
                             "value": {
-                                "version_id": "working",
+                                "version_id": None,
                                 "computed_at": "2026-01-28T09:20:00Z",
                                 "summary": {
                                     "coverage_missing_required_slots": 2,
@@ -421,7 +499,7 @@ def generate_schedule(
                         "draft": {
                             "summary": "Draft diagnostics (version_id is checkpoint id)",
                             "value": {
-                                "version_id": "123",
+                                "version_id": 123,
                                 "computed_at": "2026-01-28T09:15:01Z",
                                 "summary": {
                                     "coverage_missing_required_slots": 0,
@@ -444,7 +522,7 @@ def generate_schedule(
                         "published": {
                             "summary": "Published diagnostics (version_id is published version id)",
                             "value": {
-                                "version_id": "200",
+                                "version_id": 200,
                                 "computed_at": "2026-01-28T10:05:01Z",
                                 "summary": {
                                     "coverage_missing_required_slots": 1,
@@ -586,7 +664,7 @@ def schedules_diagnostics(
                                     "inputs_snapshot": None,
                                 },
                                 "draft": {
-                                    "version_id": "124",
+                                    "version_id": 124,
                                     "checkpoints_count": 2,
                                     "can_undo": True,
                                     "can_redo": False,
@@ -606,7 +684,7 @@ def schedules_diagnostics(
                                     "payload": None,
                                 },
                                 "diagnostics": {
-                                    "version_id": "124",
+                                    "version_id": 124,
                                     "computed_at": "2026-01-28T09:40:00Z",
                                     "summary": {
                                         "coverage_missing_required_slots": 0,
@@ -796,7 +874,7 @@ def schedules_working_put(
                         "year": 2026,
                         "month": 2,
                         "draft": {
-                            "version_id": "124",
+                            "version_id": 124,
                             "checkpoints_count": 2,
                             "can_undo": True,
                             "can_redo": False,
@@ -811,7 +889,7 @@ def schedules_working_put(
                             },
                         },
                         "diagnostics": {
-                            "version_id": "124",
+                            "version_id": 124,
                             "computed_at": "2026-01-28T09:40:00Z",
                             "summary": {
                                 "coverage_missing_required_slots": 0,
@@ -875,7 +953,7 @@ def schedules_checkpoint(
                         "year": 2026,
                         "month": 2,
                         "draft": {
-                            "version_id": "120",
+                            "version_id": 120,
                             "checkpoints_count": 5,
                             "can_undo": True,
                             "can_redo": True,
@@ -893,7 +971,7 @@ def schedules_checkpoint(
                             "inputs_snapshot": None,
                         },
                         "diagnostics": {
-                            "version_id": "120",
+                            "version_id": 120,
                             "computed_at": "2026-01-28T09:45:01Z",
                             "summary": {
                                 "coverage_missing_required_slots": 0,
@@ -957,7 +1035,7 @@ def schedules_draft_undo(
                         "year": 2026,
                         "month": 2,
                         "draft": {
-                            "version_id": "121",
+                            "version_id": 121,
                             "checkpoints_count": 5,
                             "can_undo": True,
                             "can_redo": True,
@@ -975,7 +1053,7 @@ def schedules_draft_undo(
                             "inputs_snapshot": None,
                         },
                         "diagnostics": {
-                            "version_id": "121",
+                            "version_id": 121,
                             "computed_at": "2026-01-28T09:50:01Z",
                             "summary": {
                                 "coverage_missing_required_slots": 0,
@@ -1034,6 +1112,15 @@ def schedules_draft_redo(
     response_model=SchedulePublishCreated,
     tags=["schedules:admin"],
     summary="Publish from working (hard-rule guard; force supported)",
+    openapi_extra={
+        "requestBody": {
+            "content": {
+                "application/json": {
+                    "examples": _OPENAPI_EXAMPLES_PUBLISH_REQUEST,
+                }
+            }
+        }
+    },
     responses={
         201: {
             "description": "Published version created from working.",
@@ -1043,7 +1130,7 @@ def schedules_draft_redo(
                         "year": 2026,
                         "month": 2,
                         "published": {
-                            "version_id": "200",
+                            "version_id": 200,
                             "publications_count": 1,
                             "can_undo": False,
                             "can_redo": False,
@@ -1086,7 +1173,20 @@ def schedules_draft_redo(
                             # - Generation exceptions still contain COVERAGE_IGNORED_SLOT markers.
                             # - They are NOT diagnostics findings; they are decision/run metadata.
                             "generation_exceptions": [
-                                {"code": issues.COVERAGE_IGNORED_SLOT, "day": 2, "shift_type": "onsite"},
+                                {
+                                    "kind": "generation_ignore",
+                                    "code": issues.COVERAGE_IGNORED_SLOT,
+                                    "day": 2,
+                                    "shift_type": "onsite",
+                                },
+                                # Optional action-level justification row (no day/shift_type).
+                                # Stored if admin provided justification during generation.
+                                {
+                                    "kind": "generation_ignore",
+                                    "code": issues.COVERAGE_IGNORED_SLOT,
+                                    "justification": "Ignored some slots to allow generation; "
+                                    "duty shortage documented.",
+                                },
                             ],
                         },
                     )
@@ -1143,7 +1243,7 @@ def schedules_publish(
                         "year": 2026,
                         "month": 2,
                         "published": {
-                            "version_id": "199",
+                            "version_id": 199,
                             "publications_count": 2,
                             "can_undo": False,
                             "can_redo": True,
@@ -1196,7 +1296,7 @@ def schedules_published_undo(
                         "year": 2026,
                         "month": 2,
                         "published": {
-                            "version_id": "200",
+                            "version_id": 200,
                             "publications_count": 2,
                             "can_undo": True,
                             "can_redo": False,
@@ -1283,7 +1383,7 @@ def schedules_export(
                         "org_timezone": "Europe/Warsaw",
                         "period_status": "current",
                         "published": {
-                            "version_id": "200",
+                            "version_id": 200,
                             "publications_count": 1,
                             "can_undo": False,
                             "can_redo": False,

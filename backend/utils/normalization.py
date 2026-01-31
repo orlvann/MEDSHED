@@ -20,7 +20,7 @@ from typing import Any, Dict, Iterable, List, Tuple
 def normalize_assignments(assignments: Iterable[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """
     Normalize assignments list:
-    - Input item shape (validated by DTOs): {"day": int, "shift_type": "on_duty"|"on_call", "doctor_id": int}
+    - Input item shape (validated by DTOs): {"day": int, "shift_type": "onsite"|"oncall", "doctor_id": int}
     - Output: sorted + deduped list with the same item shape.
 
     Notes:
@@ -83,11 +83,32 @@ def normalize_meta(meta: Dict[str, Any] | None) -> Dict[str, Any]:
     - Ensure "labels" is a list of unique, sorted strings.
     - Ensure "exceptions" is a list (keep as-is if already a list).
     """
-    m = dict(meta or {})
-    labels = m.get("labels") or []
-    # strings only, unique + sorted
-    labels = [str(x) for x in labels]
-    m["labels"] = sorted(set(labels))
+    # meta must always be a dict; if it's a wrong type, reset to a safe base shape.
+    if not isinstance(meta, dict):
+        m: Dict[str, Any] = {"labels": []}
+    else:
+        # Make a shallow copy so we don't mutate the caller's dict by accident.
+        m = dict(meta)
+
+    # ---- labels: ALWAYS a list[str] ----
+    # Defensive: if labels is a string/dict/None/etc., treat it as empty list.
+    labels_raw = m.get("labels", [])
+    if not isinstance(labels_raw, list):
+        labels_raw = []
+
+    labels_clean: List[str] = []
+    for x in labels_raw:
+        # Convert everything to string, strip whitespace, skip empty labels.
+        s = str(x).strip()
+        if s:
+            labels_clean.append(s)
+
+    # Unique + sorted to keep payload deterministic.
+    m["labels"] = sorted(set(labels_clean))
+
+    # ---- exceptions: ALWAYS a list ----
+    # If it is not a list, replace with empty list (do NOT try to coerce).
     if not isinstance(m.get("exceptions"), list):
         m["exceptions"] = []
+
     return m

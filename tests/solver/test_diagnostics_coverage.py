@@ -11,6 +11,11 @@ Goal:
 IMPORTANT (unified codes):
 - We require code=issues.COVERAGE_IGNORED_SLOT everywhere.
 - Day-level ignore is NOT used anymore (admin ignores slots only).
+
+AUDIT POLICY (current business rule):
+- meta.exceptions are projected into details.audit[] for UI history.
+- Slot markers like COVERAGE_IGNORED_SLOT ARE included in audit as kind="generation_ignore".
+- Action-level acceptances (justification/accepted_by/accepted_at) are included as kind="publish_acceptance".
 """
 
 from __future__ import annotations
@@ -68,7 +73,7 @@ def _gap_findings(out: dict) -> list[dict]:
 
 def _ignored_slot_findings(out: dict) -> list[dict]:
     """
-    There should be NO findings with code=COVERAGE_IGNORED_SLOT anymore.
+    There should be NO findings with code=COVERAGE_IGNORED_SLOT.
 
     We keep "was_ignored" markers on gaps, and decision history goes to details.audit[].
     """
@@ -81,7 +86,7 @@ def _audit_rows(out: dict) -> list[dict]:
 
     Contract:
     - Decision history is projected into details.audit[] by diagnostics.
-    - Slot-ignore markers like COVERAGE_IGNORED_SLOT must NOT appear here.
+    - Slot markers like COVERAGE_IGNORED_SLOT DO appear here (kind="generation_ignore").
     """
     details = out.get("details") or {}
     if not isinstance(details, dict):
@@ -186,21 +191,22 @@ def test_coverage_ignored_slot_does_not_hide_gaps_but_marks_that_slot(make_probl
     assert bool(day2_oncall[0].get("context", {}).get("was_ignored")) is False
 
 
-def test_audit_is_extracted_from_meta_exceptions_but_ignored_slot_is_not_audit(make_problem_data):
+def test_audit_is_extracted_from_meta_exceptions_and_includes_ignore_slot_markers(make_problem_data):
     """
-    New rule:
+    Current rule:
     - payload.meta.exceptions stays as-is (compat),
-    - diagnostics extracts "audit-like" records into details.audit[],
-    - but it must NOT treat COVERAGE_IGNORED_SLOT as audit.
+    - diagnostics extracts history into details.audit[],
+    - slot ignore markers (COVERAGE_IGNORED_SLOT) ARE included as audit rows (kind="generation_ignore"),
+    - action-level acceptances are included as "publish_acceptance".
     """
     problem = _one_doctor_problem(make_problem_data, days=[1, 2])
     payload = _payload(
         participant_ids=[1],
         assignments=[],
         exceptions=[
-            # ignore marker (NOT audit)
+            # slot marker (audit row with day+shift_type)
             {"code": issues.COVERAGE_IGNORED_SLOT, "day": 1, "shift_type": ShiftType.onsite.value},
-            # audit-like decision (HAS audit keys -> should go to details.audit[])
+            # action-level acceptance (audit row without day/shift_type)
             {
                 "code": "hard_double_shift_same_day",
                 "justification": "Allowed as an exception for training month",
@@ -215,8 +221,17 @@ def test_audit_is_extracted_from_meta_exceptions_but_ignored_slot_is_not_audit(m
     # Still: no info findings for ignored slots
     assert _ignored_slot_findings(out) == []
 
-    # Audit is extracted and contains ONLY the audit-like record
     audit = _audit_rows(out)
-    assert len(audit) == 1
-    assert audit[0].get("code") == "hard_double_shift_same_day"
-    assert audit[0].get("accepted_by_user_id") == 777
+    assert len(audit) == 2
+
+    # We don't assume ordering too strongly, but we assert both rows are present.
+    slot_rows = [r for r in audit if r.get("day") == 1 and r.get("shift_type") == "onsite"]
+    assert len(slot_rows) == 1
+    assert slot_rows[0].get("kind") == "generation_ignore"
+    assert str(slot_rows[0].get("code")) in (str(issues.COVERAGE_IGNORED_SLOT), "coverage_ignored_slot")
+
+    action_rows = [r for r in audit if r.get("day") is None and r.get("shift_type") is None]
+    assert len(action_rows) == 1
+    assert action_rows[0].get("kind") == "publish_acceptance"
+    assert action_rows[0].get("code") == "hard_double_shift_same_day"
+    assert action_rows[0].get("accepted_by_user_id") == 777

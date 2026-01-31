@@ -23,8 +23,11 @@ Important contract notes (final contract alignment):
 IGNORE POLICY (final):
 - ignore_days does not exist anymore.
 - Required/ignored scheduling scope is controlled ONLY by ignore_slots: set[(day, shift_type)].
-- Diagnostics parsing supports ONLY slot-level ignore markers in meta.exceptions:
-  {"code":"coverage_ignored_slot","day":<int>,"shift_type":"onsite"|"oncall"}.
+- Diagnostics parsing supports meta.exceptions as "audit hints" only:
+  - slot marker rows (must have day + shift_type), e.g. ignore-slot markers,
+  - action rows (must NOT have day/shift_type), e.g. force publish acceptance with justification.
+  Diagnostics must never use exceptions to "improve" metrics.
+  (We project meta.exceptions into details.audit[].)
 
 Example (input payload shape, minimal):
 {
@@ -193,16 +196,50 @@ def _extract_ignored_slots_from_meta(meta: Dict[str, Any]) -> Set[Tuple[int, Shi
     return ignored_slots
 
 
+def _extract_audit_common_fields(e: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Extract common audit fields from a meta.exceptions record.
+
+    We keep these fields JSON-friendly and optional:
+    - accepted_at (ISO string)
+    - accepted_by_user_id (int when possible)
+    - justification (string)
+    """
+    out: Dict[str, Any] = {}
+
+    accepted_at = e.get("accepted_at")
+    if isinstance(accepted_at, str) and accepted_at.strip():
+        out["accepted_at"] = accepted_at.strip()
+
+    accepted_by = e.get("accepted_by_user_id")
+    if accepted_by is not None:
+        try:
+            out["accepted_by_user_id"] = int(accepted_by)
+        except Exception:
+            # Defensive: keep raw value if it's not int-coercible
+            out["accepted_by_user_id"] = accepted_by
+
+    justification = e.get("justification")
+    if not (isinstance(justification, str) and justification.strip()):
+        justification = e.get("justification")
+
+    if isinstance(justification, str) and justification.strip():
+        out["justification"] = justification.strip()
+
+    return out
+
+
 def _extract_audit_from_meta(meta: Dict[str, Any]) -> List[Dict[str, Any]]:
     """
     Project "decision history" into a dedicated diagnostics field: details.audit[].
 
     Rule (final):
     - Audit is "what a human decided / accepted / clicked".
-    - We MUST distinguish:
-      1) slot marker rows: have (day + shift_type) and represent a decision about a concrete slot,
-      2) action rows: have NO (day/shift_type) and represent a decision about the whole action,
-         with an optional justification (e.g., force publish, generate with ignores).
+    - We MUST distinguish two shapes of decision history that BOTH live in details.audit[]:
+      1) slot marker rows: have (day + shift_type) and represent a human decision about a concrete slot
+         (e.g., ignore coverage for this slot, head commitment resolution for this slot),
+      2) action rows: have NO (day/shift_type) and represent a human decision about the whole action
+         (e.g., force publish acceptance), optionally with justification.
     """
     out: List[Dict[str, Any]] = []
 
@@ -213,8 +250,32 @@ def _extract_audit_from_meta(meta: Dict[str, Any]) -> List[Dict[str, Any]]:
     stable_ignore_code = str(_CODE_COVERAGE_IGNORED_SLOT).strip().lower()
     legacy_ignore_code = "ignored_slot"
 
-    # Allowed kind values (must match DTO expectations).
-    allowed_kinds = {"generation_ignore", "publish_acceptance", "head_commitment_resolution"}
+    # Allowed kind values (defensive / backward compatible).
+    # We ACCEPT various inputs but we NORMALIZE to a small stable set in output.
+    #
+    # Output kinds (stable):
+    # - "generation_ignore" (slot marker)
+    # - "head_commitment_resolution" (slot marker)
+    # - "publish_acceptance" (action row)
+    allowed_kinds = {
+        # ignore-slot marker variants
+        "generation_ignore",
+        "ignore_slot",
+        # head resolution (slot marker)
+        "head_commitment_resolution",
+        # publish acceptance (action row) variants
+        "publish_acceptance",
+        "force_publish_acceptance",
+    }
+
+    def _normalize_kind(raw: Optional[str]) -> Optional[str]:
+        if raw in ("ignore_slot", "generation_ignore"):
+            return "generation_ignore"
+        if raw == "head_commitment_resolution":
+            return "head_commitment_resolution"
+        if raw in ("publish_acceptance", "force_publish_acceptance"):
+            return "publish_acceptance"
+        return None
 
     for e in exceptions:
         if not isinstance(e, dict):
@@ -229,7 +290,7 @@ def _extract_audit_from_meta(meta: Dict[str, Any]) -> List[Dict[str, Any]]:
         kind_raw = e.get("kind")
         kind: Optional[str] = None
         if isinstance(kind_raw, str) and kind_raw.strip() in allowed_kinds:
-            kind = kind_raw.strip()
+            kind = _normalize_kind(kind_raw.strip())
 
         has_acceptance_context = any(k in e for k in ("justification", "accepted_by_user_id", "accepted_at"))
 
@@ -243,18 +304,22 @@ def _extract_audit_from_meta(meta: Dict[str, Any]) -> List[Dict[str, Any]]:
             if day is None or st is None:
                 continue
 
-            # If payload didn't provide kind, enforce it here.
-            if kind is None:
-                kind = "generation_ignore"
+            # Enforce normalized kind for ignore-slot marker rows.
+            kind = "generation_ignore"
 
-            out.append(
-                {
-                    "kind": kind,
-                    "code": code_raw,
-                    "day": int(day),
-                    "shift_type": st.value,
-                }
-            )
+            row: Dict[str, Any] = {
+                "kind": kind,
+                "code": code_raw,
+                "day": int(day),
+                "shift_type": st.value,
+            }
+
+            # IMPORTANT:
+            # Slot marker rows MUST carry acceptance metadata too,
+            # because FE needs to show "who accepted it" and "when".
+            row.update(_extract_audit_common_fields(e))
+
+            out.append(row)
             continue
 
         # B) head commitment resolution -> slot marker (must have day+shift_type)
@@ -265,14 +330,22 @@ def _extract_audit_from_meta(meta: Dict[str, Any]) -> List[Dict[str, Any]]:
                 # This kind is defined as slot-scoped, so skip malformed rows.
                 continue
 
-            out.append(
-                {
-                    "kind": kind,
-                    "code": code_raw,
-                    "day": int(day),
-                    "shift_type": st.value,
-                }
-            )
+            row: Dict[str, Any] = {
+                "kind": kind,
+                "code": code_raw,
+                "day": int(day),
+                "shift_type": st.value,
+            }
+
+            # Keep chosen_head_id when present (so FE can show what was chosen).
+            chosen_head_id = _safe_int(e.get("chosen_head_id"))
+            if chosen_head_id is not None:
+                row["chosen_head_id"] = int(chosen_head_id)
+
+            # Also keep acceptance metadata (who/when).
+            row.update(_extract_audit_common_fields(e))
+
+            out.append(row)
             continue
 
         # -------------------------
@@ -282,37 +355,27 @@ def _extract_audit_from_meta(meta: Dict[str, Any]) -> List[Dict[str, Any]]:
         # because justification is for the whole action, not for a single slot.
         #
         # Include action rows when:
-        # - kind is explicitly publish_acceptance, OR
-        # - kind is missing but acceptance context exists (backward compatible).
+        # - kind is explicitly publish_acceptance OR generation_ignore, OR
+        # - kind is missing but acceptance context exists (backward compatible -> publish_acceptance).
+        #
+        # IMPORTANT:
+        # Slot markers like COVERAGE_IGNORED_SLOT DO appear in details.audit[] as kind="generation_ignore".
+        # They must NOT "improve" diagnostics metrics; we only use them to:
+        # - mark matching gap findings with context.was_ignored=True,
+        # - preserve user decision history for UI.
         if kind is None and has_acceptance_context:
             kind = "publish_acceptance"
 
-        if kind != "publish_acceptance":
-            # Not a recognized audit row (and not a slot marker handled above).
+        if kind not in ("publish_acceptance", "generation_ignore"):
+            continue
+
+        # Action rows MUST NOT carry slot scope.
+        # If they do, treat them as malformed and skip (slot marker rows are handled above).
+        if _safe_int(e.get("day")) is not None or _normalize_shift_type(e.get("shift_type")) is not None:
             continue
 
         row: Dict[str, Any] = {"kind": kind, "code": code_raw}
-
-        # Action-level justification (optional)
-        justification = e.get("justification")
-        if isinstance(justification, str) and justification.strip():
-            row["justification"] = justification.strip()
-
-        accepted_by = e.get("accepted_by_user_id")
-        if accepted_by is not None:
-            if isinstance(accepted_by, int):
-                row["accepted_by_user_id"] = int(accepted_by)
-            else:
-                try:
-                    row["accepted_by_user_id"] = int(accepted_by)
-                except Exception:
-                    # If it's not an int, keep raw value (defensive).
-                    row["accepted_by_user_id"] = accepted_by
-
-        accepted_at = e.get("accepted_at")
-        # Keep accepted_at as ISO string in core output (JSON-friendly).
-        if isinstance(accepted_at, str) and accepted_at.strip():
-            row["accepted_at"] = accepted_at.strip()
+        row.update(_extract_audit_common_fields(e))
 
         out.append(row)
 
@@ -526,8 +589,9 @@ def compute_preference_fulfillment_pct(
     - preferred_onsite_days
     - preferred_oncall_days
 
-    Notes:
-    - If a preferred SLOT is ignored -> it's skipped (not counted).
+    Notes:.
+    - Ignore markers MUST NOT improve metrics.
+      If a preferred slot was ignored during generation, it is still counted and can be missed.
     - If there are no preferences at all -> return 100.0.
     """
     total = 0
@@ -545,8 +609,6 @@ def compute_preference_fulfillment_pct(
             d = int(d_raw)
             if d not in days_set:
                 continue
-            if (d, ShiftType.onsite) in ignored_slots:
-                continue
 
             total += 1
             if _doctor_has(idx, doctor_id=doc_id, day=d, shift_type=ShiftType.onsite):
@@ -555,8 +617,6 @@ def compute_preference_fulfillment_pct(
         for d_raw in prefs.preferred_oncall_days:
             d = int(d_raw)
             if d not in days_set:
-                continue
-            if (d, ShiftType.oncall) in ignored_slots:
                 continue
 
             total += 1
@@ -601,8 +661,6 @@ def _compute_preference_stats_per_doctor(
             d = int(d_raw)
             if d not in days_set:
                 continue
-            if (d, ShiftType.onsite) in ignored_slots:
-                continue
 
             total += 1
             if _doctor_has(idx, doctor_id=doc_id, day=d, shift_type=ShiftType.onsite):
@@ -613,8 +671,6 @@ def _compute_preference_stats_per_doctor(
         for d_raw in prefs.preferred_oncall_days:
             d = int(d_raw)
             if d not in days_set:
-                continue
-            if (d, ShiftType.oncall) in ignored_slots:
                 continue
 
             total += 1
@@ -1226,8 +1282,8 @@ def _compute_preferred_days_penalty_per_doctor(
 ) -> tuple[int, Dict[int, int]]:
     """
     Penalty for missing preferred concrete days (same logic as objective_builder):
-    - if slot cannot/should not exist (ignored) -> skip it
-    - else miss is penalized with doctor-specific weight
+    - Ignore markers MUST NOT improve metrics.
+    If a preferred slot was ignored during generation, it is still counted and can be missed.
 
     Returns:
         (total_penalty, penalty_by_doctor)
@@ -1253,8 +1309,6 @@ def _compute_preferred_days_penalty_per_doctor(
             d = int(d_raw)
             if d not in days_set:
                 continue
-            if (d, ShiftType.onsite) in ignored_slots:
-                continue
 
             if not _doctor_has(idx, doctor_id=doc_id, day=d, shift_type=ShiftType.onsite):
                 p += miss_w
@@ -1262,8 +1316,6 @@ def _compute_preferred_days_penalty_per_doctor(
         for d_raw in prefs.preferred_oncall_days:
             d = int(d_raw)
             if d not in days_set:
-                continue
-            if (d, ShiftType.oncall) in ignored_slots:
                 continue
 
             if not _doctor_has(idx, doctor_id=doc_id, day=d, shift_type=ShiftType.oncall):
@@ -1396,8 +1448,6 @@ def _build_findings(
         for d in sorted(set(int(x) for x in (prefs.preferred_onsite_days or []))):
             if d not in days_set:
                 continue
-            if (d, ShiftType.onsite) in ignored_slots:
-                continue
             if not _doctor_has(idx, doctor_id=int(doc_id), day=int(d), shift_type=ShiftType.onsite):
                 findings.append(
                     _finding(
@@ -1409,8 +1459,6 @@ def _build_findings(
 
         for d in sorted(set(int(x) for x in (prefs.preferred_oncall_days or []))):
             if d not in days_set:
-                continue
-            if (d, ShiftType.oncall) in ignored_slots:
                 continue
             if not _doctor_has(idx, doctor_id=int(doc_id), day=int(d), shift_type=ShiftType.oncall):
                 findings.append(

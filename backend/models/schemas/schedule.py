@@ -39,7 +39,55 @@ from .dto_common import (
     YearInt,  # canonical 1900..2100 year (zgodnie z dto_common)
 )
 
+
 # ------------------------------ Core small blocks ------------------------------
+def _normalize_meta_labels(v: Any, *, allow_none: bool) -> Any:
+    """
+    Normalize meta to guarantee meta["labels"] is always a list (when meta exists).
+
+    Why:
+    - FE + services should not need "if labels is None" checks everywhere.
+    - Backward compatibility: old payloads might have labels missing or malformed.
+
+    Rules:
+    - If allow_none=True and v is None -> return None (caller wants to preserve None).
+    - If allow_none=False and v is None -> return {"labels": []}.
+    - If v is not a dict -> return v (let Pydantic raise a clear type error).
+    - Ensure out["labels"] is a list:
+      * None -> []
+      * list -> as-is
+      * tuple/set -> list(...)
+      * str -> [str]
+      * any other -> []
+    """
+    if v is None:
+        return None if allow_none else {"labels": []}
+
+    # If someone sent wrong type, keep it so Pydantic can show a good error.
+    if not isinstance(v, dict):
+        return v
+
+    out = dict(v)  # copy: do not mutate caller's dict
+    labels = out.get("labels", [])
+
+    if labels is None:
+        out["labels"] = []
+        return out
+
+    if isinstance(labels, list):
+        out["labels"] = labels
+        return out
+
+    if isinstance(labels, (tuple, set)):
+        out["labels"] = list(labels)
+        return out
+
+    if isinstance(labels, str):
+        out["labels"] = [labels]
+        return out
+
+    out["labels"] = []
+    return out
 
 
 class Assignment(BaseModel):
@@ -118,7 +166,13 @@ class SchedulePayload(BaseModel):
     # We keep it untyped here on purpose for backward compatibility:
     # - older payloads may have different exception shapes,
     # - diagnostics projects "audit" into diagnostics.details.audit[].
-    meta: Dict = Field(default_factory=lambda: {"labels": []})
+    meta: dict[str, Any] = Field(default_factory=lambda: {"labels": []})
+
+    @field_validator("meta", mode="before")
+    @classmethod
+    def _ensure_meta_labels_is_list(cls, v):
+        # SchedulePayload.meta must always exist -> allow_none=False
+        return _normalize_meta_labels(v, allow_none=False)
 
 
 # ------------------------------ Working draft (GET/PUT) ------------------------------
@@ -140,7 +194,7 @@ class ScheduleWorkingRead(BaseModel):
     exists: bool = True
     participant_doctor_ids: List[int] = Field(default_factory=list)
     assignments: List[Assignment] = Field(default_factory=list)
-    meta: Dict = Field(default_factory=lambda: {"labels": []})
+    meta: dict[str, Any] = Field(default_factory=lambda: {"labels": []})
     updated_at: Optional[datetime] = None
     lock_version: Optional[int] = None
 
@@ -149,6 +203,12 @@ class ScheduleWorkingRead(BaseModel):
         default=None,
         description="Frozen inputs used to create the schedule (doctors + preference version ids).",
     )
+
+    @field_validator("meta", mode="before")
+    @classmethod
+    def _ensure_working_meta_labels_is_list(cls, v):
+        # Working read meta must always exist -> allow_none=False
+        return _normalize_meta_labels(v, allow_none=False)
 
 
 class ScheduleWorkingPut(BaseModel):
@@ -165,6 +225,12 @@ class ScheduleWorkingPut(BaseModel):
 
     # MVP: not enforced yet, but present so FE can start echoing it.
     if_match_lock_version: Optional[int] = None
+
+    @field_validator("meta", mode="before")
+    @classmethod
+    def _normalize_put_meta_labels_if_present(cls, v):
+        # In PUT meta is optional: if None, keep None -> allow_none=True
+        return _normalize_meta_labels(v, allow_none=True)
 
 
 class ScheduleWorkingAck(BaseModel):
@@ -187,7 +253,7 @@ class ScheduleWorkingAck(BaseModel):
 class ScheduleDraftView(BaseModel):
     """Draft pointer block used in Period View and checkpoint responses."""
 
-    version_id: Optional[str] = None
+    version_id: Optional[int] = None
     checkpoints_count: int = 0
     can_undo: bool = False
     can_redo: bool = False
@@ -197,7 +263,7 @@ class ScheduleDraftView(BaseModel):
 class SchedulePublishedView(BaseModel):
     """Published pointer block used in Period View and publish responses."""
 
-    version_id: Optional[str] = None
+    version_id: Optional[int] = None
     publications_count: int = 0
     can_undo: bool = False
     can_redo: bool = False
@@ -265,14 +331,32 @@ class HeadCommitmentResolution(BaseModel):
 class ScheduleGenerateRequest(BaseModel):
     """POST /api/v1/schedules/generate"""
 
+    # OpenAPI examples live here (schemas-level), so routers can stay thin.
+    # Keep examples aligned with business policy:
+    # - ignore_slots: slot-only (no ignore_days)
+    # - head_commitment_resolutions: slot-only (no per-slot justification)
+    model_config = {
+        "json_schema_extra": {
+            "examples": [
+                {
+                    "year": 2026,
+                    "month": 2,
+                    "participant_doctor_ids": [101, 102, 103],
+                    "ignore_slots": [
+                        {"day": 3, "shift_type": "onsite"},
+                        {"day": 7, "shift_type": "oncall"},
+                    ],
+                    "head_commitment_resolutions": [{"day": 5, "shift_type": "onsite", "chosen_head_id": 101}],
+                }
+            ]
+        }
+    }
+
     year: YearInt
     month: MonthInt
     participant_doctor_ids: List[int] = Field(default_factory=list)
-
-    # FINAL POLICY:
-    # - ignore_days is removed from the whole flow.
-    # - Only individual slots can be ignored.
     ignore_slots: List[IgnoreSlot] = Field(default_factory=list)
+    justification: Optional[str] = None
 
     # Optional: provided only when FE resolves "multiple heads want same slot" conflicts.
     head_commitment_resolutions: List[HeadCommitmentResolution] = Field(
@@ -287,18 +371,6 @@ class ScheduleGenerateRequest(BaseModel):
                 {"day": 12, "shift_type": "oncall", "chosen_head_id": 102},
             ]
         ],
-    )
-
-    # Action-level justification (NOT per slot).
-    # Used for: "I accept ignores for this generation because ..." etc.
-    justification: Optional[str] = Field(
-        default=None,
-        description=(
-            "Optional human justification for the whole generate action (action-level). "
-            "This is NOT per ignored slot."
-        ),
-        max_length=500,
-        examples=["We are short-staffed this month; accepting gaps to proceed with generation."],
     )
 
     @field_validator("head_commitment_resolutions", mode="before")
@@ -333,7 +405,7 @@ class ScheduleGenerateRequest(BaseModel):
                 st_val = str(getattr(st, "value", st))
                 dedup[(day, st_val)] = {
                     "day": day,
-                    "shift_type": st,
+                    "shift_type": st_val,
                     "chosen_head_id": int(chosen_raw),
                 }
                 continue
@@ -349,7 +421,7 @@ class ScheduleGenerateRequest(BaseModel):
             st_val = str(getattr(st, "value", st))
             dedup[(day, st_val)] = {
                 "day": day,
-                "shift_type": st,
+                "shift_type": st_val,
                 "chosen_head_id": int(chosen_raw),
             }
 
@@ -359,7 +431,7 @@ class ScheduleGenerateRequest(BaseModel):
         out.sort(
             key=lambda x: (
                 x["day"],
-                str(getattr(x["shift_type"], "value", x["shift_type"])),
+                str(x["shift_type"]),
                 x["chosen_head_id"],
             )
         )
@@ -419,11 +491,33 @@ class AcceptedException(BaseModel):
     """User-acknowledged exception to a hard rule when forcing publish."""
 
     code: str
-    justification: str
+    # Policy: justification is action-level (NOT per slot) and may be omitted.
+    justification: Optional[str] = None
 
 
 class SchedulePublishRequest(BaseModel):
     """POST /api/v1/schedules/{year}/{month}/publish"""
+
+    # OpenAPI examples live here (schemas-level), so routers can stay thin.
+    # Keep examples aligned with business policy:
+    # - accepted_exceptions are action-level (no day/shift_type fields)
+    model_config = {
+        "json_schema_extra": {
+            "examples": [
+                {"force": False, "note": "Looks good."},
+                {
+                    "force": True,
+                    "note": "Force publish despite known hard rule breaks.",
+                    "accepted_exceptions": [
+                        {
+                            "code": "hard_rules_violated",
+                            "justification": "Emergency staffing shortage; publishing for operational use.",
+                        }
+                    ],
+                },
+            ]
+        }
+    }
 
     force: bool = False
     note: Optional[str] = None

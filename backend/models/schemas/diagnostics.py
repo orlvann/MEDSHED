@@ -240,9 +240,13 @@ class DiagnosticsRead(BaseModel):
     - Embedded in Period View and Generate/Checkpoint responses.
     """
 
-    version_id: str = Field(
-        ...,
-        description="Version identifier (draft checkpoint or published) the diagnostics refer to.",
+    version_id: Optional[int] = Field(
+        default=None,
+        description=(
+            "Version identifier the diagnostics refer to. "
+            "For target='draft' or 'published' it is an integer. "
+            "For target='working' it is None."
+        ),
     )
     computed_at: datetime = Field(
         ...,
