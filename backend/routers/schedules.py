@@ -56,6 +56,13 @@ router = APIRouter(prefix="/api/v1/schedules")
 svc = SchedulingService()
 
 
+def _issue_code(v: object) -> str:
+    """
+    Convert issue enum/constant to a stable string code for JSON/OpenAPI examples.
+    """
+    return str(getattr(v, "value", v))
+
+
 def _err_example(code: str, *, detail: str | None = None, context: dict | None = None) -> dict:
     """
     Helper for OpenAPI examples.
@@ -71,11 +78,18 @@ def _raise(e: ValueError) -> None:
     """
     Convert ValueError(code) from service -> HTTPException with a stable error payload.
     """
-    code = str(e)
+    # DomainError may carry richer fields:
+    # - code: stable error code for FE
+    # - context: machine-readable payload (dict)
+    # - detail: optional human-friendly detail string
+    #
+    # For plain ValueError("code"), str(e) is the code.
+    code = str(getattr(e, "code", str(e)))
 
     mapping = {
         "period_closed": status.HTTP_403_FORBIDDEN,
         "edit_conflict": status.HTTP_409_CONFLICT,
+        "working_requires_snapshot": status.HTTP_409_CONFLICT,
         "cannot_undo": status.HTTP_409_CONFLICT,
         "cannot_redo": status.HTTP_409_CONFLICT,
         "publish_blocked_by_hard_rules": status.HTTP_409_CONFLICT,
@@ -83,6 +97,8 @@ def _raise(e: ValueError) -> None:
         "invalid_head_commitment_resolution": status.HTTP_400_BAD_REQUEST,
         "not_found": status.HTTP_404_NOT_FOUND,
         "generate_requires_ignore": status.HTTP_409_CONFLICT,
+        "diagnostics_requires_snapshot": status.HTTP_409_CONFLICT,
+        "publish_requires_snapshot": status.HTTP_409_CONFLICT,
         "generate_requires_head_resolution": status.HTTP_409_CONFLICT,
         "generate_infeasible": status.HTTP_409_CONFLICT,
         "db_integrity_error": status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -90,13 +106,18 @@ def _raise(e: ValueError) -> None:
     }
 
     human_detail = {
-        "generate_requires_ignore": "Generation requires ignore_slots to proceed.",
-        "generate_requires_head_resolution": "Generation requires choosing a head for conflicting commitment slots.",
-        "generate_infeasible": "Generation failed: solver could not find a feasible solution.",
+        "generate_requires_ignore": "Not enough availability to generate. Choose days to ignore and try again.",
+        "generate_requires_head_resolution": "Two heads chose the same duty. Pick who gets it and try again.",
+        "generate_infeasible": "Generation failed: solver could not find a feasible solution. Change inputs "
+        "(availability / limits) and try again.",
         "invalid_head_commitment_resolution": "Invalid head commitment resolution payload.",
-        "publish_blocked_by_hard_rules": "Publishing blocked: hard rule violations detected.",
-        "db_integrity_error": "Database integrity error.",
-        "db_error": "Database error.",
+        "publish_blocked_by_hard_rules": "Publishing blocked: hard rule violations detected. "
+        "Fix them or use Force Publish.",
+        "diagnostics_requires_snapshot": "Cannot compute diagnostics. Regenerate the schedule.",
+        "publish_requires_snapshot": "Cannot publish. Regenerate the schedule first.",
+        "working_requires_snapshot": "Cannot save or analyze this draft. Regenerate the schedule.",
+        "db_integrity_error": "Server error while saving. Try again.",
+        "db_error": "Server error. Try again.",
     }
 
     if code in mapping:
@@ -104,7 +125,8 @@ def _raise(e: ValueError) -> None:
         if not isinstance(context, dict):
             context = {}
 
-        detail = human_detail.get(code) or getattr(e, "detail", None) or code
+        # Prefer DomainError.detail if present; otherwise fallback to router's generic text.
+        detail = getattr(e, "detail", None) or human_detail.get(code) or code
 
         raise HTTPException(
             status_code=mapping[code],

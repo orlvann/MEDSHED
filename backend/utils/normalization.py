@@ -81,7 +81,14 @@ def normalize_meta(meta: Dict[str, Any] | None) -> Dict[str, Any]:
     """
     Normalize meta dict:
     - Ensure "labels" is a list of unique, sorted strings.
-    - Ensure "exceptions" is a list (keep as-is if already a list).
+    - Ensure "exceptions" is a list of dict items.
+
+    IMPORTANT:
+    - We do NOT "whitelist" or trim exception dict fields.
+      Exceptions are audit payloads and may contain different shapes over time
+      (slot-level markers, action-level rows, publish acceptances, etc.).
+    - We only enforce the container shape:
+      exceptions = List[Dict[str, Any]]
     """
     # meta must always be a dict; if it's a wrong type, reset to a safe base shape.
     if not isinstance(meta, dict):
@@ -107,8 +114,21 @@ def normalize_meta(meta: Dict[str, Any] | None) -> Dict[str, Any]:
     m["labels"] = sorted(set(labels_clean))
 
     # ---- exceptions: ALWAYS a list ----
-    # If it is not a list, replace with empty list (do NOT try to coerce).
-    if not isinstance(m.get("exceptions"), list):
+    # If exceptions has a wrong type (corrupted payload), reset to [] to avoid crashes.
+    # We do NOT trim fields of valid exception dicts.
+
+    exc_raw = m.get("exceptions")
+    if not isinstance(exc_raw, list):
         m["exceptions"] = []
+    else:
+        # Keep ONLY dict items (do not trim keys).
+        # Drop invalid items instead of trying to coerce them,
+        # because consumers assume a dict-like shape.
+        exc_clean: List[Dict[str, Any]] = []
+        for it in exc_raw:
+            if isinstance(it, dict):
+                # Shallow copy to avoid accidental mutations by callers.
+                exc_clean.append(dict(it))
+        m["exceptions"] = exc_clean
 
     return m
