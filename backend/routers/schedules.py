@@ -22,6 +22,10 @@ IMPORTANT ABOUT DIAGNOSTICS DTO:
   2) action-level decisions/justifications (may omit day/shift_type) that explain "why" an admin
      chose to proceed (e.g. ignore slots before generation, force publish acceptances).
   FE should offer justification fields as OPTIONAL.
+
+IMPORTANT ABOUT ERROR SHAPE:
+- Runtime returns FastAPI HTTPException with detail=make_error(...).
+  Response body shape is always: {"detail": {"code": str, "detail": str, "context": dict}}
 """
 
 from __future__ import annotations
@@ -47,7 +51,6 @@ from backend.models.schemas.schedule import (
     SchedulesPeriodViewRead,
     ScheduleWorkingAck,
     ScheduleWorkingPut,
-    ScheduleWorkingRead,
 )
 from backend.routers.deps import UserCtx, require_admin, require_doctor
 from backend.services import SchedulingService
@@ -137,6 +140,51 @@ def _raise(e: ValueError) -> None:
 
 
 # ------------------------------- ADMIN: generate -------------------------------
+_OPENAPI_EXAMPLES_WORKING_PUT_REQUEST = {
+    "autosave_minimal": {
+        "summary": "Autosave (replace assignments; meta omitted)",
+        "value": {
+            "assignments": [
+                {"day": 1, "shift_type": "onsite", "doctor_id": 101},
+                {"day": 1, "shift_type": "oncall", "doctor_id": 102},
+            ],
+            "meta": None,
+            "if_match_lock_version": 8,
+        },
+    },
+    "autosave_with_labels": {
+        "summary": "Autosave with meta.labels",
+        "value": {
+            "assignments": [
+                {"day": 2, "shift_type": "onsite", "doctor_id": 101},
+                {"day": 2, "shift_type": "oncall", "doctor_id": 103},
+            ],
+            "meta": {"labels": ["edited_by_admin"]},
+            "if_match_lock_version": 8,
+        },
+    },
+    "autosave_clear_all": {
+        "summary": "Clear all assignments (empty grid)",
+        "value": {"assignments": [], "meta": None, "if_match_lock_version": 8},
+    },
+    "autosave_without_occ": {
+        "summary": "Autosave without OCC (if_match_lock_version omitted → last write wins)",
+        "value": {
+            "assignments": [{"day": 3, "shift_type": "onsite", "doctor_id": 101}],
+            "meta": None,
+            "if_match_lock_version": None,
+        },
+    },
+}
+
+_OPENAPI_EXAMPLES_CHECKPOINT_REQUEST = {
+    "no_body": {"summary": "No request body (defaults apply)", "value": None},
+    "with_note": {
+        "summary": "Checkpoint with a note (admin-only draft history)",
+        "value": {"note": "Manual adjustments after solver run."},
+    },
+}
+
 
 _OPENAPI_EXAMPLES_PUBLISH_REQUEST = {
     "normal": {
@@ -350,11 +398,11 @@ _OPENAPI_EXAMPLES_PUBLISH_REQUEST = {
                     "examples": {
                         "invalid_head_commitment_resolution": {
                             "summary": "Chosen head is not a valid head/participant for that conflict slot.",
-                            "value": {
-                                "detail": "Invalid head commitment resolution payload.",
-                                "code": "invalid_head_commitment_resolution",
-                                "context": {},
-                            },
+                            "value": _err_example(
+                                "invalid_head_commitment_resolution",
+                                detail="Invalid head commitment resolution payload.",
+                                context={},
+                            ),
                         }
                     }
                 }
@@ -368,10 +416,10 @@ _OPENAPI_EXAMPLES_PUBLISH_REQUEST = {
                         "generate_requires_ignore": {
                             "summary": "Feasibility precheck found issues; "
                             "FE must retry with ignore_slots or change inputs.",
-                            "value": {
-                                "detail": "Not enough availability to generate. Choose days to ignore and try again.",
-                                "code": "generate_requires_ignore",
-                                "context": {
+                            "value": _err_example(
+                                "generate_requires_ignore",
+                                detail="Not enough availability to generate. Choose days to ignore and try again.",
+                                context={
                                     "year": 2026,
                                     "month": 2,
                                     "issues_total": 7,
@@ -385,15 +433,15 @@ _OPENAPI_EXAMPLES_PUBLISH_REQUEST = {
                                         {"day": 3, "code": "no_oncall_candidate", "message": "no_oncall_candidate"},
                                     ],
                                 },
-                            },
+                            ),
                         },
                         "generate_requires_head_resolution": {
                             "summary": "Multiple heads want the same slot; "
                             "FE must collect head_commitment_resolutions and retry.",
-                            "value": {
-                                "detail": "Two heads chose the same duty. Pick who gets it and try again.",
-                                "code": "generate_requires_head_resolution",
-                                "context": {
+                            "value": _err_example(
+                                "generate_requires_head_resolution",
+                                detail="Two heads chose the same duty. Pick who gets it and try again.",
+                                context={
                                     "year": 2026,
                                     "month": 2,
                                     "head_commitment_conflicts": [
@@ -407,15 +455,15 @@ _OPENAPI_EXAMPLES_PUBLISH_REQUEST = {
                                         }
                                     ],
                                 },
-                            },
+                            ),
                         },
                         "generate_infeasible": {
                             "summary": "Solver ran but could not find a feasible solution (status != OK).",
-                            "value": {
-                                "detail": "Generation failed: solver could not find a feasible solution. "
+                            "value": _err_example(
+                                "generate_infeasible",
+                                detail="Generation failed: solver could not find a feasible solution. "
                                 "Change inputs (availability / limits) and try again.",
-                                "code": "generate_infeasible",
-                                "context": {
+                                context={
                                     "year": 2026,
                                     "month": 2,
                                     "solver_status": "INFEASIBLE",
@@ -427,7 +475,7 @@ _OPENAPI_EXAMPLES_PUBLISH_REQUEST = {
                                         {"day": 13, "code": "no_specialist", "message": "no_specialist"},
                                     ],
                                 },
-                            },
+                            ),
                         },
                     }
                 }
@@ -440,11 +488,7 @@ _OPENAPI_EXAMPLES_PUBLISH_REQUEST = {
                     "examples": {
                         "db_error": {
                             "summary": "Generic server-side DB failure.",
-                            "value": {
-                                "detail": "Server error. Try again.",
-                                "code": "db_error",
-                                "context": {},
-                            },
+                            "value": _err_example("db_error", detail="Server error. Try again.", context={}),
                         }
                     }
                 }
@@ -499,12 +543,12 @@ def generate_schedule(
                                     # - We only mark actual missing slots with was_ignored=True/False.
                                     "findings": [
                                         {
-                                            "code": issues.COVERAGE_MISSING_REQUIRED_SLOT,
+                                            "code": _issue_code(issues.COVERAGE_MISSING_REQUIRED_SLOT),
                                             "severity": "critical",
                                             "context": {"day": 2, "shift_type": "onsite", "was_ignored": True},
                                         },
                                         {
-                                            "code": issues.COVERAGE_MISSING_REQUIRED_SLOT,
+                                            "code": _issue_code(issues.COVERAGE_MISSING_REQUIRED_SLOT),
                                             "severity": "critical",
                                             "context": {"day": 2, "shift_type": "oncall", "was_ignored": False},
                                         },
@@ -582,7 +626,7 @@ def generate_schedule(
                                 "details": {
                                     "findings": [
                                         {
-                                            "code": issues.COVERAGE_MISSING_REQUIRED_SLOT,
+                                            "code": _issue_code(issues.COVERAGE_MISSING_REQUIRED_SLOT),
                                             "severity": "critical",
                                             "context": {"day": 10, "shift_type": "oncall", "was_ignored": False},
                                         }
@@ -592,7 +636,7 @@ def generate_schedule(
                                     # Example: a human accepted a hard violation during force publish.
                                     "audit": [
                                         {
-                                            "code": issues.COVERAGE_MISSING_REQUIRED_SLOT,
+                                            "code": _issue_code(issues.COVERAGE_MISSING_REQUIRED_SLOT),
                                             "justification": "Force publish: "
                                             "Duty shortage accepted for day 10 oncall.",
                                             "accepted_by_user_id": 1,
@@ -674,6 +718,12 @@ def schedules_diagnostics(
     response_model=SchedulesPeriodViewRead,
     tags=["schedules:admin"],
     summary="Period view (working + pointers + diagnostics) — service-built",
+    description=(
+        "Unified view for a period (working + current draft/published pointers).\n\n"
+        "Note:\n"
+        "- draft.payload / published.payload is null ONLY when the pointer does not exist.\n"
+        "  If pointer exists, payload is always a full SchedulePayload (validated by the service)."
+    ),
     responses={
         200: {
             "description": "Unified view for a period (includes empty skeleton when nothing exists).",
@@ -687,7 +737,7 @@ def schedules_diagnostics(
                                 "month": 2,
                                 "org_timezone": "Europe/Warsaw",
                                 "period_status": "current",
-                                "view": {"default_mode": "draft", "toggle_available": True},
+                                "view": {"default_mode": "draft", "toggle_available": False},
                                 "working": {
                                     "year": 2026,
                                     "month": 2,
@@ -734,7 +784,17 @@ def schedules_diagnostics(
                                     "meta": {"labels": []},
                                     "updated_at": "2026-01-28T09:30:00Z",
                                     "lock_version": 8,
-                                    "inputs_snapshot": None,
+                                    "inputs_snapshot": {
+                                        "doctors": {
+                                            "101": {
+                                                "role": "specialist",
+                                                "is_head": True,
+                                                "display_name": "Jan Kowalski",
+                                                "is_active_at_snapshot": True,
+                                            }
+                                        },
+                                        "preference_version_id_by_doctor": {"101": 55},
+                                    },
                                 },
                                 "draft": {
                                     "version_id": 124,
@@ -744,7 +804,17 @@ def schedules_diagnostics(
                                     "payload": {
                                         "participant_doctor_ids": [101, 102, 103],
                                         "assignments": [{"day": 1, "shift_type": "onsite", "doctor_id": 101}],
-                                        "inputs_snapshot": None,
+                                        "inputs_snapshot": {
+                                            "doctors": {
+                                                "101": {
+                                                    "role": "specialist",
+                                                    "is_head": True,
+                                                    "display_name": "Jan Kowalski",
+                                                    "is_active_at_snapshot": True,
+                                                }
+                                            },
+                                            "preference_version_id_by_doctor": {"101": 55},
+                                        },
                                         "meta": {"labels": []},
                                     },
                                 },
@@ -777,6 +847,128 @@ def schedules_diagnostics(
                                 },
                             },
                         },
+                        "with_draft_and_published": {
+                            "summary": "Both pointers exist (toggle is available)",
+                            "value": {
+                                "year": 2026,
+                                "month": 2,
+                                "org_timezone": "Europe/Warsaw",
+                                "period_status": "current",
+                                "view": {"default_mode": "draft", "toggle_available": True},
+                                "working": {
+                                    "year": 2026,
+                                    "month": 2,
+                                    "exists": True,
+                                    "participant_doctor_ids": [101, 102, 103],
+                                    "assignments": [
+                                        {"day": 1, "shift_type": "onsite", "doctor_id": 101},
+                                        {"day": 1, "shift_type": "oncall", "doctor_id": 102},
+                                    ],
+                                    "meta": {"labels": ["edited_by_admin"]},
+                                    "updated_at": "2026-01-28T09:30:00Z",
+                                    "lock_version": 8,
+                                    "inputs_snapshot": {
+                                        "doctors": {
+                                            "101": {
+                                                "role": "specialist",
+                                                "is_head": True,
+                                                "display_name": "Jan Kowalski",
+                                                "is_active_at_snapshot": True,
+                                            },
+                                            "102": {
+                                                "role": "resident",
+                                                "is_head": False,
+                                                "display_name": "Doctor 102",
+                                                "is_active_at_snapshot": True,
+                                            },
+                                        },
+                                        "preference_version_id_by_doctor": {"101": 55, "102": 56},
+                                    },
+                                },
+                                "draft": {
+                                    "version_id": 124,
+                                    "checkpoints_count": 2,
+                                    "can_undo": True,
+                                    "can_redo": False,
+                                    "payload": {
+                                        "participant_doctor_ids": [101, 102, 103],
+                                        "assignments": [
+                                            {"day": 1, "shift_type": "onsite", "doctor_id": 101},
+                                            {"day": 1, "shift_type": "oncall", "doctor_id": 102},
+                                        ],
+                                        "inputs_snapshot": {
+                                            "doctors": {
+                                                "101": {
+                                                    "role": "specialist",
+                                                    "is_head": True,
+                                                    "display_name": "Jan Kowalski",
+                                                    "is_active_at_snapshot": True,
+                                                },
+                                                "102": {
+                                                    "role": "resident",
+                                                    "is_head": False,
+                                                    "display_name": "Doctor 102",
+                                                    "is_active_at_snapshot": True,
+                                                },
+                                            },
+                                            "preference_version_id_by_doctor": {"101": 55, "102": 56},
+                                        },
+                                        "meta": {"labels": ["as_generated"]},
+                                    },
+                                },
+                                "published": {
+                                    "version_id": 200,
+                                    "publications_count": 1,
+                                    "can_undo": False,
+                                    "can_redo": False,
+                                    "audit": {"published_at": "2026-01-28T10:00:00Z"},
+                                    "payload": {
+                                        "participant_doctor_ids": [101, 102, 103],
+                                        "assignments": [
+                                            {"day": 1, "shift_type": "onsite", "doctor_id": 101},
+                                            {"day": 1, "shift_type": "oncall", "doctor_id": 102},
+                                        ],
+                                        "inputs_snapshot": {
+                                            "doctors": {
+                                                "101": {
+                                                    "role": "specialist",
+                                                    "is_head": True,
+                                                    "display_name": "Jan Kowalski",
+                                                    "is_active_at_snapshot": True,
+                                                },
+                                                "102": {
+                                                    "role": "resident",
+                                                    "is_head": False,
+                                                    "display_name": "Doctor 102",
+                                                    "is_active_at_snapshot": True,
+                                                },
+                                            },
+                                            "preference_version_id_by_doctor": {"101": 55, "102": 56},
+                                        },
+                                        "meta": {"labels": ["as_generated"], "note": "Finalize"},
+                                    },
+                                },
+                                "diagnostics": {
+                                    "version_id": 124,
+                                    "computed_at": "2026-01-28T09:40:00Z",
+                                    "summary": {
+                                        "coverage_missing_required_slots": 0,
+                                        "hard_issues_count": 0,
+                                        "rest_violations": 0,
+                                        "fairness_index": 1.0,
+                                        "preference_fulfillment_pct": 100.0,
+                                    },
+                                    "details": {
+                                        "findings": [],
+                                        "per_doctor": [],
+                                        "rankings": {"top_unhappy": [], "top_happy": []},
+                                        "audit": [],
+                                        "components": {},
+                                        "working_lock_version": None,
+                                    },
+                                },
+                            },
+                        },
                     }
                 }
             },
@@ -785,143 +977,22 @@ def schedules_diagnostics(
             "description": "Not found (pointer exists but version row missing, etc.).",
             "content": {"application/json": {"example": _err_example("not_found")}},
         },
-        500: {
-            "description": "Database error.",
-            "content": {
-                "application/json": {"example": _err_example("db_error", detail="Database error.", context={})}
-            },
-        },
-    },
-)
-def schedules_period_view(
-    year: int = Path(..., ge=1900, le=2100),
-    month: int = Path(..., ge=1, le=12),
-    user: UserCtx = Depends(require_admin),
-) -> SchedulesPeriodViewRead:
-    try:
-        return svc.get_period_view(year, month)
-    except ValueError as e:
-        _raise(e)
-        assert False
-
-
-# -------------------------- ADMIN: working read/put ----------------------------
-
-
-@router.get(
-    "/{year}/{month}/working",
-    response_model=ScheduleWorkingRead,
-    tags=["schedules:admin"],
-    summary="Read working draft (explicit)",
-    responses={
-        200: {
-            "description": "Working buffer (or skeleton if it doesn't exist).",
-            "content": {
-                "application/json": {
-                    "examples": {
-                        "exists_false": {
-                            "summary": "No working row yet",
-                            "value": {
-                                "year": 2026,
-                                "month": 2,
-                                "exists": False,
-                                "participant_doctor_ids": [],
-                                "assignments": [],
-                                "meta": {"labels": []},
-                                "updated_at": None,
-                                "lock_version": None,
-                                "inputs_snapshot": None,
-                            },
-                        },
-                        "exists_true": {
-                            "summary": "Working exists",
-                            "value": {
-                                "year": 2026,
-                                "month": 2,
-                                "exists": True,
-                                "participant_doctor_ids": [101, 102, 103],
-                                "assignments": [{"day": 1, "shift_type": "onsite", "doctor_id": 101}],
-                                "meta": {"labels": []},
-                                "updated_at": "2026-01-28T09:30:00Z",
-                                "lock_version": 8,
-                                "inputs_snapshot": None,
-                            },
-                        },
-                    }
-                }
-            },
-        },
-        404: {"description": "Not found.", "content": {"application/json": {"example": _err_example("not_found")}}},
-        500: {
-            "description": "Database error.",
-            "content": {
-                "application/json": {"example": _err_example("db_error", detail="Database error.", context={})}
-            },
-        },
-    },
-)
-def schedules_working_read(
-    year: int = Path(..., ge=1900, le=2100),
-    month: int = Path(..., ge=1, le=12),
-    user: UserCtx = Depends(require_admin),
-) -> ScheduleWorkingRead:
-    try:
-        return svc.get_working(year, month)
-    except ValueError as e:
-        _raise(e)
-        assert False
-
-
-@router.put(
-    "/{year}/{month}/working",
-    response_model=ScheduleWorkingAck,
-    tags=["schedules:admin"],
-    summary="Autosave working (OCC via lock_version)",
-    responses={
-        200: {
-            "description": "Working saved; lock_version may be bumped.",
-            "content": {
-                "application/json": {
-                    "example": {"year": 2026, "month": 2, "updated_at": "2026-01-28T09:30:00Z", "lock_version": 8}
-                }
-            },
-        },
         409: {
-            "description": "OCC conflict (if_match_lock_version mismatched) or similar edit conflict.",
+            "description": "Snapshot required to compute diagnostics for the current draft pointer (NO FALLBACKS).",
             "content": {
                 "application/json": {
-                    "examples": {
-                        "edit_conflict": {
-                            "summary": "Edit conflict (lock_version mismatch)",
-                            "value": _err_example("edit_conflict"),
-                        },
-                        "working_requires_snapshot": {
-                            "summary": "Manual edit blocked: missing inputs_snapshot",
-                            "value": _err_example(
-                                "working_requires_snapshot",
-                                detail="Cannot save or analyze this draft. Regenerate the schedule.",
-                                context={"year": 2026, "month": 2, "operation": "save_working"},
-                            ),
-                        },
-                    }
+                    "example": _err_example(
+                        "diagnostics_requires_snapshot",
+                        detail="Cannot compute diagnostics. Regenerate the schedule.",
+                        context={"year": 2026, "month": 2, "version_id": 124},
+                    )
                 }
             },
         },
         500: {
-            "description": "Database errors (unexpected).",
+            "description": "Database error.",
             "content": {
-                "application/json": {
-                    "examples": {
-                        "db_integrity_error": {
-                            "summary": "Database integrity error",
-                            "value": _err_example("db_integrity_error", detail="Database integrity error.", context={}),
-                        },
-                        "db_error": {
-                            "summary": "Database error",
-                            "value": _err_example("db_error", detail="Database error.", context={}),
-                        },
-                    }
-                }
+                "application/json": {"example": _err_example("db_error", detail="Database error.", context={})}
             },
         },
     },
@@ -955,6 +1026,22 @@ def schedules_working_put(
     response_model=ScheduleCheckpointCreated,
     tags=["schedules:admin"],
     summary="Create draft checkpoint from working (+diagnostics)",
+    description=(
+        "Create a new immutable DRAFT checkpoint from the current WORKING schedule.\n\n"
+        "FE behavior:\n"
+        "- Call this on explicit user action (e.g. Save button).\n"
+        "- After 201, refresh UI state using the returned draft + diagnostics.\n"
+        "- If blocked by 409 diagnostics_requires_snapshot, the schedule must be regenerated (NO FALLBACKS).\n"
+    ),
+    openapi_extra={
+        "requestBody": {
+            "content": {
+                "application/json": {
+                    "examples": _OPENAPI_EXAMPLES_CHECKPOINT_REQUEST,
+                }
+            }
+        }
+    },
     responses={
         201: {
             "description": "Draft checkpoint created from working; diagnostics computed.",
@@ -974,7 +1061,17 @@ def schedules_working_put(
                                     {"day": 1, "shift_type": "onsite", "doctor_id": 101},
                                     {"day": 1, "shift_type": "oncall", "doctor_id": 102},
                                 ],
-                                "inputs_snapshot": None,
+                                "inputs_snapshot": {
+                                    "doctors": {
+                                        "101": {
+                                            "role": "specialist",
+                                            "is_head": True,
+                                            "display_name": "Jan Kowalski",
+                                            "is_active_at_snapshot": True,
+                                        }
+                                    },
+                                    "preference_version_id_by_doctor": {"101": 55},
+                                },
                                 "meta": {"labels": []},
                             },
                         },
@@ -1046,6 +1143,13 @@ def schedules_checkpoint(
     response_model=ScheduleRevertRead,
     tags=["schedules:admin"],
     summary="Draft UNDO (pointer → previous checkpoint + overwrite working)",
+    description=(
+        "Move the DRAFT pointer to the previous checkpoint (UNDO) and overwrite WORKING with that snapshot.\n\n"
+        "FE behavior:\n"
+        "- After 200, re-render the grid from working.assignments.\n"
+        "- Update undo/redo buttons from draft.can_undo / draft.can_redo.\n"
+        "- Update diagnostics panel from the returned diagnostics.\n"
+    ),
     responses={
         200: {
             "description": "Draft pointer moved to previous checkpoint; working overwritten; diagnostics returned.",
@@ -1059,7 +1163,22 @@ def schedules_checkpoint(
                             "checkpoints_count": 5,
                             "can_undo": True,
                             "can_redo": True,
-                            "payload": None,
+                            "payload": {
+                                "participant_doctor_ids": [101, 102, 103],
+                                "assignments": [{"day": 1, "shift_type": "onsite", "doctor_id": 101}],
+                                "inputs_snapshot": {
+                                    "doctors": {
+                                        "101": {
+                                            "role": "specialist",
+                                            "is_head": True,
+                                            "display_name": "Jan Kowalski",
+                                            "is_active_at_snapshot": True,
+                                        }
+                                    },
+                                    "preference_version_id_by_doctor": {"101": 55},
+                                },
+                                "meta": {"labels": ["as_generated"]},
+                            },
                         },
                         "working": {
                             "year": 2026,
@@ -1070,7 +1189,17 @@ def schedules_checkpoint(
                             "meta": {"labels": []},
                             "updated_at": "2026-01-28T09:45:00Z",
                             "lock_version": 9,
-                            "inputs_snapshot": None,
+                            "inputs_snapshot": {
+                                "doctors": {
+                                    "101": {
+                                        "role": "specialist",
+                                        "is_head": True,
+                                        "display_name": "Jan Kowalski",
+                                        "is_active_at_snapshot": True,
+                                    }
+                                },
+                                "preference_version_id_by_doctor": {"101": 55},
+                            },
                         },
                         "diagnostics": {
                             "version_id": 120,
@@ -1097,7 +1226,24 @@ def schedules_checkpoint(
         },
         409: {
             "description": "No earlier version available.",
-            "content": {"application/json": {"example": _err_example("cannot_undo")}},
+            "content": {
+                "application/json": {
+                    "examples": {
+                        "cannot_undo": {
+                            "summary": "No earlier draft checkpoint available.",
+                            "value": _err_example("cannot_undo"),
+                        },
+                        "diagnostics_requires_snapshot": {
+                            "summary": "Revert blocked: version payload has no inputs_snapshot (NO FALLBACKS).",
+                            "value": _err_example(
+                                "diagnostics_requires_snapshot",
+                                detail="Cannot compute diagnostics. Regenerate the schedule.",
+                                context={"year": 2026, "month": 2, "version_id": 120},
+                            ),
+                        },
+                    }
+                }
+            },
         },
         404: {"description": "Not found.", "content": {"application/json": {"example": _err_example("not_found")}}},
         500: {
@@ -1128,6 +1274,13 @@ def schedules_draft_undo(
     response_model=ScheduleRevertRead,
     tags=["schedules:admin"],
     summary="Draft REDO (pointer → next checkpoint + overwrite working)",
+    description=(
+        "Move the DRAFT pointer to the next checkpoint (REDO) and overwrite WORKING with that snapshot.\n\n"
+        "FE behavior:\n"
+        "- After 200, re-render the grid from working.assignments.\n"
+        "- Update undo/redo buttons from draft.can_undo / draft.can_redo.\n"
+        "- Update diagnostics panel from the returned diagnostics.\n"
+    ),
     responses={
         200: {
             "description": "Draft pointer moved to next checkpoint; working overwritten; diagnostics returned.",
@@ -1141,7 +1294,22 @@ def schedules_draft_undo(
                             "checkpoints_count": 5,
                             "can_undo": True,
                             "can_redo": True,
-                            "payload": None,
+                            "payload": {
+                                "participant_doctor_ids": [101, 102, 103],
+                                "assignments": [{"day": 1, "shift_type": "oncall", "doctor_id": 102}],
+                                "inputs_snapshot": {
+                                    "doctors": {
+                                        "101": {
+                                            "role": "specialist",
+                                            "is_head": True,
+                                            "display_name": "Jan Kowalski",
+                                            "is_active_at_snapshot": True,
+                                        }
+                                    },
+                                    "preference_version_id_by_doctor": {"101": 55},
+                                },
+                                "meta": {"labels": ["as_generated"]},
+                            },
                         },
                         "working": {
                             "year": 2026,
@@ -1152,7 +1320,17 @@ def schedules_draft_undo(
                             "meta": {"labels": []},
                             "updated_at": "2026-01-28T09:50:00Z",
                             "lock_version": 10,
-                            "inputs_snapshot": None,
+                            "inputs_snapshot": {
+                                "doctors": {
+                                    "101": {
+                                        "role": "specialist",
+                                        "is_head": True,
+                                        "display_name": "Jan Kowalski",
+                                        "is_active_at_snapshot": True,
+                                    }
+                                },
+                                "preference_version_id_by_doctor": {"101": 55},
+                            },
                         },
                         "diagnostics": {
                             "version_id": 121,
@@ -1179,7 +1357,24 @@ def schedules_draft_undo(
         },
         409: {
             "description": "No later version available.",
-            "content": {"application/json": {"example": _err_example("cannot_redo")}},
+            "content": {
+                "application/json": {
+                    "examples": {
+                        "cannot_redo": {
+                            "summary": "No later draft checkpoint available.",
+                            "value": _err_example("cannot_redo"),
+                        },
+                        "diagnostics_requires_snapshot": {
+                            "summary": "Revert blocked: version payload has no inputs_snapshot (NO FALLBACKS).",
+                            "value": _err_example(
+                                "diagnostics_requires_snapshot",
+                                detail="Cannot compute diagnostics. Regenerate the schedule.",
+                                context={"year": 2026, "month": 2, "version_id": 121},
+                            ),
+                        },
+                    }
+                }
+            },
         },
         404: {"description": "Not found.", "content": {"application/json": {"example": _err_example("not_found")}}},
         500: {
@@ -1253,7 +1448,31 @@ def schedules_draft_redo(
                                 "published_by_user_id": 1,
                                 "note": "Finalize",
                             },
-                            "payload": None,
+                            "payload": {
+                                "participant_doctor_ids": [101, 102, 103],
+                                "assignments": [
+                                    {"day": 1, "shift_type": "onsite", "doctor_id": 101},
+                                    {"day": 1, "shift_type": "oncall", "doctor_id": 102},
+                                ],
+                                "inputs_snapshot": {
+                                    "doctors": {
+                                        "101": {
+                                            "role": "specialist",
+                                            "is_head": True,
+                                            "display_name": "Jan Kowalski",
+                                            "is_active_at_snapshot": True,
+                                        },
+                                        "102": {
+                                            "role": "resident",
+                                            "is_head": False,
+                                            "display_name": "Doctor 102",
+                                            "is_active_at_snapshot": True,
+                                        },
+                                    },
+                                    "preference_version_id_by_doctor": {"101": 55, "102": 56},
+                                },
+                                "meta": {"labels": ["as_generated"], "note": "Finalize"},
+                            },
                         },
                     }
                 }
@@ -1379,6 +1598,12 @@ def schedules_publish(
     response_model=SchedulePublishedRevertRead,
     tags=["schedules:admin"],
     summary="Published rollback (pointer → previous published)",
+    description=(
+        "Move the PUBLISHED pointer to the previous published version.\n\n"
+        "FE behavior:\n"
+        "- After 200, refresh the published view (grid) from the returned published.payload.\n"
+        "- Update buttons from published.can_undo / published.can_redo.\n"
+    ),
     responses={
         200: {
             "description": "Published pointer moved to previous published version (does not touch working).",
@@ -1392,8 +1617,26 @@ def schedules_publish(
                             "publications_count": 2,
                             "can_undo": False,
                             "can_redo": True,
-                            "audit": None,
-                            "payload": None,
+                            "audit": {},
+                            "payload": {
+                                "participant_doctor_ids": [101, 102, 103],
+                                "assignments": [
+                                    {"day": 1, "shift_type": "onsite", "doctor_id": 101},
+                                    {"day": 1, "shift_type": "oncall", "doctor_id": 102},
+                                ],
+                                "inputs_snapshot": {
+                                    "doctors": {
+                                        "101": {
+                                            "role": "specialist",
+                                            "is_head": True,
+                                            "display_name": "Jan Kowalski",
+                                            "is_active_at_snapshot": True,
+                                        }
+                                    },
+                                    "preference_version_id_by_doctor": {"101": 55},
+                                },
+                                "meta": {"labels": ["as_generated"], "note": "Finalize"},
+                            },
                         },
                     }
                 }
@@ -1432,6 +1675,12 @@ def schedules_published_undo(
     response_model=SchedulePublishedRevertRead,
     tags=["schedules:admin"],
     summary="Published redo (pointer → next published)",
+    description=(
+        "Move the PUBLISHED pointer to the next published version.\n\n"
+        "FE behavior:\n"
+        "- After 200, refresh the published view from the returned published.payload.\n"
+        "- Update buttons from published.can_undo / published.can_redo.\n"
+    ),
     responses={
         200: {
             "description": "Published pointer moved to next published version (does not touch working).",
@@ -1445,8 +1694,26 @@ def schedules_published_undo(
                             "publications_count": 2,
                             "can_undo": True,
                             "can_redo": False,
-                            "audit": None,
-                            "payload": None,
+                            "audit": {},
+                            "payload": {
+                                "participant_doctor_ids": [101, 102, 103],
+                                "assignments": [
+                                    {"day": 1, "shift_type": "onsite", "doctor_id": 101},
+                                    {"day": 1, "shift_type": "oncall", "doctor_id": 102},
+                                ],
+                                "inputs_snapshot": {
+                                    "doctors": {
+                                        "101": {
+                                            "role": "specialist",
+                                            "is_head": True,
+                                            "display_name": "Jan Kowalski",
+                                            "is_active_at_snapshot": True,
+                                        }
+                                    },
+                                    "preference_version_id_by_doctor": {"101": 55},
+                                },
+                                "meta": {"labels": ["as_generated"], "note": "Finalize"},
+                            },
                         },
                     }
                 }
@@ -1517,6 +1784,13 @@ def schedules_export(
     response_model=SchedulePublishedRead,
     tags=["schedules:doctor"],
     summary="Read current PUBLISHED schedule for the period (pointer-based)",
+    description=(
+        "Doctor read endpoint for the current published schedule.\n\n"
+        "FE behavior:\n"
+        "- Render the schedule grid from published.payload.assignments.\n"
+        "- Show the admin announcement from published.payload.meta.note if present.\n"
+        "- Use this endpoint as the canonical doctor-visible schedule source.\n"
+    ),
     responses={
         200: {
             "description": "Current published schedule snapshot for the period.",
@@ -1539,7 +1813,23 @@ def schedules_export(
                                     {"day": 1, "shift_type": "onsite", "doctor_id": 101},
                                     {"day": 1, "shift_type": "oncall", "doctor_id": 102},
                                 ],
-                                "inputs_snapshot": None,
+                                "inputs_snapshot": {
+                                    "doctors": {
+                                        "101": {
+                                            "role": "specialist",
+                                            "is_head": True,
+                                            "display_name": "Jan Kowalski",
+                                            "is_active_at_snapshot": True,
+                                        },
+                                        "102": {
+                                            "role": "resident",
+                                            "is_head": False,
+                                            "display_name": "Doctor 102",
+                                            "is_active_at_snapshot": True,
+                                        },
+                                    },
+                                    "preference_version_id_by_doctor": {"101": 55, "102": 56},
+                                },
                                 "meta": {
                                     "labels": [],
                                     "note": "Happy holidays! "
