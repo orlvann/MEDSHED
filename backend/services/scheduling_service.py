@@ -703,16 +703,6 @@ def _compute_or_upsert_diagnostics(
 
 
 # ------------------------------ validation helpers -----------------------------
-def _hard_rule_violations(payload: Dict[str, Any]) -> List[Dict[str, str]]:
-    """
-    Evaluate hard (non-overridable) rule violations for a schedule payload.
-
-    Current behavior (MVP):
-    - Returns an empty list to keep publishing unblocked during development.
-    """
-    return []
-
-
 def _normalize_snapshot_payload(raw: Dict[str, Any]) -> Dict[str, Any]:
     """
     Normalize a schedule snapshot payload before persisting as an immutable version.
@@ -1025,10 +1015,13 @@ def _payload_for_clean_quality(raw_payload: Dict[str, Any]) -> Dict[str, Any]:
 
 def _extract_hard_violations_from_quality(quality_payload: Dict[str, Any]) -> List[Dict[str, Any]]:
     """
-    Extract hard (critical) violations from diagnostics payload.
+    Extract publish-blocking violations from diagnostics payload.
 
-    We treat findings with severity='critical' as publish-blocking violations.
-    Returned list is deterministic (sorted by code).
+    Business policy:
+    - Any finding with severity='critical' is a publish blocker.
+    - We do NOT filter by code prefix (coverage critical findings also block publish).
+
+    Returned list is deterministic (sorted).
     """
     details = quality_payload.get("details") or {}
     if not isinstance(details, dict):
@@ -1038,7 +1031,7 @@ def _extract_hard_violations_from_quality(quality_payload: Dict[str, Any]) -> Li
     if not isinstance(findings, list):
         return []
 
-    hard: List[Dict[str, Any]] = []
+    blockers: List[Dict[str, Any]] = []
     for f in findings:
         if not isinstance(f, dict):
             continue
@@ -1046,23 +1039,34 @@ def _extract_hard_violations_from_quality(quality_payload: Dict[str, Any]) -> Li
             continue
 
         code = str(f.get("code") or "unknown")
+        ctx = f.get("context") or {}
+        if not isinstance(ctx, dict):
+            ctx = {}
 
-        # IMPORTANT:
-        # "hard_violations" for publish-blocking should contain only hard-rule findings.
-        # Coverage gaps may be critical for UI attention, but they are NOT the "hard publish validator" list.
-        if not code.startswith("hard_"):
-            continue
+        # Some core findings do not include a message (pure dict findings).
+        message = str(f.get("message") or "")
 
-        hard.append(
-            {
-                "code": code,
-                "message": str(f.get("message") or ""),
-                "context": f.get("context") or {},
-            }
+        blockers.append({"code": code, "message": message, "context": ctx})
+
+    # Deterministic order for stable UI/tests
+    def _sort_key(x: Dict[str, Any]) -> tuple:
+        c = str(x.get("code") or "")
+        ctx = x.get("context") or {}
+        if not isinstance(ctx, dict):
+            ctx = {}
+        day = ctx.get("day")
+        shift_type = ctx.get("shift_type")
+        doctor_id = ctx.get("doctor_id")
+
+        day_i = int(day) if isinstance(day, int) or (isinstance(day, str) and day.isdigit()) else 0
+        doc_i = (
+            int(doctor_id) if isinstance(doctor_id, int) or (isinstance(doctor_id, str) and doctor_id.isdigit()) else 0
         )
+        st_s = str(shift_type or "")
+        return (c, day_i, st_s, doc_i)
 
-    hard.sort(key=lambda x: str(x.get("code", "")))
-    return hard
+    blockers.sort(key=_sort_key)
+    return blockers
 
 
 # --------------------------------- Service API --------------------------------
@@ -1641,6 +1645,22 @@ class SchedulingService:
 
             payload = _normalize_snapshot_payload(payload)
 
+            # Persist admin "announcement note" INTO the payload itself, so doctors can always
+            # see it later on GET published (no dependency on response-only audit fields).
+            #
+            # Business rule:
+            # - If note is empty/missing, we store a default "Finalize" (same as response audit).
+            meta_for_note_raw: Any = payload.get("meta")
+            meta_for_note: Dict[str, Any]
+            if isinstance(meta_for_note_raw, dict):
+                # Make a shallow copy so we always mutate a dict instance.
+                meta_for_note = dict(meta_for_note_raw)
+            else:
+                meta_for_note = {"labels": []}
+            note_value = (note or "").strip() or "Finalize"
+            meta_for_note["note"] = note_value
+            payload["meta"] = meta_for_note
+
             # NO FALLBACKS policy:
             # Publishing requires inputs_snapshot. If missing, block (do not rebuild from DB).
             if payload.get("inputs_snapshot") is None:
@@ -1668,13 +1688,6 @@ class SchedulingService:
                 generation_exceptions = list(meta_raw.get("exceptions") or [])
 
             meta = cast(Dict[str, Any], payload["meta"])
-
-            # NOTE:
-            # _hard_rule_violations is currently a stub in MVP (returns []).
-            # Do NOT overwrite diagnostics-derived violations, because that would disable publish blocking.
-            extra_hard = _hard_rule_violations(payload)
-            if extra_hard:
-                hard_violations = list(hard_violations) + list(extra_hard)
 
             if not force and hard_violations:
                 context = {
@@ -1737,7 +1750,14 @@ class SchedulingService:
 
             _prune_published(session, year, month, keep_last=RETAIN_LAST_PUBLISHED)
 
-            audit = {"published_at": now_utc(), "published_by_user_id": user_id, "note": note or "Finalize"}
+            # Response audit is still useful for admin UI, but the real source of truth for doctors
+            # is payload.meta.note (persisted above).
+            meta_for_audit: Dict[str, Any] = cast(Dict[str, Any], payload.get("meta") or {})
+            audit = {
+                "published_at": now_utc(),
+                "published_by_user_id": user_id,
+                "note": meta_for_audit.get("note"),
+            }
 
             publications_total = _published_total(session, year, month)
             has_prev, has_next = _published_neighbors(session, year, month, vid)

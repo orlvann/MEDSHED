@@ -138,38 +138,19 @@ def _raise(e: ValueError) -> None:
 
 # ------------------------------- ADMIN: generate -------------------------------
 
-_OPENAPI_EXAMPLES_GENERATE_REQUEST = {
-    "basic": {
-        "summary": "Generate with ignore_slots + head commitment resolutions",
-        "value": {
-            "year": 2026,
-            "month": 2,
-            "participant_doctor_ids": [101, 102, 103],
-            "ignore_slots": [
-                {"day": 3, "shift_type": "onsite"},
-                {"day": 7, "shift_type": "oncall"},
-            ],
-            "justification": "Holiday month staffing shortage; proceeding with known gaps.",
-            "head_commitment_resolutions": [
-                {"day": 5, "shift_type": "onsite", "chosen_head_id": 101},
-            ],
-        },
-    }
-}
-
 _OPENAPI_EXAMPLES_PUBLISH_REQUEST = {
     "normal": {
         "summary": "Publish (no force)",
-        "value": {"force": False, "note": "Finalize"},
+        "value": {"force": False, "note": "Finalize", "accepted_exceptions": []},
     },
     "force_with_action_justification": {
-        "summary": "Force publish with accepted exceptions (action-level justification)",
+        "summary": "Force publish (accept ALL blockers) + audit justification",
         "value": {
             "force": True,
-            "note": "Emergency publish",
+            "note": "Emergency publish (sorry, but we have staffing shortage this month guys...)",
             "accepted_exceptions": [
                 {
-                    "code": issues.COVERAGE_MISSING_REQUIRED_SLOT,
+                    "code": _issue_code(issues.COVERAGE_MISSING_REQUIRED_SLOT),
                     "justification": "Emergency staffing shortage; publishing despite known gaps.",
                 }
             ],
@@ -183,16 +164,20 @@ _OPENAPI_EXAMPLES_PUBLISH_REQUEST = {
     status_code=status.HTTP_201_CREATED,
     response_model=ScheduleGenerateCreated,
     tags=["schedules:admin"],
-    summary="Generate schedule: writes working + creates first draft checkpoint",
-    openapi_extra={
-        "requestBody": {
-            "content": {
-                "application/json": {
-                    "examples": _OPENAPI_EXAMPLES_GENERATE_REQUEST,
-                }
-            }
-        }
-    },
+    summary="Generate schedule (creates working draft, first checkpoint and diagnostics)",
+    description=(
+        "Generate a monthly duty schedule for the selected participants.\n\n"
+        "Flow:\n"
+        "1) Build input data from DB + request.\n"
+        "2) Gatekeeper: feasibility precheck (blocks with 409 generate_requires_ignore).\n"
+        "3) Gatekeeper: head commitment conflicts (blocks with 409 generate_requires_head_resolution).\n"
+        "4) Run solver (blocks with 409 generate_infeasible if solver status != OK).\n"
+        "5) On success: save working payload, create first draft checkpoint, compute diagnostics.\n\n"
+        "Important:\n"
+        "- ignore_slots is slot-only (day + shift_type). There is no ignore_days.\n"
+        "  To ignore a whole day, send BOTH slots: onsite + oncall for that day.\n"
+        "- head_commitment_resolutions are applied only for this generation run (not persisted to DB preferences)."
+    ),
     responses={
         201: {
             "description": "Working saved + first draft checkpoint created + diagnostics returned.",
@@ -214,34 +199,37 @@ _OPENAPI_EXAMPLES_PUBLISH_REQUEST = {
                             "meta": {
                                 "labels": ["as_generated"],
                                 "solver_status": "OK",
-                                # IMPORTANT (policy):
-                                # - meta.exceptions are audit hints only (do NOT affect diagnostics metrics).
-                                # - We support TWO shapes of exceptions:
-                                #   1) slot-level markers: MUST include day + shift_type
-                                #      (used to mark missing required slots as was_ignored=True)
-                                #   2) action-level justification rows: may omit day/shift_type
-                                #      (explains WHY admin decided to proceed; optional)
                                 "exceptions": [
                                     {
                                         "kind": "generation_ignore",
-                                        "code": issues.COVERAGE_IGNORED_SLOT,
+                                        "code": "coverage_ignored_slot",
                                         "day": 3,
                                         "shift_type": "onsite",
+                                        "accepted_at": "2026-01-28T09:15:00Z",
+                                        "accepted_by_user_id": 1,
                                     },
-                                    # Optional action-level justification row (no day/shift_type).
-                                    # This is intended to be stored when admin provides
-                                    # justification in the request.
                                     {
                                         "kind": "generation_ignore",
-                                        "code": issues.COVERAGE_IGNORED_SLOT,
-                                        "justification": "Holiday month staffing shortage; proceeding with known gaps.",
+                                        "code": "generation_ignore",
+                                        "justification": "Accept coverage gaps for these slots "
+                                        "due to known staffing shortage.",
+                                        "accepted_at": "2026-01-28T09:15:00Z",
+                                        "accepted_by_user_id": 1,
+                                    },
+                                    {
+                                        "kind": "head_commitment_resolution",
+                                        "code": "head_commitment_resolution",
+                                        "day": 5,
+                                        "shift_type": "onsite",
+                                        "chosen_head_id": 101,
+                                        "accepted_at": "2026-01-28T09:15:00Z",
+                                        "accepted_by_user_id": 1,
                                     },
                                 ],
                             },
                             "updated_at": "2026-01-28T09:15:00Z",
                             "lock_version": 2,
                             "inputs_snapshot": {
-                                # NOTE: JSON object keys are strings; InputsSnapshotRead will coerce to int.
                                 "doctors": {
                                     "101": {
                                         "role": "specialist",
@@ -299,7 +287,37 @@ _OPENAPI_EXAMPLES_PUBLISH_REQUEST = {
                                     },
                                     "preference_version_id_by_doctor": {"101": 55, "102": 56, "103": None},
                                 },
-                                "meta": {"labels": ["as_generated"], "solver_status": "OK", "exceptions": []},
+                                "meta": {
+                                    "labels": ["as_generated"],
+                                    "solver_status": "OK",
+                                    "exceptions": [
+                                        {
+                                            "kind": "generation_ignore",
+                                            "code": "coverage_ignored_slot",
+                                            "day": 3,
+                                            "shift_type": "onsite",
+                                            "accepted_at": "2026-01-28T09:15:00Z",
+                                            "accepted_by_user_id": 1,
+                                        },
+                                        {
+                                            "kind": "generation_ignore",
+                                            "code": "generation_ignore",
+                                            "justification": "Accept coverage gaps for these slots "
+                                            "due to known staffing shortage.",
+                                            "accepted_at": "2026-01-28T09:15:00Z",
+                                            "accepted_by_user_id": 1,
+                                        },
+                                        {
+                                            "kind": "head_commitment_resolution",
+                                            "code": "head_commitment_resolution",
+                                            "day": 5,
+                                            "shift_type": "onsite",
+                                            "chosen_head_id": 101,
+                                            "accepted_at": "2026-01-28T09:15:00Z",
+                                            "accepted_by_user_id": 1,
+                                        },
+                                    ],
+                                },
                             },
                         },
                         "diagnostics": {
@@ -325,83 +343,91 @@ _OPENAPI_EXAMPLES_PUBLISH_REQUEST = {
                 }
             },
         },
-        409: {
-            "description": "Generation blocked or infeasible.",
+        400: {
+            "description": "Invalid request payload (e.g., invalid head commitment resolution).",
             "content": {
                 "application/json": {
                     "examples": {
-                        "requires_ignore_slots": {
-                            "summary": "Feasibility pre-check: requires ignore_slots",
-                            "value": _err_example(
-                                "generate_requires_ignore",
-                                detail="Generation requires ignore_slots to proceed.",
-                                context={
+                        "invalid_head_commitment_resolution": {
+                            "summary": "Chosen head is not a valid head/participant for that conflict slot.",
+                            "value": {
+                                "detail": "Invalid head commitment resolution payload.",
+                                "code": "invalid_head_commitment_resolution",
+                                "context": {},
+                            },
+                        }
+                    }
+                }
+            },
+        },
+        409: {
+            "description": "Generation blocked (precheck) or infeasible (solver).",
+            "content": {
+                "application/json": {
+                    "examples": {
+                        "generate_requires_ignore": {
+                            "summary": "Feasibility precheck found issues; "
+                            "FE must retry with ignore_slots or change inputs.",
+                            "value": {
+                                "detail": "Not enough availability to generate. Choose days to ignore and try again.",
+                                "code": "generate_requires_ignore",
+                                "context": {
                                     "year": 2026,
                                     "month": 2,
-                                    "issues_total": 2,
+                                    "issues_total": 7,
                                     "issues_truncated": False,
                                     "issues_summary": [
-                                        {"code": issues.NO_SPECIALIST, "count": 1},
-                                        {"code": issues.NO_ONSITE_CANDIDATE, "count": 1},
+                                        {"code": "no_oncall_candidate", "count": 3},
+                                        {"code": "no_onsite_candidate", "count": 4},
                                     ],
                                     "issues_sample": [
-                                        {
-                                            "day": 3,
-                                            "code": issues.NO_SPECIALIST,
-                                            "message": "No specialist is available on this day.",
-                                        },
-                                        {
-                                            "day": 3,
-                                            "code": issues.NO_ONSITE_CANDIDATE,
-                                            "message": "No doctor is available for onsite duty on this day.",
-                                        },
+                                        {"day": 3, "code": "no_onsite_candidate", "message": "no_onsite_candidate"},
+                                        {"day": 3, "code": "no_oncall_candidate", "message": "no_oncall_candidate"},
                                     ],
                                 },
-                            ),
+                            },
                         },
-                        "requires_head_resolution": {
-                            "summary": "Head commitments conflict: admin must resolve",
-                            "value": _err_example(
-                                "generate_requires_head_resolution",
-                                detail="Generation requires choosing a head for conflicting commitment slots.",
-                                context={
+                        "generate_requires_head_resolution": {
+                            "summary": "Multiple heads want the same slot; "
+                            "FE must collect head_commitment_resolutions and retry.",
+                            "value": {
+                                "detail": "Two heads chose the same duty. Pick who gets it and try again.",
+                                "code": "generate_requires_head_resolution",
+                                "context": {
                                     "year": 2026,
                                     "month": 2,
                                     "head_commitment_conflicts": [
                                         {
-                                            "day": 3,
+                                            "day": 5,
                                             "shift_type": "onsite",
                                             "head_candidates": [
                                                 {"doctor_id": 101, "display_name": "Jan Kowalski"},
-                                                {"doctor_id": 110, "display_name": "Doctor 110"},
+                                                {"doctor_id": 102, "display_name": "Anna Nowak"},
                                             ],
                                         }
                                     ],
                                 },
-                            ),
+                            },
                         },
-                        "infeasible": {
-                            "summary": "Solver infeasible / not OK",
-                            "value": _err_example(
-                                "generate_infeasible",
-                                detail="Generation failed: solver could not find a feasible solution.",
-                                context={
+                        "generate_infeasible": {
+                            "summary": "Solver ran but could not find a feasible solution (status != OK).",
+                            "value": {
+                                "detail": "Generation failed: solver could not find a feasible solution. "
+                                "Change inputs (availability / limits) and try again.",
+                                "code": "generate_infeasible",
+                                "context": {
                                     "year": 2026,
                                     "month": 2,
                                     "solver_status": "INFEASIBLE",
-                                    "issues_total": 1,
+                                    "issues_total": 2,
                                     "issues_truncated": False,
-                                    "issues_summary": [{"code": issues.CP_INFEASIBLE, "count": 1}],
+                                    "issues_summary": [{"code": "no_specialist", "count": 2}],
                                     "issues_sample": [
-                                        {
-                                            "day": 0,
-                                            "code": issues.CP_INFEASIBLE,
-                                            "message": "No schedule satisfies all hard constraints for this month"
-                                            "(CP-SAT infeasible).",
-                                        }
+                                        {"day": 12, "code": "no_specialist", "message": "no_specialist"},
+                                        {"day": 13, "code": "no_specialist", "message": "no_specialist"},
                                     ],
                                 },
-                            ),
+                            },
                         },
                     }
                 }
@@ -412,14 +438,14 @@ _OPENAPI_EXAMPLES_PUBLISH_REQUEST = {
             "content": {
                 "application/json": {
                     "examples": {
-                        "db_integrity_error": {
-                            "summary": "Database integrity error",
-                            "value": _err_example("db_integrity_error", detail="Database integrity error.", context={}),
-                        },
                         "db_error": {
-                            "summary": "Database error",
-                            "value": _err_example("db_error", detail="Database error.", context={}),
-                        },
+                            "summary": "Generic server-side DB failure.",
+                            "value": {
+                                "detail": "Server error. Try again.",
+                                "code": "db_error",
+                                "context": {},
+                            },
+                        }
                     }
                 }
             },
@@ -585,6 +611,31 @@ def generate_schedule(
         404: {
             "description": "Not found (no working row or pointer/version missing).",
             "content": {"application/json": {"example": _err_example("not_found")}},
+        },
+        409: {
+            "description": "Snapshot is required (NO FALLBACKS policy).",
+            "content": {
+                "application/json": {
+                    "examples": {
+                        "working_requires_snapshot": {
+                            "summary": "Working diagnostics blocked: missing inputs_snapshot",
+                            "value": _err_example(
+                                "working_requires_snapshot",
+                                detail="Cannot save or analyze this draft. Regenerate the schedule.",
+                                context={"year": 2026, "month": 2, "operation": "get_diagnostics_working"},
+                            ),
+                        },
+                        "diagnostics_requires_snapshot": {
+                            "summary": "Version diagnostics blocked: missing inputs_snapshot",
+                            "value": _err_example(
+                                "diagnostics_requires_snapshot",
+                                detail="Cannot compute diagnostics. Regenerate the schedule.",
+                                context={"year": 2026, "month": 2, "version_id": 123},
+                            ),
+                        },
+                    }
+                }
+            },
         },
         500: {
             "description": "Database error.",
@@ -837,7 +888,24 @@ def schedules_working_read(
         },
         409: {
             "description": "OCC conflict (if_match_lock_version mismatched) or similar edit conflict.",
-            "content": {"application/json": {"example": _err_example("edit_conflict")}},
+            "content": {
+                "application/json": {
+                    "examples": {
+                        "edit_conflict": {
+                            "summary": "Edit conflict (lock_version mismatch)",
+                            "value": _err_example("edit_conflict"),
+                        },
+                        "working_requires_snapshot": {
+                            "summary": "Manual edit blocked: missing inputs_snapshot",
+                            "value": _err_example(
+                                "working_requires_snapshot",
+                                detail="Cannot save or analyze this draft. Regenerate the schedule.",
+                                context={"year": 2026, "month": 2, "operation": "save_working"},
+                            ),
+                        },
+                    }
+                }
+            },
         },
         500: {
             "description": "Database errors (unexpected).",
@@ -936,6 +1004,18 @@ def schedules_working_put(
         404: {
             "description": "Not found (e.g., working missing).",
             "content": {"application/json": {"example": _err_example("not_found")}},
+        },
+        409: {
+            "description": "Snapshot is required to compute diagnostics for the checkpoint.",
+            "content": {
+                "application/json": {
+                    "example": _err_example(
+                        "diagnostics_requires_snapshot",
+                        detail="Cannot compute diagnostics. Regenerate the schedule.",
+                        context={"year": 2026, "month": 2, "version_id": 124},
+                    )
+                }
+            },
         },
         500: {
             "description": "Database error.",
@@ -1133,7 +1213,19 @@ def schedules_draft_redo(
     status_code=status.HTTP_201_CREATED,
     response_model=SchedulePublishCreated,
     tags=["schedules:admin"],
-    summary="Publish from working (hard-rule guard; force supported)",
+    summary="Publish from working (blocked by critical diagnostics; force supported)",
+    description=(
+        "Create a new PUBLISHED snapshot for {year, month} from the current WORKING schedule.\n\n"
+        "Publishing is protected by critical blockers (hard-rule violations):\n"
+        "- If force=false and diagnostics contain ANY severity='critical' finding -> blocked with 409.\n"
+        "- If force=true -> publish proceeds, and FE should send accepted_exceptions built from ALL blocker codes\n"
+        "  returned by the 409 response (bulk accept).\n\n"
+        "Notes:\n"
+        "- 'note' is an admin announcement stored into the published payload (payload.meta.note) so doctors can\n"
+        "  read it later via GET /{year}/{month}/published.\n"
+        "- accepted_exceptions[].justification is audit-only history for force publish (NOT shown to doctors).\n"
+        "- Rest findings do NOT block publish (rest is not a hard rule).\n"
+    ),
     openapi_extra={
         "requestBody": {
             "content": {
@@ -1168,50 +1260,81 @@ def schedules_draft_redo(
             },
         },
         409: {
-            "description": "Publishing blocked by hard-rule violations (unless force=True).",
+            "description": "Publishing blocked by critical diagnostics findings (unless force=True).",
             "content": {
                 "application/json": {
-                    "example": _err_example(
-                        "publish_blocked_by_hard_rules",
-                        detail="Publishing blocked: hard rule violations detected.",
-                        context={
-                            "year": 2026,
-                            "month": 2,
-                            "hard_violations": [
-                                {
-                                    "code": issues.COVERAGE_MISSING_REQUIRED_SLOT,
-                                    "message": "Required coverage slot is missing.",
-                                    "context": {"day": 10, "shift_type": "oncall", "was_ignored": False},
-                                }
-                            ],
-                            "diagnostics_summary": {
-                                "coverage_missing_required_slots": 1,
-                                "hard_issues_count": 1,
-                                "rest_violations": 0,
-                                "fairness_index": 0.95,
-                                "preference_fulfillment_pct": 82.0,
-                            },
-                            # NOTE:
-                            # - Generation exceptions still contain COVERAGE_IGNORED_SLOT markers.
-                            # - They are NOT diagnostics findings; they are decision/run metadata.
-                            "generation_exceptions": [
-                                {
-                                    "kind": "generation_ignore",
-                                    "code": issues.COVERAGE_IGNORED_SLOT,
-                                    "day": 2,
-                                    "shift_type": "onsite",
-                                },
-                                # Optional action-level justification row (no day/shift_type).
-                                # Stored if admin provided justification during generation.
-                                {
-                                    "kind": "generation_ignore",
-                                    "code": issues.COVERAGE_IGNORED_SLOT,
-                                    "justification": "Ignored some slots to allow generation; "
-                                    "duty shortage documented.",
-                                },
-                            ],
+                    "examples": {
+                        "publish_requires_snapshot": {
+                            "summary": "Publish blocked: missing inputs_snapshot",
+                            "value": _err_example(
+                                "publish_requires_snapshot",
+                                detail="Cannot publish. Regenerate the schedule first.",
+                                context={"year": 2026, "month": 2},
+                            ),
                         },
-                    )
+                        "publish_blocked_by_hard_rules": {
+                            "summary": "Publish blocked (force=False). "
+                            "FE may retry with force=True (accept ALL blockers).",
+                            "value": _err_example(
+                                "publish_blocked_by_hard_rules",
+                                detail="Publishing blocked: hard rule violations detected. "
+                                "Fix them or use Force Publish.",
+                                context={
+                                    "year": 2026,
+                                    "month": 2,
+                                    "hard_violations": [
+                                        {
+                                            "code": _issue_code(issues.COVERAGE_MISSING_REQUIRED_SLOT),
+                                            "message": "",
+                                            "context": {"day": 10, "shift_type": "oncall", "was_ignored": False},
+                                        },
+                                        {
+                                            "code": _issue_code(issues.COVERAGE_NO_SPECIALIST_DAY),
+                                            "message": "",
+                                            "context": {
+                                                "day": 12,
+                                                "day_empty": True,
+                                                "assigned_doctor_ids": [],
+                                                "was_ignored_day": False,
+                                                "was_ignored_onsite": False,
+                                                "was_ignored_oncall": False,
+                                            },
+                                        },
+                                        {
+                                            "code": _issue_code(issues.HARD_DOUBLE_SHIFT_SAME_DAY),
+                                            "message": "",
+                                            "context": {"doctor_id": 101, "day": 15},
+                                        },
+                                    ],
+                                    "diagnostics_summary": {
+                                        "coverage_missing_required_slots": 1,
+                                        "hard_issues_count": 1,
+                                        "rest_violations": 0,
+                                        "fairness_index": 0.95,
+                                        "preference_fulfillment_pct": 82.0,
+                                    },
+                                    # NOTE:
+                                    # - generation_exceptions are run/audit metadata (not diagnostics findings).
+                                    # - slot markers use coverage_ignored_slot and include day+shift_type
+                                    # - action rows use "generation_ignore" and may omit day/shift_type
+                                    "generation_exceptions": [
+                                        {
+                                            "kind": "generation_ignore",
+                                            "code": _issue_code(issues.COVERAGE_IGNORED_SLOT),
+                                            "day": 2,
+                                            "shift_type": "onsite",
+                                        },
+                                        {
+                                            "kind": "generation_ignore",
+                                            "code": "generation_ignore",
+                                            "justification": "Ignored some slots to allow generation; "
+                                            "duty shortage documented.",
+                                        },
+                                    ],
+                                },
+                            ),
+                        },
+                    }
                 }
             },
         },
@@ -1417,7 +1540,11 @@ def schedules_export(
                                     {"day": 1, "shift_type": "oncall", "doctor_id": 102},
                                 ],
                                 "inputs_snapshot": None,
-                                "meta": {"labels": []},
+                                "meta": {
+                                    "labels": [],
+                                    "note": "Happy holidays! "
+                                    "Please double-check your shifts and contact admin if needed.",
+                                },
                             },
                         },
                     }
