@@ -36,7 +36,7 @@ from tests.solver._helpers import assignments_to_map, check_hard_invariants, pre
 # Mark all tests in this file as integration-level:
 # - they run the real OR-Tools solver through engine.build_and_solve()
 # - they do not touch DB / API (so still fast), but it's not a pure unit test
-pytestmark = [pytest.mark.integration, pytest.mark.solver]
+pytestmark = [pytest.mark.solver]
 
 
 def _snapshot(model, solution) -> str:
