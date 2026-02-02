@@ -2,45 +2,43 @@
 # -----------------------------------------------------------------------------
 # Diagnostics DTO — kept small and stable (leaf module, no back-imports).
 #
-# MVP contract shape (example):
-# {
-#   "version_id": "schv_2026_02_0002",
-#   "computed_at": "2026-02-01T11:06:00Z",
-#   "summary": {
-#     "penalty_total": 38,
-#     "understaffed_days": 0,
-#     "rest_violations": 0,
-#     "fairness_index": 0.94,
-#     "preference_fulfillment_pct": 88.0
-#   },
-#   "details": { ... }  // optional
-# }
-#
 # Why this file is a "leaf":
 # - It does NOT import schedule schemas (or other app schemas), so others can
 #   safely import DiagnosticsRead without creating circular imports.
+#
+# NOTE (contract):
+# - The API returns a stable typed `details` structure (findings/per_doctor/rankings/audit/components).
+# - We may still compute extra debug fields in core, and we keep them inside the typed model
+#   as a free dict (components) to avoid losing useful diagnostics.
 # -----------------------------------------------------------------------------
 
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, Field
 
+# ------------------------------ Summary (KPIs) ------------------------------
 
-class DiagnosticsSummary(BaseModel):
-    """Compact KPIs for a single schedule version (draft checkpoint or published).
-    Defaults are safe so the server can always return a minimal payload.
+
+class DiagnosticsSummaryRead(BaseModel):
+    """Compact KPIs for a single schedule version (working/draft/published).
+
+    Backward compatibility:
+    - Older payloads may still send legacy fields.
+    - New contract uses `coverage_missing_required_slots` and `hard_issues_count`.
+    - All fields have safe defaults so the server can always return a minimal payload.
     """
 
-    penalty_total: int = Field(
+    # NEW (stable contract)
+    coverage_missing_required_slots: int = Field(
         0,
-        description="Total optimization penalty (lower is better). Aggregated objective or proxy.",
+        description="Number of missing required coverage slots (counted per slot, not per day).",
     )
-    understaffed_days: int = Field(
+    hard_issues_count: int = Field(
         0,
-        description="Number of days with missing required assignments.",
+        description="Count of hard rule violations (critical issues). Used to block publish when force=false.",
     )
     rest_violations: int = Field(
         0,
@@ -55,123 +53,243 @@ class DiagnosticsSummary(BaseModel):
         description="Satisfied preferences in percent (0..100).",
     )
 
+    # OLD (deprecated) fields intentionally removed from the public DTO.
+    # They may exist in legacy internal payloads, but they are not part of the API contract.
 
-def _make_diag_summary() -> "DiagnosticsSummary":
+
+def _make_diag_summary() -> "DiagnosticsSummaryRead":
     # Provide explicit defaults to satisfy static type checker (Pylance),
     # even though Pydantic would accept a no-arg constructor.
-    return DiagnosticsSummary(
-        penalty_total=0,
-        understaffed_days=0,
+    return DiagnosticsSummaryRead(
+        coverage_missing_required_slots=0,
+        hard_issues_count=0,
         rest_violations=0,
         fairness_index=1.0,
         preference_fulfillment_pct=100.0,
     )
 
 
-class DiagnosticsRead(BaseModel):
+# Backward-compatible name (some code may still import DiagnosticsSummary).
+# Keep it as a real class name for easier runtime/debugging.
+class DiagnosticsSummary(DiagnosticsSummaryRead):
+    """Backward-compatible alias for older imports."""
+
+
+# ------------------------------ Findings (stable codes for FE) ------------------------------
+
+
+DiagnosticsSeverity = Literal["critical", "warning", "info"]
+
+
+class DiagnosticsFindingRead(BaseModel):
+    code: str = Field(..., description="Stable finding code for FE mapping (code -> message).")
+    severity: DiagnosticsSeverity = Field(..., description="Finding severity level.")
+    context: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Small, flexible context payload for the finding (FE may use it for details).",
+    )
+
+
+# ------------------------------ Per-doctor breakdown ------------------------------
+
+
+class DoctorDiagnosticsRead(BaseModel):
+    doctor_id: int
+    display_name: str
+
+    assigned_onsite_total: int = 0
+    assigned_oncall_total: int = 0
+
+    rest_violations: int = 0
+
+    preference_fulfillment_pct: float = Field(
+        100.0,
+        description="Satisfied preferences for this doctor in percent (0..100).",
+    )
+    preferred_days_missed: int = Field(
+        0,
+        description="How many preferred concrete days were missed (soft objective signal).",
+    )
+
+    # Optional score if rankings need it; keep optional to avoid forcing it everywhere.
+    score: Optional[float] = Field(
+        default=None,
+        description=(
+            "Optional per-doctor score used by rankings (higher=better or lower=better depending on convention)."
+        ),
+    )
+
+
+class MyDoctorDiagnosticsRead(BaseModel):
     """
-    Diagnostics payload bound to a concrete schedule version.
-    Returned by: GET /api/v1/schedules/{y}/{m}/diagnostics?target=draft|published
+    Doctor-facing diagnostics for the current doctor (published schedule only).
+
+    Privacy:
+    - returns ONLY the requesting doctor's per-doctor stats
+    - does NOT expose findings, rankings, or other doctors' data
     """
 
-    version_id: str = Field(
-        ...,
-        description="Version identifier (draft checkpoint or published) the diagnostics refer to.",
+    version_id: int = Field(..., description="Published schedule version id.")
+    computed_at: datetime = Field(..., description="UTC timestamp when diagnostics were computed/refreshed.")
+    doctor: DoctorDiagnosticsRead = Field(..., description="Per-doctor KPIs for the current doctor.")
+
+
+class DoctorRankingItemRead(BaseModel):
+    doctor_id: int
+    score: float
+    reasons_codes: list[str] = Field(
+        default_factory=list,
+        description="Stable reason codes explaining why the doctor is in this ranking list.",
+    )
+
+
+class RankingsRead(BaseModel):
+    top_unhappy: list[DoctorRankingItemRead] = Field(default_factory=list)
+    top_happy: list[DoctorRankingItemRead] = Field(default_factory=list)
+
+
+# ------------------------------ Details envelope ------------------------------
+
+
+AuditKind = Literal[
+    "generation_ignore",
+    "publish_acceptance",
+    "head_commitment_resolution",
+]
+
+
+class DiagnosticsAuditItemRead(BaseModel):
+    """
+    One audit row extracted from payload.meta.exceptions.
+
+    What "audit" means here:
+    - It is a history of human decisions and accepted exceptions.
+    - This includes BOTH:
+      * generation-time ignore decisions (slot-level markers),
+      * force-publish acceptances (with justification/accepted_at/by),
+      * head commitment resolutions (when multiple heads wanted the same slot).
+    """
+
+    # Helps FE decide where/how to render the row (tabs/sections/icons),
+    # without needing to infer it from the code string.
+    kind: Optional[AuditKind] = Field(
+        default=None,
+        description=(
+            "Audit category for UI grouping. "
+            "Examples: 'generation_ignore', 'publish_acceptance', 'head_commitment_resolution'."
+        ),
+    )
+
+    code: str = Field(..., description="Stable exception code accepted by user/admin.")
+
+    # Slot context (used for slot-level exceptions like coverage_ignored_slot).
+    # Optional to keep DTO flexible for different exception types.
+    day: Optional[int] = Field(
+        default=None,
+        description="Day number (1..31) if this audit entry refers to a concrete day (e.g., ignored slot).",
+    )
+    shift_type: Optional[str] = Field(
+        default=None,
+        description="Shift type string (e.g., 'onsite'/'oncall') if this audit entry refers to a slot.",
+    )
+
+    # Human acceptance context (mostly used for publish-time acceptances).
+    justification: Optional[str] = Field(
+        default=None,
+        description="Human justification provided when accepting the exception (if any).",
+    )
+    accepted_by_user_id: Optional[int] = Field(
+        default=None,
+        description="User id who accepted the exception (if known).",
+    )
+    accepted_at: Optional[datetime] = Field(
+        default=None,
+        description="UTC timestamp when the exception was accepted (if known).",
+    )
+
+
+class DiagnosticsDetailsRead(BaseModel):
+    findings: list[DiagnosticsFindingRead] = Field(default_factory=list)
+    per_doctor: list[DoctorDiagnosticsRead] = Field(default_factory=list)
+    rankings: RankingsRead = Field(default_factory=RankingsRead)
+
+    # Decision history (generation ignores, publish acceptances, etc.).
+    # It is extracted from payload.meta.exceptions to keep FE compatible:
+    # - payload.meta.exceptions stays unchanged,
+    # - diagnostics returns this separate projection for UI display.
+    audit: list[DiagnosticsAuditItemRead] = Field(
+        default_factory=list,
+        description="Audit decision history extracted from payload.meta.exceptions.",
+    )
+
+    # Optional debug breakdown from core (safe free-form dict).
+    # Example keys depend on the core diagnostics implementation (scoring components, penalties, etc.).
+    components: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Optional debug breakdown of scoring components (free-form JSON).",
+    )
+
+    # This field is only used when diagnostics target="working".
+    # It helps the UI detect whether diagnostics were computed for the latest
+    # working buffer version without needing an extra /working call.
+    #
+    # NOTE:
+    # - For draft/published it should be None.
+    # - For working it should be an int (OCC lock version).
+    working_lock_version: Optional[int] = Field(
+        default=None,
+        description="OCC lock version used only for target=working diagnostics.",
+    )
+
+
+# ------------------------------ Root payload ------------------------------
+
+
+class DiagnosticsRead(BaseModel):
+    """
+    Diagnostics payload bound to a schedule target.
+
+    Returned by:
+    - GET /api/v1/schedules/{y}/{m}/diagnostics?target=working|draft|published
+    - Embedded in Period View and Generate/Checkpoint responses.
+    """
+
+    version_id: Optional[int] = Field(
+        default=None,
+        description=(
+            "Version identifier the diagnostics refer to. "
+            "For target='draft' or 'published' it is an integer. "
+            "For target='working' it is None."
+        ),
     )
     computed_at: datetime = Field(
         ...,
         description="UTC timestamp when diagnostics were computed/refreshed (server-side UTC).",
     )
+
     # NOTE: default_factory must be a zero-arg callable for Pydantic v2 & type checkers.
-    summary: DiagnosticsSummary = Field(
+    summary: DiagnosticsSummaryRead = Field(
         default_factory=_make_diag_summary,
         description="Compact KPIs for quick UI consumption.",
     )
 
-    # Keep 'details' flexible in MVP. Post-MVP we may replace with a strong type (see below).
-    details: Optional[dict[str, Any]] = Field(
+    details: Optional[DiagnosticsDetailsRead] = Field(
         default=None,
-        description="Optional rich breakdown (JSON). Absent in MVP or when not computed.",
+        description="Typed diagnostics breakdown for UI (findings, per-doctor, rankings, audit, components).",
     )
 
 
 __all__ = [
+    "DiagnosticsSeverity",
+    "DiagnosticsFindingRead",
+    "DoctorDiagnosticsRead",
+    "DoctorRankingItemRead",
+    "RankingsRead",
+    "DiagnosticsSummaryRead",
+    "DiagnosticsDetailsRead",
     "DiagnosticsSummary",
     "DiagnosticsRead",
+    "DiagnosticsAuditItemRead",
+    "AuditKind",
+    "MyDoctorDiagnosticsRead",
 ]
-
-
-# -----------------------------------------------------------------------------
-# POST-MVP (commented ideas to grow the contract safely)
-# -----------------------------------------------------------------------------
-#
-# 1) Strongly-typed `details` instead of a free Dict:
-#
-# from pydantic import BaseModel, Field
-#
-# class RestRuleFlag(BaseModel):
-#     day: int  # 1..31
-#     doctor_id: int
-#     type: str  # e.g., "insufficient_rest" | "back_to_back_weekend"
-#
-# class CoverageReport(BaseModel):
-#     understaffed_days: list[int] = []
-#     overstaffed_days: list[int] = []
-#     resident_only_days: list[int] = []
-#     rest_rule_flags: list[RestRuleFlag] = []
-#     hotspots: list[int] = []
-#
-# class PerDoctorStats(BaseModel):
-#     doctor_id: int
-#     duties_total: int
-#     oncall_total: int
-#     weekends_worked: int
-#     unavailable_violations: int
-#     preferences_fulfilled: int
-#     duty_requested: int | None = None
-#     oncall_requested: int | None = None
-#
-# class PreferencesBreakdown(BaseModel):
-#     fulfilled: int
-#     unfulfilled: int
-#     per_doctor: list[PerDoctorStats] = []
-#
-# class WorkloadDistributionEntry(BaseModel):
-#     doctor_id: int
-#     duties: int
-#     oncall: int
-#
-# class FairnessBreakdown(BaseModel):
-#     specialists_avg_duties: float
-#     residents_avg_duties: float
-#     distribution: list[WorkloadDistributionEntry] = []
-#
-# class MissedPair(BaseModel):
-#     day: int
-#     pair: list[int]  # [docA, docB]
-#
-# class PartneringBreakdown(BaseModel):
-#     preferred_pairs_respected: int
-#     missed_pairs: list[MissedPair] = []
-#
-# class DiagnosticsVisuals(BaseModel):
-#     daily_cost_heatmap: list[int] = []
-#     violations_timeline: list[dict[str, int]] = []  # {"day": 12, "count": 2}
-#
-# class Suggestion(BaseModel):
-#     # e.g., "Swap Dr. 5 and Dr. 7 on day 12 to reduce penalty by 3"
-#     message: str
-#     impact_penalty_delta: float | int | None = None
-#     affected_days: list[int] = []
-#     affected_doctors: list[int] = []
-#
-# class DiagnosticsDetails(BaseModel):
-#     coverage: CoverageReport
-#     preferences: PreferencesBreakdown
-#     fairness: FairnessBreakdown
-#     partnering: PartneringBreakdown
-#     visuals: DiagnosticsVisuals | None = None
-#     suggestions: list[Suggestion] | None = None
-#
-# # And then replace in DiagnosticsRead (breaking change, plan a minor API bump):
-# # details: Optional[DiagnosticsDetails] = None

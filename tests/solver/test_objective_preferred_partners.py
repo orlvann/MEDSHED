@@ -80,7 +80,6 @@ def test_partner_bonus_pushes_partners_to_work_same_days(make_hard_model, make_d
         doctors=doctors,
         preferences=prefs,
         participant_doctor_ids=set(doctors.keys()),
-        ignore_days=set(),
         ignore_slots=set(),
         allowed_slots=allowed_slots,
     )
@@ -143,7 +142,6 @@ def test_partner_bonus_increases_or_keeps_together_count(make_hard_model, make_d
         doctors=doctors,
         preferences=prefs_with,
         participant_doctor_ids=set(doctors.keys()),
-        ignore_days=set(),
         ignore_slots=set(),
         allowed_slots=allowed_slots,
     )
@@ -161,7 +159,6 @@ def test_partner_bonus_increases_or_keeps_together_count(make_hard_model, make_d
         doctors=doctors,
         preferences=prefs_without,
         participant_doctor_ids=set(doctors.keys()),
-        ignore_days=set(),
         ignore_slots=set(),
         allowed_slots=allowed_slots,
     )

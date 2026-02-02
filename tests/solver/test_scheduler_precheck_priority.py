@@ -62,7 +62,6 @@ def test_scheduler_stops_on_feasibility_precheck_before_head_commitments(make_pr
         doctors=doctors,
         preferences=preferences,
         participant_doctor_ids=set(doctors.keys()),
-        ignore_days=set(),
         ignore_slots=set(),  # onsite is required
     )
 

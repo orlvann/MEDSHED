@@ -1,4 +1,5 @@
 # backend/models/schemas/schedule.py
+
 # Data Transfer Objects for the Schedules module (framework-agnostic).
 # These models define the public API shapes used by /api/v1/schedules* endpoints.
 #
@@ -17,11 +18,12 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Dict, List, Literal, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, Field, field_validator
 
 from backend.models.common_enums import (
+    DoctorRole,  # "specialist" | "resident"
     PeriodStatus,  # "past" | "current" | "future"
     ScheduleStatus,  # "draft" | "published"
     ShiftType,  # "onsite" | "oncall"
@@ -35,10 +37,57 @@ from .dto_common import (
     DayInt,  # 1..31 (validated)
     MonthInt,  # canonical 1..12 month
     YearInt,  # canonical 1900..2100 year (zgodnie z dto_common)
-    normalize_days,  # helper for dedup/sort/validation of day lists
 )
 
+
 # ------------------------------ Core small blocks ------------------------------
+def _normalize_meta_labels(v: Any, *, allow_none: bool) -> Any:
+    """
+    Normalize meta to guarantee meta["labels"] is always a list (when meta exists).
+
+    Why:
+    - FE + services should not need "if labels is None" checks everywhere.
+    - Backward compatibility: old payloads might have labels missing or malformed.
+
+    Rules:
+    - If allow_none=True and v is None -> return None (caller wants to preserve None).
+    - If allow_none=False and v is None -> return {"labels": []}.
+    - If v is not a dict -> return v (let Pydantic raise a clear type error).
+    - Ensure out["labels"] is a list:
+      * None -> []
+      * list -> as-is
+      * tuple/set -> list(...)
+      * str -> [str]
+      * any other -> []
+    """
+    if v is None:
+        return None if allow_none else {"labels": []}
+
+    # If someone sent wrong type, keep it so Pydantic can show a good error.
+    if not isinstance(v, dict):
+        return v
+
+    out = dict(v)  # copy: do not mutate caller's dict
+    labels = out.get("labels", [])
+
+    if labels is None:
+        out["labels"] = []
+        return out
+
+    if isinstance(labels, list):
+        out["labels"] = labels
+        return out
+
+    if isinstance(labels, (tuple, set)):
+        out["labels"] = list(labels)
+        return out
+
+    if isinstance(labels, str):
+        out["labels"] = [labels]
+        return out
+
+    out["labels"] = []
+    return out
 
 
 class Assignment(BaseModel):
@@ -55,13 +104,75 @@ class Assignment(BaseModel):
     doctor_id: int
 
 
+class DoctorSnapshotRead(BaseModel):
+    """Frozen doctor inputs used for schedule creation and later diagnostics/publish validation.
+
+    This must NOT depend on the live Doctor table because doctor data can change over time.
+    """
+
+    role: DoctorRole
+    is_head: bool
+    display_name: str
+    is_active_at_snapshot: bool
+
+
+class InputsSnapshotRead(BaseModel):
+    """Frozen inputs used to compute schedule and diagnostics.
+
+    Notes:
+    - JSON object keys are always strings, so we accept "123" and coerce to 123.
+    - In Python code we want dict[int, ...] for clarity and type safety.
+    """
+
+    doctors: Dict[int, DoctorSnapshotRead] = Field(default_factory=dict)
+    preference_version_id_by_doctor: Dict[int, Optional[int]] = Field(default_factory=dict)
+
+    @field_validator("doctors", mode="before")
+    @classmethod
+    def _coerce_doctors_keys_to_int(cls, v):
+        # Accept JSON keys like "123" and coerce them to int keys.
+        if v is None:
+            return {}
+        if isinstance(v, dict):
+            return {int(k): val for k, val in v.items()}
+        return v
+
+    @field_validator("preference_version_id_by_doctor", mode="before")
+    @classmethod
+    def _coerce_pref_keys_to_int(cls, v):
+        # Accept JSON keys like "123" and coerce them to int keys.
+        if v is None:
+            return {}
+        if isinstance(v, dict):
+            return {int(k): val for k, val in v.items()}
+        return v
+
+
 class SchedulePayload(BaseModel):
     """Versioned snapshot payload (used for draft checkpoints & published versions)."""
 
     participant_doctor_ids: List[int] = Field(default_factory=list)
     assignments: List[Assignment] = Field(default_factory=list)
-    # meta.labels must exist; meta.exceptions is optional, untyped metadata for now
-    meta: Dict = Field(default_factory=lambda: {"labels": []})
+
+    # IMPORTANT:
+    # - Optional for backward compatibility (older DB versions have no snapshot yet).
+    # - New versions should include it, but backfill will be done in later steps.
+    inputs_snapshot: Optional[InputsSnapshotRead] = Field(
+        default=None,
+        description="Frozen inputs used to create the schedule (doctors + preference version ids).",
+    )
+
+    # meta.labels must exist; meta.exceptions is optional, untyped metadata for now.
+    # We keep it untyped here on purpose for backward compatibility:
+    # - older payloads may have different exception shapes,
+    # - diagnostics projects "audit" into diagnostics.details.audit[].
+    meta: dict[str, Any] = Field(default_factory=lambda: {"labels": []})
+
+    @field_validator("meta", mode="before")
+    @classmethod
+    def _ensure_meta_labels_is_list(cls, v):
+        # SchedulePayload.meta must always exist -> allow_none=False
+        return _normalize_meta_labels(v, allow_none=False)
 
 
 # ------------------------------ Working draft (GET/PUT) ------------------------------
@@ -83,9 +194,21 @@ class ScheduleWorkingRead(BaseModel):
     exists: bool = True
     participant_doctor_ids: List[int] = Field(default_factory=list)
     assignments: List[Assignment] = Field(default_factory=list)
-    meta: Dict = Field(default_factory=lambda: {"labels": []})
+    meta: dict[str, Any] = Field(default_factory=lambda: {"labels": []})
     updated_at: Optional[datetime] = None
     lock_version: Optional[int] = None
+
+    # Keep the same snapshot available on working (deterministic diagnostics & publish validation).
+    inputs_snapshot: Optional[InputsSnapshotRead] = Field(
+        default=None,
+        description="Frozen inputs used to create the schedule (doctors + preference version ids).",
+    )
+
+    @field_validator("meta", mode="before")
+    @classmethod
+    def _ensure_working_meta_labels_is_list(cls, v):
+        # Working read meta must always exist -> allow_none=False
+        return _normalize_meta_labels(v, allow_none=False)
 
 
 class ScheduleWorkingPut(BaseModel):
@@ -102,6 +225,12 @@ class ScheduleWorkingPut(BaseModel):
 
     # MVP: not enforced yet, but present so FE can start echoing it.
     if_match_lock_version: Optional[int] = None
+
+    @field_validator("meta", mode="before")
+    @classmethod
+    def _normalize_put_meta_labels_if_present(cls, v):
+        # In PUT meta is optional: if None, keep None -> allow_none=True
+        return _normalize_meta_labels(v, allow_none=True)
 
 
 class ScheduleWorkingAck(BaseModel):
@@ -124,7 +253,7 @@ class ScheduleWorkingAck(BaseModel):
 class ScheduleDraftView(BaseModel):
     """Draft pointer block used in Period View and checkpoint responses."""
 
-    version_id: Optional[str] = None
+    version_id: Optional[int] = None
     checkpoints_count: int = 0
     can_undo: bool = False
     can_redo: bool = False
@@ -134,7 +263,7 @@ class ScheduleDraftView(BaseModel):
 class SchedulePublishedView(BaseModel):
     """Published pointer block used in Period View and publish responses."""
 
-    version_id: Optional[str] = None
+    version_id: Optional[int] = None
     publications_count: int = 0
     can_undo: bool = False
     can_redo: bool = False
@@ -184,20 +313,130 @@ class IgnoreSlot(BaseModel):
     shift_type: ShiftType
 
 
+class HeadCommitmentResolution(BaseModel):
+    """
+    Admin's manual resolution for a head commitment conflict.
+
+    Meaning:
+    - For a conflicting slot (day + shift_type), admin selects which head keeps this commitment.
+    - Service will remove this day from other heads' preferred_*_days for the same shift type
+      (only for the purpose of this generation run).
+    """
+
+    day: DayInt
+    shift_type: ShiftType
+    chosen_head_id: int
+
+
 class ScheduleGenerateRequest(BaseModel):
     """POST /api/v1/schedules/generate"""
+
+    # OpenAPI examples live here (schemas-level), so routers can stay thin.
+    # Keep examples aligned with business policy:
+    # - ignore_slots: slot-only (no ignore_days)
+    # - head_commitment_resolutions: slot-only (no per-slot justification)
+    model_config = {
+        "json_schema_extra": {
+            "examples": [
+                {
+                    "year": 2026,
+                    "month": 2,
+                    "participant_doctor_ids": [101, 102, 103],
+                    "ignore_slots": [
+                        {"day": 3, "shift_type": "onsite"},
+                        {"day": 7, "shift_type": "oncall"},
+                    ],
+                    "justification": "Accept coverage gaps for these slots due to known staffing shortage.",
+                    "head_commitment_resolutions": [{"day": 5, "shift_type": "onsite", "chosen_head_id": 101}],
+                }
+            ]
+        }
+    }
 
     year: YearInt
     month: MonthInt
     participant_doctor_ids: List[int] = Field(default_factory=list)
-    ignore_days: List[DayInt] = Field(default_factory=list)
     ignore_slots: List[IgnoreSlot] = Field(default_factory=list)
+    justification: Optional[str] = None
 
-    @field_validator("ignore_days", mode="before")
+    # Optional: provided only when FE resolves "multiple heads want same slot" conflicts.
+    head_commitment_resolutions: List[HeadCommitmentResolution] = Field(
+        default_factory=list,
+        description=(
+            "Manual conflict resolutions for head commitments. "
+            "For each conflicting (day, shift_type) slot, choose which head keeps the commitment."
+        ),
+        examples=[
+            [
+                {"day": 5, "shift_type": "onsite", "chosen_head_id": 101},
+                {"day": 12, "shift_type": "oncall", "chosen_head_id": 102},
+            ]
+        ],
+    )
+
+    @field_validator("head_commitment_resolutions", mode="before")
     @classmethod
-    def _dedupe_days(cls, v):
-        # Normalize: unique, sorted, and within 1..31; raises ValueError otherwise.
-        return normalize_days(v)
+    def _normalize_head_commitment_resolutions(cls, v):
+        """
+        Normalize resolutions deterministically:
+        - accept None as empty list,
+        - keep last resolution for the same (day, shift_type),
+        - sort by (day, shift_type.value, chosen_head_id).
+
+        IMPORTANT:
+        - if any required field is missing -> return raw v so Pydantic can raise a clear error.
+        """
+        if v is None:
+            return []
+        if not isinstance(v, list):
+            return v
+
+        # Keep the LAST resolution for a given (day, shift_type) (deterministic).
+        dedup: Dict[tuple[int, str], Dict[str, Any]] = {}
+
+        for item in v:
+            if isinstance(item, dict):
+                day_raw = item.get("day")
+                st = item.get("shift_type")
+                chosen_raw = item.get("chosen_head_id")
+                if day_raw is None or st is None or chosen_raw is None:
+                    return v
+
+                day = int(day_raw)
+                st_val = str(getattr(st, "value", st))
+                dedup[(day, st_val)] = {
+                    "day": day,
+                    "shift_type": st_val,
+                    "chosen_head_id": int(chosen_raw),
+                }
+                continue
+
+            # Object-like input (e.g., Pydantic model instance)
+            day_raw = getattr(item, "day", None)
+            st = getattr(item, "shift_type", None)
+            chosen_raw = getattr(item, "chosen_head_id", None)
+            if day_raw is None or st is None or chosen_raw is None:
+                return v
+
+            day = int(day_raw)
+            st_val = str(getattr(st, "value", st))
+            dedup[(day, st_val)] = {
+                "day": day,
+                "shift_type": st_val,
+                "chosen_head_id": int(chosen_raw),
+            }
+
+        out = list(dedup.values())
+
+        # Sort deterministically.
+        out.sort(
+            key=lambda x: (
+                x["day"],
+                str(x["shift_type"]),
+                x["chosen_head_id"],
+            )
+        )
+        return out
 
 
 class ScheduleGenerateCreated(BaseModel):
@@ -253,11 +492,33 @@ class AcceptedException(BaseModel):
     """User-acknowledged exception to a hard rule when forcing publish."""
 
     code: str
-    justification: str
+    # Policy: justification is action-level (NOT per slot) and may be omitted.
+    justification: Optional[str] = None
 
 
 class SchedulePublishRequest(BaseModel):
     """POST /api/v1/schedules/{year}/{month}/publish"""
+
+    # OpenAPI examples live here (schemas-level), so routers can stay thin.
+    # Keep examples aligned with business policy:
+    # - accepted_exceptions are action-level (no day/shift_type fields)
+    model_config = {
+        "json_schema_extra": {
+            "examples": [
+                {"force": False, "note": "Looks good."},
+                {
+                    "force": True,
+                    "note": "Force publish despite known hard rule breaks.",
+                    "accepted_exceptions": [
+                        {
+                            "code": "hard_rules_violated",
+                            "justification": "Emergency staffing shortage; publishing for operational use.",
+                        }
+                    ],
+                },
+            ]
+        }
+    }
 
     force: bool = False
     note: Optional[str] = None

@@ -96,7 +96,6 @@ def test_solver_prefers_lower_rest_penalty_solution(make_hard_model, make_doctor
         doctors=doctors,
         preferences=prefs,
         participant_doctor_ids=set(doctors.keys()),
-        ignore_days=set(),
         ignore_slots=set(),
         allowed_slots=allowed_slots,
     )
@@ -371,7 +370,8 @@ def test_objective_builder_is_defensive_when_x_missing_in_inactive_days(
     doctors = make_doctors(num_specialists=1, num_residents=1, include_head=False, start_id=1)
     prefs = make_preferences(doctors=doctors)
 
-    ignore_days = {2}
+    # Ignoring a whole day is represented by ignoring BOTH slots.
+    ignore_slots = {(2, ShiftType.onsite), (2, ShiftType.oncall)}
 
     # Only day 1 has allowed slots; day 2 is ignored and has no x vars.
     allowed_slots = {
@@ -386,8 +386,7 @@ def test_objective_builder_is_defensive_when_x_missing_in_inactive_days(
         doctors=doctors,
         preferences=prefs,
         participant_doctor_ids=set(doctors.keys()),
-        ignore_days=ignore_days,
-        ignore_slots=set(),
+        ignore_slots=ignore_slots,
         active_days=[1],
         allowed_slots=allowed_slots,
     )
@@ -423,7 +422,6 @@ def test_objective_builder_returns_zero_var_when_participants_empty(
         doctors=doctors,
         preferences=prefs,
         participant_doctor_ids=set(),  # the key edge-case
-        ignore_days=set(),
         ignore_slots=set(),
         allowed_slots={
             (1, ShiftType.onsite): [1],
@@ -444,7 +442,6 @@ def test_objective_builder_returns_zero_var_when_participants_empty(
         doctors=dict(model.doctors),
         preferences=dict(model.preferences),
         participant_doctor_ids=set(model.participant_doctor_ids),
-        ignore_days=set(model.ignore_days),
         ignore_slots=set(model.ignore_slots),
     )
 

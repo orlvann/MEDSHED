@@ -77,7 +77,6 @@ def test_infeasible_when_required_slot_has_no_candidates(make_hard_model, make_d
         doctors=doctors,
         preferences=prefs,
         participant_doctor_ids=set(doctors.keys()),
-        ignore_days=set(),
         ignore_slots=set(),
         allowed_slots=allowed_slots,
     )
@@ -113,7 +112,6 @@ def test_infeasible_when_no_specialist_can_cover_day(make_hard_model, make_docto
         doctors=doctors,
         preferences=prefs,
         participant_doctor_ids=set(doctors.keys()),
-        ignore_days=set(),
         ignore_slots=set(),
         allowed_slots=allowed_slots,
     )
@@ -148,7 +146,6 @@ def test_ok_produces_full_coverage_for_required_shifts(make_hard_model, make_doc
         doctors=doctors,
         preferences=prefs,
         participant_doctor_ids=set(doctors.keys()),
-        ignore_days=set(),
         ignore_slots=set(),
         # allowed_slots default would work too, but we keep it explicit and tiny:
         allowed_slots={
@@ -204,7 +201,6 @@ def test_no_doctor_has_both_shifts_on_same_day(make_hard_model, make_preferences
         doctors=doctors,
         preferences=prefs,
         participant_doctor_ids=set(doctors.keys()),
-        ignore_days=set(),
         ignore_slots=set(),
         allowed_slots={
             (1, ShiftType.onsite): [1],
@@ -264,7 +260,6 @@ def test_ignored_shift_is_not_assigned(make_hard_model, make_doctors, make_prefe
         doctors=doctors,
         preferences=prefs,
         participant_doctor_ids=set(doctors.keys()),
-        ignore_days=set(),
         ignore_slots=ignore_slots,
         allowed_slots=allowed_slots,
     )

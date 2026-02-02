@@ -114,7 +114,6 @@ def test_solver_prefers_more_even_distribution_within_specialists_and_residents(
         doctors=doctors,
         preferences=prefs,
         participant_doctor_ids=set(doctors.keys()),
-        ignore_days=set(),
         ignore_slots=set(),
         allowed_slots=allowed_slots,
     )
@@ -212,7 +211,6 @@ def test_solver_prefers_split_when_targets_are_zero_due_to_quadratic_penalty(
         doctors=doctors,
         preferences=prefs,
         participant_doctor_ids=set(doctors.keys()),
-        ignore_days=set(),
         ignore_slots=set(),
         allowed_slots=allowed_slots,
     )
@@ -289,7 +287,6 @@ def test_solver_respects_different_targets_and_does_not_force_equal_split(
         doctors=doctors,
         preferences=prefs,
         participant_doctor_ids=set(doctors.keys()),
-        ignore_days=set(),
         ignore_slots=set(),
         allowed_slots=allowed_slots,
     )

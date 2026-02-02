@@ -100,7 +100,6 @@ def test_top_k_difficulty_seeds_only_10_hardest_slots(make_hard_model, make_prob
         doctors=doctors,
         preferences=preferences,
         participant_doctor_ids=set(doctors.keys()),
-        ignore_days=set(),
         ignore_slots=set(),
         allowed_slots=allowed_slots,
     )
@@ -113,7 +112,6 @@ def test_top_k_difficulty_seeds_only_10_hardest_slots(make_hard_model, make_prob
         doctors=doctors,
         preferences=preferences,
         participant_doctor_ids=set(doctors.keys()),
-        ignore_days=set(),
         ignore_slots=set(),
     )
 

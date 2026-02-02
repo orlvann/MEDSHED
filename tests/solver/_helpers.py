@@ -166,30 +166,30 @@ def check_hard_invariants(model: HardModel, solution: SolverSolution) -> list[st
                     f"coverage_wrong_count: day={day} shift={shift.value} expected=1 got={len(got)} doctor_ids={got}"
                 )
 
-    # 2) Specialist requirement (project policy):
+        # 2) Specialist requirement (project policy):
     # We enforce "at least one specialist" ONLY when BOTH shifts are required.
-    onsite_required = (day, ShiftType.onsite) not in model.ignore_slots
-    oncall_required = (day, ShiftType.oncall) not in model.ignore_slots
+    for day in sorted(model.active_days):
+        onsite_required = (day, ShiftType.onsite) not in model.ignore_slots
+        oncall_required = (day, ShiftType.oncall) not in model.ignore_slots
 
-    if onsite_required and oncall_required:
-        required_shifts: list[ShiftType] = [ShiftType.onsite, ShiftType.oncall]
+        # Only enforce when both shifts are required for that day.
+        if not (onsite_required and oncall_required):
+            continue
 
         required_doctors: list[int] = []
-        for s in required_shifts:
-            required_doctors.extend(per_slot_doctors.get((day, s), []))
+        required_doctors.extend(per_slot_doctors.get((day, ShiftType.onsite), []))
+        required_doctors.extend(per_slot_doctors.get((day, ShiftType.oncall), []))
 
-        # If coverage is missing, required_doctors may be empty or have wrong size.
-        # We still try to produce a meaningful specialist error.
         has_specialist = False
         for doc_id in required_doctors:
-            doc = model.doctors.get(doc_id)
+            doc = model.doctors.get(int(doc_id))
             if doc and doc.role == DoctorRole.specialist:
                 has_specialist = True
                 break
 
         if not has_specialist:
             errors.append(
-                f"no_specialist_on_day: day={day} required_shifts={[s.value for s in required_shifts]} "
+                f"no_specialist_on_day: day={day} required_shifts={['onsite', 'oncall']} "
                 f"assigned_doctor_ids={required_doctors}"
             )
 
@@ -197,9 +197,11 @@ def check_hard_invariants(model: HardModel, solution: SolverSolution) -> list[st
     for (day, doc_id), shifts in sorted(per_day_per_doctor_shifts.items(), key=lambda x: (x[0][0], x[0][1])):
         if day not in active_days_set:
             continue  # already flagged above, but avoid noise
+
         if ShiftType.onsite in shifts and ShiftType.oncall in shifts:
+            shifts_sorted = sorted(list(shifts), key=lambda s: s.value)
             errors.append(
-                f"double_shift_same_day: day={day} doctor_id={doc_id} shifts={[s.value for s in sorted(shifts)]}"
+                f"double_shift_same_day: day={day} doctor_id={doc_id} shifts={[s.value for s in shifts_sorted]}"
             )
 
     # 4) Assignments only for required shifts already covered above by "ignored slot" check,

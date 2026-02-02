@@ -20,7 +20,7 @@ from typing import Any, Dict, Iterable, List, Tuple
 def normalize_assignments(assignments: Iterable[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """
     Normalize assignments list:
-    - Input item shape (validated by DTOs): {"day": int, "shift_type": "on_duty"|"on_call", "doctor_id": int}
+    - Input item shape (validated by DTOs): {"day": int, "shift_type": "onsite"|"oncall", "doctor_id": int}
     - Output: sorted + deduped list with the same item shape.
 
     Notes:
@@ -36,12 +36,36 @@ def normalize_assignments(assignments: Iterable[Dict[str, Any]]) -> List[Dict[st
             return str(getattr(x, "value"))
         return str(x)
 
+    def _require_int(item: Dict[str, Any], key: str) -> int:
+        """
+        Read item[key] safely and convert it to int.
+
+        Why:
+        - dict.get(...) can return None, and Pylance then complains about int(None).
+        - We want a clear error if the payload is missing required keys.
+        """
+        raw = item.get(key)
+        if raw is None:
+            raise ValueError(f"Missing '{key}' in assignment item: {item}")
+        return int(raw)
+
+    def _require_value(item: Dict[str, Any], key: str) -> Any:
+        """
+        Read item[key] safely (required field).
+        Raises a clear error when missing.
+        """
+        raw = item.get(key)
+        if raw is None:
+            raise ValueError(f"Missing '{key}' in assignment item: {item}")
+        return raw
+
     # Stable sort ensures consistent serialization (useful for exports and testing).
     items: List[Dict[str, Any]] = []
     for a in assignments or []:
-        day = int(a["day"])
-        doctor_id = int(a["doctor_id"])
-        shift = _as_value_shift(a["shift_type"])  # "on_call" | "on_duty"
+        day = _require_int(a, "day")
+        doctor_id = _require_int(a, "doctor_id")
+        shift_raw = _require_value(a, "shift_type")
+        shift = _as_value_shift(shift_raw)  # "on_call" | "on_duty"
         items.append({"day": day, "shift_type": shift, "doctor_id": doctor_id})
 
     for a in sorted(items, key=lambda x: (x["day"], x["shift_type"], x["doctor_id"])):
@@ -49,6 +73,7 @@ def normalize_assignments(assignments: Iterable[Dict[str, Any]]) -> List[Dict[st
         if key not in seen:
             seen.add(key)
             out.append({"day": key[0], "shift_type": key[1], "doctor_id": key[2]})
+
     return out
 
 
@@ -56,13 +81,54 @@ def normalize_meta(meta: Dict[str, Any] | None) -> Dict[str, Any]:
     """
     Normalize meta dict:
     - Ensure "labels" is a list of unique, sorted strings.
-    - Ensure "exceptions" is a list (keep as-is if already a list).
+    - Ensure "exceptions" is a list of dict items.
+
+    IMPORTANT:
+    - We do NOT "whitelist" or trim exception dict fields.
+      Exceptions are audit payloads and may contain different shapes over time
+      (slot-level markers, action-level rows, publish acceptances, etc.).
+    - We only enforce the container shape:
+      exceptions = List[Dict[str, Any]]
     """
-    m = dict(meta or {})
-    labels = m.get("labels") or []
-    # strings only, unique + sorted
-    labels = [str(x) for x in labels]
-    m["labels"] = sorted(set(labels))
-    if not isinstance(m.get("exceptions"), list):
+    # meta must always be a dict; if it's a wrong type, reset to a safe base shape.
+    if not isinstance(meta, dict):
+        m: Dict[str, Any] = {"labels": []}
+    else:
+        # Make a shallow copy so we don't mutate the caller's dict by accident.
+        m = dict(meta)
+
+    # ---- labels: ALWAYS a list[str] ----
+    # Defensive: if labels is a string/dict/None/etc., treat it as empty list.
+    labels_raw = m.get("labels", [])
+    if not isinstance(labels_raw, list):
+        labels_raw = []
+
+    labels_clean: List[str] = []
+    for x in labels_raw:
+        # Convert everything to string, strip whitespace, skip empty labels.
+        s = str(x).strip()
+        if s:
+            labels_clean.append(s)
+
+    # Unique + sorted to keep payload deterministic.
+    m["labels"] = sorted(set(labels_clean))
+
+    # ---- exceptions: ALWAYS a list ----
+    # If exceptions has a wrong type (corrupted payload), reset to [] to avoid crashes.
+    # We do NOT trim fields of valid exception dicts.
+
+    exc_raw = m.get("exceptions")
+    if not isinstance(exc_raw, list):
         m["exceptions"] = []
+    else:
+        # Keep ONLY dict items (do not trim keys).
+        # Drop invalid items instead of trying to coerce them,
+        # because consumers assume a dict-like shape.
+        exc_clean: List[Dict[str, Any]] = []
+        for it in exc_raw:
+            if isinstance(it, dict):
+                # Shallow copy to avoid accidental mutations by callers.
+                exc_clean.append(dict(it))
+        m["exceptions"] = exc_clean
+
     return m

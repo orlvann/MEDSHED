@@ -293,7 +293,6 @@ Key guarantees:
 - If a slot is ignored, it is NOT required, so we must NOT emit:
   - `no_onsite_candidate` for an ignored onsite slot
   - `no_oncall_candidate` for an ignored oncall slot
-- `single_candidate_for_both_roles` is emitted only when BOTH shifts are required.
 - `forced_double_shift_same_day` is emitted only when BOTH shifts are required and the only onsite candidate
   and the only oncall candidate is the same single doctor (identity-based detection).
 - Policy: `no_specialist` is emitted only when BOTH shifts are required.

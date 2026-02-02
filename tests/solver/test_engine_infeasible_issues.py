@@ -10,9 +10,8 @@ Goal:
 We test deterministic reasons derived from HardModel:
 - missing candidates for a required slot -> no_*_candidate
 - missing specialist among required shifts -> no_specialist
-- forced double shift on the same day (only one candidate can cover both required roles)
+- forced double shift on the same day (only one doctor can cover both required roles)
   -> forced_double_shift_same_day
-  (single_candidate_for_both_roles may be omitted to avoid redundancy)
 - fallback cp_infeasible when no per-day reasons can be derived
 """
 
@@ -49,8 +48,10 @@ def _issues_by_day(solution) -> dict[int, list[str]]:
 
 def test_engine_infeasible_includes_no_onsite_candidate_issue(make_hard_model, make_preferences):
     """
-    If a required slot has no candidates, CP becomes infeasible.
-    Engine should return INFEASIBLE and include NO_ONSITE_CANDIDATE for that day.
+    If onsite and oncall are both required, but there is only ONE doctor available for BOTH,
+    coverage forces the same doctor into both shifts, but "double shift same day" is forbidden.
+
+    Engine should include FORCED_DOUBLE_SHIFT_SAME_DAY for that day.
     """
     doctors = {
         1: DoctorInput(id=1, role=DoctorRole.specialist, is_head=False),
@@ -63,7 +64,6 @@ def test_engine_infeasible_includes_no_onsite_candidate_issue(make_hard_model, m
         doctors=doctors,
         preferences=preferences,
         participant_doctor_ids=set(doctors.keys()),
-        ignore_days=set(),
         ignore_slots=set(),
         # Keep the key with an empty list on purpose: this is a "required but impossible" slot.
         allowed_slots={
@@ -97,7 +97,6 @@ def test_engine_infeasible_includes_no_specialist_issue(make_hard_model, make_pr
         doctors=doctors,
         preferences=preferences,
         participant_doctor_ids=set(doctors.keys()),
-        ignore_days=set(),
         ignore_slots=set(),
         allowed_slots={
             (1, ShiftType.onsite): [1, 2],
@@ -122,9 +121,6 @@ def test_engine_infeasible_includes_forced_double_shift_issue(make_hard_model, m
 
     Engine should include FORCED_DOUBLE_SHIFT_SAME_DAY for that day.
 
-    Note:
-    - SINGLE_CANDIDATE_FOR_BOTH_ROLES is a more general description of the same situation.
-      Engine may omit it to avoid redundant messages.
     """
     doctors = {
         1: DoctorInput(id=1, role=DoctorRole.specialist, is_head=False),
@@ -136,7 +132,6 @@ def test_engine_infeasible_includes_forced_double_shift_issue(make_hard_model, m
         doctors=doctors,
         preferences=preferences,
         participant_doctor_ids=set(doctors.keys()),
-        ignore_days=set(),
         ignore_slots=set(),
         allowed_slots={
             (1, ShiftType.onsite): [1],
@@ -151,9 +146,8 @@ def test_engine_infeasible_includes_forced_double_shift_issue(make_hard_model, m
 
     assert FORCED_DOUBLE_SHIFT_SAME_DAY in by_day.get(1, [])
 
-    # Optional / may be omitted as redundant:
-    # If engine includes it, cool; if not, this test should still pass.
-    # So we do NOT assert on SINGLE_CANDIDATE_FOR_BOTH_ROLES here.
+    # NOTE:
+    # We intentionally do not assert any extra "redundant" codes here.
     assert NO_SPECIALIST not in by_day.get(1, [])
 
 
@@ -175,7 +169,6 @@ def test_engine_derive_fallback_cp_infeasible_when_no_day_reasons(make_hard_mode
         doctors=doctors,
         preferences=preferences,
         participant_doctor_ids=set(doctors.keys()),
-        ignore_days=set(),
         ignore_slots=set(),
         allowed_slots={
             (1, ShiftType.onsite): [1, 2],
@@ -209,7 +202,6 @@ def test_engine_infeasible_always_includes_at_least_one_issue(make_hard_model, m
         doctors=doctors,
         preferences=preferences,
         participant_doctor_ids=set(doctors.keys()),
-        ignore_days=set(),
         ignore_slots=set(),
         allowed_slots={
             (1, ShiftType.onsite): [],
@@ -242,7 +234,6 @@ def test_engine_empty_does_not_include_issues(make_hard_model, make_preferences)
         doctors=doctors,
         preferences=preferences,
         participant_doctor_ids=set(doctors.keys()),
-        ignore_days=set(),
         ignore_slots=set(),
         allowed_slots={},  # <- key part
     )
@@ -284,7 +275,6 @@ def test_engine_not_solved_does_not_include_issues(monkeypatch, make_hard_model,
         doctors=doctors,
         preferences=preferences,
         participant_doctor_ids=set(doctors.keys()),
-        ignore_days=set(),
         ignore_slots=set(),
         allowed_slots={
             (1, ShiftType.onsite): [1, 2],

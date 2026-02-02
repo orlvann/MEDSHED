@@ -85,7 +85,12 @@ class ProblemData:
     Services are responsible for:
     - building this structure from ORM / PreferenceWorking / DoctorRead,
     - filtering to participant_doctor_ids,
-    - respecting ignore_days / ignore_slots from ScheduleGenerateRequest.
+    - respecting ignore_slots from ScheduleGenerateRequest.
+
+    Scheduling scope policy:
+    - We ignore scheduling ONLY by slot: ignore_slots contains (day, shift_type).
+    - A day is considered "not scheduled at all" only if BOTH slots are ignored:
+      (day, onsite) and (day, oncall) are present in ignore_slots.
     """
 
     year: int
@@ -107,7 +112,6 @@ class ProblemData:
     participant_doctor_ids: Set[int]
 
     # Slots the solver must completely ignore (Admin wants to keep them empty)
-    ignore_days: Set[int] = field(default_factory=set)
     ignore_slots: Set[Tuple[int, ShiftType]] = field(default_factory=set)
 
 
@@ -139,8 +143,8 @@ class HardModel:
 
     Note:
     - days: full calendar days for this month (1..num_days),
-    - active_days: only days that are inside solver scope (days minus ignore_days,
-      and minus days where both slots are ignored).
+    - active_days: only days that are inside solver scope:
+      exclude a day only if BOTH slots are ignored via ignore_slots.
     """
 
     # Base fields (copied from ProblemData so the core does not need to reach outside HardModel)
@@ -153,7 +157,6 @@ class HardModel:
     doctors: Dict[int, DoctorInput]
     preferences: Dict[int, PreferencesInput]
     participant_doctor_ids: Set[int]
-    ignore_days: Set[int] = field(default_factory=set)
     ignore_slots: Set[Tuple[int, ShiftType]] = field(default_factory=set)
 
     # HardModel-specific:

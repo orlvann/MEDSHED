@@ -27,14 +27,10 @@ from backend.models.common_enums import (
 from .auth import LoginRequest, SetPasswordRequest, SetPasswordResponse, TokenResponse
 
 # Availability
-from .availability import (
-    AvailabilityDayRead,
-    AvailabilityDaySummary,
-    AvailabilityOverviewRead,
-)
+from .availability import AvailabilityDayRead, AvailabilityDaySummary, AvailabilityIgnoreSlot, AvailabilityOverviewRead
 
 # Diagnostics
-from .diagnostics import DiagnosticsRead, DiagnosticsSummary
+from .diagnostics import DiagnosticsRead, DiagnosticsSummary, MyDoctorDiagnosticsRead
 
 # Doctors
 from .doctor import DoctorCreate, DoctorList, DoctorMini, DoctorPut, DoctorRead
@@ -156,8 +152,10 @@ __all__ = [
     # Diagnostics
     "DiagnosticsRead",
     "DiagnosticsSummary",
+    "MyDoctorDiagnosticsRead",
     # Export (query DTO; response is a file stream)
     "ScheduleExportQuery",
     # Availability
     "AvailabilityDaySummary",
+    "AvailabilityIgnoreSlot",
 ]

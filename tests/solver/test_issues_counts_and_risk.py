@@ -1,11 +1,16 @@
-# test_issues_counts_and_risk.py
+# tests/solver/test_issues_counts_and_risk.py
 """
-Unit tests for shared issues + availability risk helpers.
+Unit tests for shared issues + availability risk helpers (current policy).
 
-Goals:
-- NO_CANDIDATES_FOR_DAY should NOT be duplicated with NO_ONSITE/NO_ONCALL
-  when both totals are zero (single clear reason).
-- classify_availability_risk_with_reasons should be stable and not crash.
+Current policy (see backend/core/issues.py):
+- We do NOT use counts-only feasibility classification (identity is required).
+- We do NOT have NO_CANDIDATES_FOR_DAY anymore.
+  If a day has no candidates, we report per-slot gaps:
+    - NO_ONSITE_CANDIDATE
+    - NO_ONCALL_CANDIDATE
+  and (when BOTH shifts are required) also:
+    - NO_SPECIALIST
+- RiskLevel is treated as: ok / critical (alert removed).
 """
 
 from __future__ import annotations
@@ -13,78 +18,93 @@ from __future__ import annotations
 import pytest
 
 from backend.core.issues import (
-    NO_CANDIDATES_FOR_DAY,
     NO_ONCALL_CANDIDATE,
     NO_ONSITE_CANDIDATE,
     NO_SPECIALIST,
     classify_availability_risk_with_reasons,
-    classify_feasibility_issues_for_counts,
+    classify_feasibility_issues_for_day,
 )
-from backend.models.common_enums import RiskLevel
+from backend.models.common_enums import DoctorRole, RiskLevel
 
 pytestmark = [pytest.mark.solver]
 
 
-def test_counts_when_day_is_totally_empty_returns_only_no_candidates_for_day():
+def test_feasibility_when_day_is_totally_empty_emits_slot_gaps_and_no_specialist():
     """
-    If total_onsite=0 AND total_oncall=0, we want ONE clear issue:
-    - NO_CANDIDATES_FOR_DAY
-    and we do NOT duplicate it with NO_ONSITE/NO_ONCALL.
+    If BOTH shifts are required and both candidate sets are empty, we emit:
+    - NO_ONSITE_CANDIDATE
+    - NO_ONCALL_CANDIDATE
+    - NO_SPECIALIST  (because both shifts are required and union has no specialist)
     """
-    issues = classify_feasibility_issues_for_counts(
-        total_onsite=0,
-        total_oncall=0,
-        total_specialists=0,
+    issues = classify_feasibility_issues_for_day(
+        onsite_ids=set(),
+        oncall_ids=set(),
+        doctor_role_by_id={},
+        onsite_required=True,
+        oncall_required=True,
     )
 
-    assert issues == [NO_CANDIDATES_FOR_DAY], f"Expected a single clear reason, got: {issues}"
+    assert issues == [NO_ONSITE_CANDIDATE, NO_ONCALL_CANDIDATE, NO_SPECIALIST]
 
 
-def test_counts_when_only_onsite_missing_emits_no_onsite_candidate_only():
+def test_feasibility_when_only_onsite_missing_emits_no_onsite_candidate_only():
     """
-    If only onsite is missing (0) but oncall exists, we emit NO_ONSITE_CANDIDATE,
-    and we do NOT emit NO_CANDIDATES_FOR_DAY.
+    If onsite is missing but oncall has candidates (including a specialist),
+    we emit only NO_ONSITE_CANDIDATE (and NOT NO_SPECIALIST).
     """
-    issues = classify_feasibility_issues_for_counts(
-        total_onsite=0,
-        total_oncall=2,
-        total_specialists=1,
+    doctor_role_by_id = {
+        1: DoctorRole.specialist,  # specialist exists among REQUIRED candidates (oncall)
+    }
+
+    issues = classify_feasibility_issues_for_day(
+        onsite_ids=set(),
+        oncall_ids={1},
+        doctor_role_by_id=doctor_role_by_id,
+        onsite_required=True,
+        oncall_required=True,
     )
 
-    assert NO_ONSITE_CANDIDATE in issues
-    assert NO_CANDIDATES_FOR_DAY not in issues
+    assert issues == [NO_ONSITE_CANDIDATE]
 
 
 def test_availability_risk_ok_has_no_issues():
     """
-    For a very high availability day, risk should be OK and issues should be empty.
-    (We intentionally use large numbers to avoid depending on thresholds.)
+    High availability day:
+    - both required slots have candidates,
+    - union contains at least one specialist
+    => risk=ok and issues=[].
     """
+    doctor_role_by_id = {
+        1: DoctorRole.specialist,
+        2: DoctorRole.resident,
+        3: DoctorRole.resident,
+    }
+
     details = classify_availability_risk_with_reasons(
-        spec_onsite=50,
-        res_onsite=50,
-        spec_oncall=50,
-        res_oncall=50,
+        onsite_ids={1, 2},
+        oncall_ids={1, 3},
+        doctor_role_by_id=doctor_role_by_id,
+        onsite_required=True,
+        oncall_required=True,
     )
 
     assert details.risk == RiskLevel.ok
     assert details.issues == []
 
 
-def test_availability_risk_empty_day_is_critical_and_has_no_candidates_issue():
+def test_availability_risk_empty_day_is_critical_and_has_expected_issues():
     """
-    For an empty day, risk should not crash and issues should contain NO_CANDIDATES_FOR_DAY.
-    Also, NO_CANDIDATES_FOR_DAY should not be duplicated with NO_ONSITE/NO_ONCALL.
+    Empty day:
+    - both required slots have zero candidates -> critical
+    - issues contain NO_ONSITE_CANDIDATE, NO_ONCALL_CANDIDATE, and NO_SPECIALIST
     """
     details = classify_availability_risk_with_reasons(
-        spec_onsite=0,
-        res_onsite=0,
-        spec_oncall=0,
-        res_oncall=0,
+        onsite_ids=set(),
+        oncall_ids=set(),
+        doctor_role_by_id={},
+        onsite_required=True,
+        oncall_required=True,
     )
 
-    assert details.risk in (RiskLevel.alert, RiskLevel.critical)  # depends on your risk thresholds
-    assert NO_CANDIDATES_FOR_DAY in details.issues
-    assert NO_ONSITE_CANDIDATE not in details.issues
-    assert NO_ONCALL_CANDIDATE not in details.issues
-    assert NO_SPECIALIST not in details.issues
+    assert details.risk == RiskLevel.critical
+    assert details.issues == [NO_ONSITE_CANDIDATE, NO_ONCALL_CANDIDATE, NO_SPECIALIST]

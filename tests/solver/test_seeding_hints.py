@@ -80,7 +80,6 @@ def test_seeding_includes_head_commitment_hint(make_hard_model, make_preferences
         doctors=doctors,
         preferences=preferences,
         participant_doctor_ids=set(doctors.keys()),
-        ignore_days=set(),
         ignore_slots=set(),
         allowed_slots={
             (1, ShiftType.onsite): [1, 2, 10],
@@ -95,7 +94,6 @@ def test_seeding_includes_head_commitment_hint(make_hard_model, make_preferences
         doctors=dict(model.doctors),
         preferences=dict(model.preferences),
         participant_doctor_ids=set(model.participant_doctor_ids),
-        ignore_days=set(model.ignore_days),
         ignore_slots=set(model.ignore_slots),
     )
 
@@ -190,7 +188,6 @@ def test_top_k_excludes_slots_already_seeded_by_head_commitments(make_hard_model
         doctors=doctors,
         preferences=preferences,
         participant_doctor_ids=set(doctors.keys()),
-        ignore_days=set(),
         ignore_slots=set(),
         allowed_slots=allowed_slots,
     )
@@ -202,7 +199,6 @@ def test_top_k_excludes_slots_already_seeded_by_head_commitments(make_hard_model
         doctors=doctors,
         preferences=preferences,
         participant_doctor_ids=set(doctors.keys()),
-        ignore_days=set(),
         ignore_slots=set(),
     )
 

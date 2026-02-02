@@ -42,7 +42,6 @@ def test_no_specialist_not_emitted_when_only_one_shift_required(make_problem_dat
         doctors=doctors,
         preferences=prefs,
         participant_doctor_ids=set(doctors.keys()),
-        ignore_days=set(),
         ignore_slots={(1, ShiftType.onsite)},  # only oncall required
     )
 
@@ -72,7 +71,6 @@ def test_no_specialist_emitted_when_both_shifts_required(make_problem_data, make
         doctors=doctors,
         preferences=prefs,
         participant_doctor_ids=set(doctors.keys()),
-        ignore_days=set(),
         ignore_slots=set(),  # both required
     )
 

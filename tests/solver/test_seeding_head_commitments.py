@@ -84,7 +84,6 @@ def _build_problem_data(
         doctors=doctors,
         preferences=preferences,
         participant_doctor_ids=set(doctors.keys()),
-        ignore_days=set(),
         ignore_slots=set(ignore_slots or set()),
     )
     return problem

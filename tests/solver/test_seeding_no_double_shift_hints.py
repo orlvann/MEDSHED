@@ -45,7 +45,6 @@ def test_seeding_never_hints_same_doctor_for_both_shifts_same_day(make_hard_mode
         doctors=doctors,
         preferences=preferences,
         participant_doctor_ids=set(doctors.keys()),
-        ignore_days=set(),
         ignore_slots=set(),
         allowed_slots={
             (1, ShiftType.onsite): [1],
@@ -58,7 +57,6 @@ def test_seeding_never_hints_same_doctor_for_both_shifts_same_day(make_hard_mode
         doctors=doctors,
         preferences=preferences,
         participant_doctor_ids=set(doctors.keys()),
-        ignore_days=set(),
         ignore_slots=set(),
     )
 
