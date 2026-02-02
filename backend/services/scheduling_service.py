@@ -102,6 +102,7 @@ from backend.models.schemas.schedule import (
     _ViewHint,
 )
 from backend.services import diagnostics_service
+from backend.services.availability_service import _suggest_ignored_slots_and_reasons
 from backend.services.errors import DomainError
 from backend.utils import ORG_TZ, days_in_month, get_period_status, normalize_assignments, normalize_meta, now_utc
 
@@ -1197,6 +1198,14 @@ class SchedulingService:
                 context = _build_issues_context(
                     year=year, month=month, issues=precheck_issues, limit=ISSUES_SAMPLE_LIMIT
                 )
+                # Suggested ignore slots for FE (day + shift_type).
+                suggested, reason_codes = _suggest_ignored_slots_and_reasons(
+                    problem=problem, precheck_issues=precheck_issues
+                )
+
+                # Use plain JSON structures in error context.
+                context["suggested_ignored_slots"] = [s.model_dump(mode="json") for s in suggested]
+                context["suggested_ignore_reason_codes"] = list(reason_codes)
                 raise DomainError("generate_requires_ignore", context=context)
 
             # 2b) Gatekeeper: head commitment conflicts must be resolved before solver

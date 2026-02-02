@@ -20,6 +20,7 @@ from __future__ import annotations
 
 from typing import Dict, List, Set, Tuple
 
+from backend.core.feasibility import FeasibilityIssue, compute_day_capacity
 from backend.core.issues import (
     FORCED_DOUBLE_SHIFT_SAME_DAY,
     NO_ONCALL_CANDIDATE,
@@ -28,6 +29,7 @@ from backend.core.issues import (
     classify_availability_risk_with_reasons,
     is_forced_double_shift_same_day,
 )
+from backend.core.types import ProblemData
 from backend.db.session import SessionLocal
 from backend.models.common_enums import DoctorRole, PeriodStatus, RiskLevel, ShiftType
 from backend.models.orm.doctor import Doctor
@@ -92,39 +94,142 @@ def _compute_available_days_for_doctor(
     return available_onsite, available_oncall
 
 
-def _suggest_ignored_slots_and_reasons(*, risk_issues: List[str]) -> tuple[List[AvailabilityIgnoreSlot], List[str]]:
+def _suggest_ignored_slots_and_reasons(
+    *,
+    problem: ProblemData,
+    precheck_issues: List[FeasibilityIssue],
+) -> tuple[List[AvailabilityIgnoreSlot], List[str]]:
     """
     Suggest a minimal set of ignore slots so Generate can proceed.
 
-    Deterministic policy:
-    1) If a REQUIRED slot has zero candidates -> suggest ignoring that slot.
-    2) If the only remaining blocker is NO_SPECIALIST (and we are not already ignoring anything),
-       suggest ignoring ONCALL (keep onsite more important).
-
-    IMPORTANT:
-    - AvailabilityIgnoreSlot.day is a DayInt (>= 1), so this helper must always build valid objects.
-    - We use a placeholder day=1 here. Callers patch it to the real day number.
+    Deterministic policy (per-day):
+    1) If a slot has zero candidates -> suggest ignoring that slot.
+    2) If the only remaining blocker for the day is NO_SPECIALIST:
+       - Keep the slot where MORE available candidates marked "preferred".
+         Ignore the other slot.
+       - If preferred is tied (including both 0), keep the slot with MORE candidates total.
+       - If still tied (or both empty), ignore ONCALL (fixed fallback).
     """
+    # Build capacity once: day -> candidate ids for each slot.
+    capacity_by_day = compute_day_capacity(problem)
+
+    # Group issue codes by day.
+    codes_by_day: Dict[int, Set[str]] = {}
+    for it in precheck_issues or []:
+        codes_by_day.setdefault(int(it.day), set()).add(str(it.code))
+
+    suggested: List[AvailabilityIgnoreSlot] = []
+    reasons: Set[str] = set()
+
+    def _count_preferred(day: int, shift_type: ShiftType, candidate_ids: Set[int]) -> int:
+        """
+        Count how many AVAILABLE candidates marked this slot as preferred.
+        Uses PreferencesInput:
+          - preferred_onsite_days
+          - preferred_oncall_days
+        """
+        cnt = 0
+        for did in candidate_ids:
+            pref = problem.preferences.get(int(did))
+            if pref is None:
+                continue
+            preferred_days = (
+                pref.preferred_onsite_days if shift_type == ShiftType.onsite else pref.preferred_oncall_days
+            )
+            if int(day) in preferred_days:
+                cnt += 1
+        return cnt
+
+    for day in sorted(codes_by_day.keys()):
+        code_set = codes_by_day[day]
+
+        cap = capacity_by_day.get(int(day))
+        onsite_ids: Set[int] = set(getattr(cap, "onsite_ids", []) or []) if cap is not None else set()
+        oncall_ids: Set[int] = set(getattr(cap, "oncall_ids", []) or []) if cap is not None else set()
+
+        day_suggestions: List[AvailabilityIgnoreSlot] = []
+        day_reasons: List[str] = []
+
+        # 1) Missing candidates: suggest ignoring the missing slot(s).
+        if NO_ONSITE_CANDIDATE in code_set:
+            day_suggestions.append(AvailabilityIgnoreSlot(day=int(day), shift_type=ShiftType.onsite))
+            day_reasons.append(NO_ONSITE_CANDIDATE)
+
+        if NO_ONCALL_CANDIDATE in code_set:
+            day_suggestions.append(AvailabilityIgnoreSlot(day=int(day), shift_type=ShiftType.oncall))
+            day_reasons.append(NO_ONCALL_CANDIDATE)
+
+        # If we already ignore something for this day, NO_SPECIALIST stops being a blocker
+        # (specialist is required only when BOTH shifts are required).
+        if day_suggestions:
+            suggested.extend(day_suggestions)
+            for r in day_reasons:
+                reasons.add(r)
+            continue
+
+        # 2) Only NO_SPECIALIST -> apply new policy.
+        if (NO_SPECIALIST in code_set) and (len(code_set) == 1):
+            reasons.add(NO_SPECIALIST)
+
+            onsite_pref = _count_preferred(int(day), ShiftType.onsite, onsite_ids)
+            oncall_pref = _count_preferred(int(day), ShiftType.oncall, oncall_ids)
+
+            # Rule 1: keep slot with more preferred marks
+            if onsite_pref != oncall_pref:
+                ignore = ShiftType.oncall if onsite_pref > oncall_pref else ShiftType.onsite
+                suggested.append(AvailabilityIgnoreSlot(day=int(day), shift_type=ignore))
+                continue
+
+            onsite_total = len(onsite_ids)
+            oncall_total = len(oncall_ids)
+
+            # Rule 2: keep slot with more candidates
+            if onsite_total != oncall_total:
+                ignore = ShiftType.oncall if onsite_total > oncall_total else ShiftType.onsite
+                suggested.append(AvailabilityIgnoreSlot(day=int(day), shift_type=ignore))
+                continue
+
+            # Rule 3: tie fallback
+            suggested.append(AvailabilityIgnoreSlot(day=int(day), shift_type=ShiftType.oncall))
+            continue
+
+        # Other combinations: no suggestion (safe default).
+
+    # Deduplicate suggestions deterministically.
+    uniq = sorted({(int(s.day), str(getattr(s.shift_type, "value", s.shift_type))) for s in suggested})
+    suggested_out = [AvailabilityIgnoreSlot(day=d, shift_type=ShiftType(st)) for (d, st) in uniq]
+
+    return suggested_out, sorted(reasons)
+
+
+def _suggest_ignored_slots_for_day_risk(
+    *,
+    day: int,
+    risk_issues: List[str],
+) -> tuple[List[AvailabilityIgnoreSlot], List[str]]:
+    """
+    Suggest ignore slots for a SINGLE day, based only on issue codes.
+
+    This is used by availability risk views where we do NOT have full ProblemData.
+    Policy here stays intentionally simple:
+    - missing onsite -> ignore onsite
+    - missing oncall -> ignore oncall
+    - only no_specialist -> ignore oncall (fallback)
+    """
+    issue_set = set(risk_issues or [])
     suggested: List[AvailabilityIgnoreSlot] = []
     reasons: List[str] = []
 
-    issue_set = set(risk_issues or [])
-
-    # Placeholder that satisfies DayInt validation.
-    placeholder_day = 1
-
     if NO_ONSITE_CANDIDATE in issue_set:
-        suggested.append(AvailabilityIgnoreSlot(day=placeholder_day, shift_type=ShiftType.onsite))
+        suggested.append(AvailabilityIgnoreSlot(day=int(day), shift_type=ShiftType.onsite))
         reasons.append(NO_ONSITE_CANDIDATE)
 
     if NO_ONCALL_CANDIDATE in issue_set:
-        suggested.append(AvailabilityIgnoreSlot(day=placeholder_day, shift_type=ShiftType.oncall))
+        suggested.append(AvailabilityIgnoreSlot(day=int(day), shift_type=ShiftType.oncall))
         reasons.append(NO_ONCALL_CANDIDATE)
 
-    # If we already ignore something, NO_SPECIALIST stops being a blocker
-    # because the specialist rule is required ONLY when BOTH shifts are required.
     if not suggested and (NO_SPECIALIST in issue_set):
-        suggested.append(AvailabilityIgnoreSlot(day=placeholder_day, shift_type=ShiftType.oncall))
+        suggested.append(AvailabilityIgnoreSlot(day=int(day), shift_type=ShiftType.oncall))
         reasons.append(NO_SPECIALIST)
 
     return suggested, reasons
@@ -203,7 +308,10 @@ def get_month_availability(*, year: int, month: int, actor) -> AvailabilityOverv
             suggested_ignore_reason_codes: List[str] = []
 
             if details.risk == RiskLevel.critical:
-                raw_suggested, raw_reasons = _suggest_ignored_slots_and_reasons(risk_issues=details.issues)
+                raw_suggested, raw_reasons = _suggest_ignored_slots_for_day_risk(
+                    day=int(d),
+                    risk_issues=list(details.issues or []),
+                )
 
                 # Patch placeholder day -> real day number.
                 suggested_ignored_slots = [
@@ -309,12 +417,12 @@ def get_day_availability(*, year: int, month: int, day: int, actor) -> Availabil
     suggested_ignore_reason_codes: List[str] = []
 
     if details.risk == RiskLevel.critical:
-        raw_suggested, raw_reasons = _suggest_ignored_slots_and_reasons(risk_issues=details.issues)
+        raw_suggested, raw_reasons = _suggest_ignored_slots_for_day_risk(
+            day=int(day),
+            risk_issues=list(details.issues or []),
+        )
 
-        # Patch placeholder day -> real day number.
-        suggested_ignored_slots = [
-            AvailabilityIgnoreSlot(day=int(day), shift_type=s.shift_type) for s in (raw_suggested or [])
-        ]
+        suggested_ignored_slots = list(raw_suggested or [])
         suggested_ignore_reason_codes = list(raw_reasons or [])
 
     specialists_onsite.sort(key=lambda x: int(x.id))
