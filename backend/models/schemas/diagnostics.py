@@ -120,6 +120,20 @@ class DoctorDiagnosticsRead(BaseModel):
     )
 
 
+class MyDoctorDiagnosticsRead(BaseModel):
+    """
+    Doctor-facing diagnostics for the current doctor (published schedule only).
+
+    Privacy:
+    - returns ONLY the requesting doctor's per-doctor stats
+    - does NOT expose findings, rankings, or other doctors' data
+    """
+
+    version_id: int = Field(..., description="Published schedule version id.")
+    computed_at: datetime = Field(..., description="UTC timestamp when diagnostics were computed/refreshed.")
+    doctor: DoctorDiagnosticsRead = Field(..., description="Per-doctor KPIs for the current doctor.")
+
+
 class DoctorRankingItemRead(BaseModel):
     doctor_id: int
     score: float
@@ -277,4 +291,5 @@ __all__ = [
     "DiagnosticsRead",
     "DiagnosticsAuditItemRead",
     "AuditKind",
+    "MyDoctorDiagnosticsRead",
 ]

@@ -30,7 +30,7 @@ from .auth import LoginRequest, SetPasswordRequest, SetPasswordResponse, TokenRe
 from .availability import AvailabilityDayRead, AvailabilityDaySummary, AvailabilityIgnoreSlot, AvailabilityOverviewRead
 
 # Diagnostics
-from .diagnostics import DiagnosticsRead, DiagnosticsSummary
+from .diagnostics import DiagnosticsRead, DiagnosticsSummary, MyDoctorDiagnosticsRead
 
 # Doctors
 from .doctor import DoctorCreate, DoctorList, DoctorMini, DoctorPut, DoctorRead
@@ -152,6 +152,7 @@ __all__ = [
     # Diagnostics
     "DiagnosticsRead",
     "DiagnosticsSummary",
+    "MyDoctorDiagnosticsRead",
     # Export (query DTO; response is a file stream)
     "ScheduleExportQuery",
     # Availability

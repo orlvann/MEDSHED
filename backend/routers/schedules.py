@@ -35,7 +35,7 @@ from typing import Literal, Optional, cast
 from fastapi import APIRouter, Body, Depends, HTTPException, Path, Query, status
 
 from backend.core import issues
-from backend.models.schemas.diagnostics import DiagnosticsRead
+from backend.models.schemas.diagnostics import DiagnosticsRead, MyDoctorDiagnosticsRead
 from backend.models.schemas.dto_common import make_error
 from backend.models.schemas.schedule import (
     MyAssignmentsRead,
@@ -51,6 +51,7 @@ from backend.models.schemas.schedule import (
     SchedulesPeriodViewRead,
     ScheduleWorkingAck,
     ScheduleWorkingPut,
+    ScheduleWorkingRead,
 )
 from backend.routers.deps import UserCtx, require_admin, require_doctor
 from backend.services import SchedulingService
@@ -519,6 +520,19 @@ def generate_schedule(
     tags=["schedules:admin"],
     summary="Get diagnostics for working, draft, or published schedule",
     operation_id="schedules_diagnostics_get",
+    description=(
+        "Return schedule diagnostics (KPIs + details) for {year, month}.\n\n"
+        "Use query param target:\n"
+        "- working: analyze the current working buffer (live edits)\n"
+        "- draft: analyze the current draft checkpoint (pointer -> version)\n"
+        "- published: analyze the current published version (pointer -> version)\n\n"
+        "Important rules:\n"
+        "- inputs_snapshot is required (NO FALLBACKS). If missing -> 409.\n"
+        "- working is computed live (version_id=null).\n"
+        "- draft/published are computed per version_id and cached in ScheduleDiagnostics.\n"
+        "- Gaps are always critical; if previously accepted as ignore, a gap still stays a gap "
+        "(context.was_ignored=true).\n"
+    ),
     responses={
         200: {
             "description": "Diagnostics computed (and cached for draft/published).",
@@ -526,21 +540,18 @@ def generate_schedule(
                 "application/json": {
                     "examples": {
                         "working": {
-                            "summary": "Working diagnostics (details contains working_lock_version)",
+                            "summary": "Working diagnostics (computed live; details includes working_lock_version).",
                             "value": {
                                 "version_id": None,
                                 "computed_at": "2026-01-28T09:20:00Z",
                                 "summary": {
                                     "coverage_missing_required_slots": 2,
-                                    "hard_issues_count": 1,
+                                    "hard_issues_count": 2,
                                     "rest_violations": 0,
                                     "fairness_index": 0.93,
                                     "preference_fulfillment_pct": 78.0,
                                 },
                                 "details": {
-                                    # IMPORTANT:
-                                    # - There is NO COVERAGE_IGNORED_SLOT info finding anymore.
-                                    # - We only mark actual missing slots with was_ignored=True/False.
                                     "findings": [
                                         {
                                             "code": _issue_code(issues.COVERAGE_MISSING_REQUIRED_SLOT),
@@ -552,6 +563,17 @@ def generate_schedule(
                                             "severity": "critical",
                                             "context": {"day": 2, "shift_type": "oncall", "was_ignored": False},
                                         },
+                                        {
+                                            "code": _issue_code(issues.PREFERENCE_MISS),
+                                            "severity": "warning",
+                                            "context": {"doctor_id": 101, "day": 5, "shift_type": "onsite"},
+                                        },
+                                        # Rest findings are also warnings (example shape; context keys may vary).
+                                        {
+                                            "code": _issue_code(issues.REST_CONSECUTIVE_VIOLATION),
+                                            "severity": "warning",
+                                            "context": {"doctor_id": 101, "day": 6},
+                                        },
                                     ],
                                     "per_doctor": [
                                         {
@@ -562,34 +584,54 @@ def generate_schedule(
                                             "rest_violations": 0,
                                             "preference_fulfillment_pct": 78.0,
                                             "preferred_days_missed": 2,
-                                            "score": -120.0,
+                                            # score points: higher => better (core uses points = -penalty_like)
+                                            "score": 120.0,
                                         }
                                     ],
                                     "rankings": {
                                         "top_unhappy": [
                                             {
                                                 "doctor_id": 101,
-                                                "score": -120.0,
+                                                "score": 120.0,
                                                 "reasons_codes": ["preferred_days_missed", "preferences_not_fully_met"],
                                             }
                                         ],
                                         "top_happy": [
                                             {
                                                 "doctor_id": 101,
-                                                "score": -120.0,
+                                                "score": 120.0,
                                                 "reasons_codes": ["good_rest"],
                                             }
                                         ],
                                     },
-                                    # Not forcing audit content in working.
-                                    "audit": [],
-                                    "components": {},
+                                    # Audit is extracted from payload.meta.exceptions (history of human decisions).
+                                    "audit": [
+                                        {
+                                            "kind": "generation_ignore",
+                                            "code": _issue_code(issues.COVERAGE_IGNORED_SLOT),
+                                            "day": 2,
+                                            "shift_type": "onsite",
+                                            "justification": "Holiday staffing shortage — generating draft with gaps.",
+                                            "accepted_by_user_id": 1,
+                                            "accepted_at": "2026-01-28T09:10:00Z",
+                                        }
+                                    ],
+                                    # Optional debug breakdown from core scoring components.
+                                    "components": {
+                                        "rest_penalty": 0,
+                                        "preferred_days_penalty": 30,
+                                        "totals_penalty": 40,
+                                        "fairness_penalty": 10,
+                                        "weekday_patterns_penalty": 0,
+                                        "preferred_partners_penalty": 0,
+                                        "friday_free_weekend_penalty": 0,
+                                    },
                                     "working_lock_version": 7,
                                 },
                             },
                         },
                         "draft": {
-                            "summary": "Draft diagnostics (version_id is checkpoint id)",
+                            "summary": "Draft diagnostics (version_id is current draft checkpoint id).",
                             "value": {
                                 "version_id": 123,
                                 "computed_at": "2026-01-28T09:15:01Z",
@@ -604,15 +646,22 @@ def generate_schedule(
                                     "findings": [],
                                     "per_doctor": [],
                                     "rankings": {"top_unhappy": [], "top_happy": []},
-                                    # Draft usually has no "human decision audit" rows.
                                     "audit": [],
-                                    "components": {},
+                                    "components": {
+                                        "rest_penalty": 0,
+                                        "preferred_days_penalty": 0,
+                                        "totals_penalty": 0,
+                                        "fairness_penalty": 0,
+                                        "weekday_patterns_penalty": 0,
+                                        "preferred_partners_penalty": 0,
+                                        "friday_free_weekend_penalty": 0,
+                                    },
                                     "working_lock_version": None,
                                 },
                             },
                         },
                         "published": {
-                            "summary": "Published diagnostics (version_id is published version id)",
+                            "summary": "Published diagnostics (version_id is current published version id).",
                             "value": {
                                 "version_id": 200,
                                 "computed_at": "2026-01-28T10:05:01Z",
@@ -629,21 +678,43 @@ def generate_schedule(
                                             "code": _issue_code(issues.COVERAGE_MISSING_REQUIRED_SLOT),
                                             "severity": "critical",
                                             "context": {"day": 10, "shift_type": "oncall", "was_ignored": False},
-                                        }
+                                        },
+                                        {
+                                            "code": _issue_code(issues.COVERAGE_NO_SPECIALIST_DAY),
+                                            "severity": "critical",
+                                            "context": {
+                                                "day": 10,
+                                                "day_empty": True,
+                                                "assigned_doctor_ids": [],
+                                                "was_ignored_day": False,
+                                                "was_ignored_onsite": False,
+                                                "was_ignored_oncall": False,
+                                            },
+                                        },
                                     ],
                                     "per_doctor": [],
                                     "rankings": {"top_unhappy": [], "top_happy": []},
-                                    # Example: a human accepted a hard violation during force publish.
+                                    # Example: a human accepted a hard issue during force publish.
                                     "audit": [
                                         {
+                                            "kind": "publish_acceptance",
                                             "code": _issue_code(issues.COVERAGE_MISSING_REQUIRED_SLOT),
-                                            "justification": "Force publish: "
-                                            "Duty shortage accepted for day 10 oncall.",
+                                            "day": 10,
+                                            "shift_type": "oncall",
+                                            "justification": "Force publish: duty shortage accepted for day 10 oncall.",
                                             "accepted_by_user_id": 1,
                                             "accepted_at": "2026-01-28T10:00:10Z",
                                         }
                                     ],
-                                    "components": {},
+                                    "components": {
+                                        "rest_penalty": 0,
+                                        "preferred_days_penalty": 20,
+                                        "totals_penalty": 30,
+                                        "fairness_penalty": 10,
+                                        "weekday_patterns_penalty": 0,
+                                        "preferred_partners_penalty": 0,
+                                        "friday_free_weekend_penalty": 0,
+                                    },
                                     "working_lock_version": None,
                                 },
                             },
@@ -684,7 +755,7 @@ def generate_schedule(
         500: {
             "description": "Database error.",
             "content": {
-                "application/json": {"example": _err_example("db_error", detail="Database error.", context={})}
+                "application/json": {"example": _err_example("db_error", detail="Server error. Try again.", context={})}
             },
         },
     },
@@ -997,12 +1068,174 @@ def schedules_diagnostics(
         },
     },
 )
+def schedules_period_view(
+    year: int = Path(..., ge=1900, le=2100),
+    month: int = Path(..., ge=1, le=12),
+    user: UserCtx = Depends(require_admin),
+) -> SchedulesPeriodViewRead:
+    """
+    Thin router: delegate composition to SchedulingService.get_period_view.
+    Router no longer composes the view; it calls the service and maps errors.
+    """
+    try:
+        return svc.get_period_view(year, month)
+    except ValueError as e:
+        _raise(e)
+        assert False
+
+
+# -------------------------- ADMIN: working read/put ----------------------------
+@router.get(
+    "/{year}/{month}/working",
+    response_model=ScheduleWorkingRead,
+    tags=["schedules:admin"],
+    summary="Read working draft (explicit)",
+    description=(
+        "Return the current *working buffer* (admin draft) for the selected month.\n\n"
+        "If no working row exists yet, returns a *skeleton* with `exists=false` and empty arrays.\n\n"
+        "Important fields:\n"
+        "- `exists`: tells FE whether a persisted working row exists.\n"
+        "- `lock_version`: optimistic concurrency token (echo in PUT as `if_match_lock_version`).\n"
+        "- `inputs_snapshot`: frozen inputs used to generate the schedule; required for manual edits.\n"
+    ),
+    responses={
+        200: {
+            "description": "Working buffer (or skeleton with exists=false).",
+            "content": {
+                "application/json": {
+                    "examples": {
+                        "exists_true": {
+                            "summary": "Working exists",
+                            "value": {
+                                "year": 2026,
+                                "month": 2,
+                                "exists": True,
+                                "participant_doctor_ids": [1, 2, 3],
+                                "assignments": [
+                                    {"day": 1, "shift_type": "onsite", "doctor_id": 2},
+                                    {"day": 1, "shift_type": "on_call", "doctor_id": 1},
+                                ],
+                                "meta": {"labels": ["edited_by_admin"], "exceptions": []},
+                                "updated_at": "2026-02-02T10:15:30Z",
+                                "lock_version": 7,
+                                "inputs_snapshot": None,
+                            },
+                        },
+                        "exists_false": {
+                            "summary": "Skeleton (no working row yet)",
+                            "value": {
+                                "year": 2026,
+                                "month": 2,
+                                "exists": False,
+                                "participant_doctor_ids": [],
+                                "assignments": [],
+                                "meta": {"labels": []},
+                                "updated_at": None,
+                                "lock_version": None,
+                                "inputs_snapshot": None,
+                            },
+                        },
+                    }
+                }
+            },
+        },
+        403: {
+            "description": "Period is closed.",
+            "content": {"application/json": {"example": _err_example("period_closed")}},
+        },
+        404: {"description": "Not found.", "content": {"application/json": {"example": _err_example("not_found")}}},
+        500: {"description": "DB error.", "content": {"application/json": {"example": _err_example("db_error")}}},
+    },
+)
+def schedules_working_read(
+    year: int = Path(..., ge=1900, le=2100),
+    month: int = Path(..., ge=1, le=12),
+    user: UserCtx = Depends(require_admin),
+) -> ScheduleWorkingRead:
+    """
+    Return the current working buffer or a skeleton with exists=False.
+    """
+    try:
+        return svc.get_working(year, month)
+    except ValueError as e:
+        _raise(e)
+        assert False
+
+
+@router.put(
+    "/{year}/{month}/working",
+    response_model=ScheduleWorkingAck,
+    tags=["schedules:admin"],
+    summary="Autosave working (OCC via lock_version)",
+    description=(
+        "Autosave the *working buffer* (admin draft). This overwrites the working payload only "
+        "(no checkpoint/draft version is created).\n\n"
+        "Concurrency (OCC):\n"
+        "- If `if_match_lock_version` is provided and mismatches the current `lock_version`, "
+        "the server returns `409 edit_conflict`.\n\n"
+        "Snapshot requirement (NO FALLBACKS policy):\n"
+        "- Manual edits are allowed only when the working payload already contains `inputs_snapshot`.\n"
+        "  If missing, server returns `409 working_requires_snapshot`.\n\n"
+        "Meta rules enforced by server:\n"
+        "- Always remove label `as_generated`.\n"
+        "- Always add label `edited_by_admin`.\n"
+        "- Preserve/merge `meta.exceptions` (existing exceptions are never dropped).\n\n"
+        "Returns a lean ACK with `updated_at` and the new `lock_version`.\n"
+    ),
+    responses={
+        200: {
+            "description": "Autosave accepted (lean ACK).",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "year": 2026,
+                        "month": 2,
+                        "updated_at": "2026-02-02T10:16:10Z",
+                        "lock_version": 8,
+                    }
+                }
+            },
+        },
+        409: {
+            "description": "Conflict (OCC mismatch or missing snapshot).",
+            "content": {
+                "application/json": {
+                    "examples": {
+                        "edit_conflict": {
+                            "summary": "OCC mismatch",
+                            "value": _err_example("edit_conflict"),
+                        },
+                        "working_requires_snapshot": {
+                            "summary": "Working has no inputs_snapshot (manual edits blocked)",
+                            "value": _err_example(
+                                "working_requires_snapshot",
+                                context={"year": 2026, "month": 2, "operation": "save_working"},
+                            ),
+                        },
+                    }
+                }
+            },
+        },
+        400: {
+            "description": "Bad request (invalid payload).",
+            "content": {"application/json": {"example": _err_example("invalid_accepted_exception")}},
+        },
+        403: {
+            "description": "Period is closed.",
+            "content": {"application/json": {"example": _err_example("period_closed")}},
+        },
+        500: {"description": "DB error.", "content": {"application/json": {"example": _err_example("db_error")}}},
+    },
+)
 def schedules_working_put(
     year: int = Path(..., ge=1900, le=2100),
     month: int = Path(..., ge=1, le=12),
     body: ScheduleWorkingPut = Body(...),
     user: UserCtx = Depends(require_admin),
 ) -> ScheduleWorkingAck:
+    """
+    Autosave the working buffer. If if_match_lock_version mismatches → 409.
+    """
     try:
         return svc.save_working(
             year,
@@ -1909,6 +2142,153 @@ def schedules_my_assignments(
 ) -> MyAssignmentsRead:
     try:
         return svc.get_my_assignments(year=year, month=month, doctor_id=user.user_id if user else -1)
+    except ValueError as e:
+        _raise(e)
+        assert False
+
+
+# ---------------------- DOCTOR: my diagnostics -------------------
+@router.get(
+    "/{year}/{month}/published/diagnostics/me",
+    response_model=MyDoctorDiagnosticsRead,
+    tags=["schedules:doctor"],
+    summary="Get published per-doctor diagnostics for the current doctor (privacy-safe)",
+    operation_id="schedules_published_my_diagnostics_get",
+    description=(
+        "Return published per-doctor diagnostics for the current doctor for {year, month}.\n\n"
+        "Privacy:\n"
+        "- Returns ONLY the current doctor's stats (totals, rest_violations, preference %, "
+        "preferred_days_missed, optional score).\n"
+        "- No findings, no rankings, no audit, no other doctors.\n\n"
+        "inputs_snapshot is required (NO FALLBACKS). If missing -> 409.\n"
+    ),
+    responses={
+        200: {
+            "description": "Doctor-facing diagnostics (only current doctor stats; no findings/rankings/audit).",
+            "content": {
+                "application/json": {
+                    "examples": {
+                        "ok": {
+                            "summary": "Published per-doctor diagnostics for the current doctor",
+                            "value": {
+                                "version_id": 200,
+                                "computed_at": "2026-01-28T10:05:01Z",
+                                "doctor": {
+                                    "doctor_id": 101,
+                                    "display_name": "Doctor 101",
+                                    "assigned_onsite_total": 5,
+                                    "assigned_oncall_total": 3,
+                                    "rest_violations": 0,
+                                    "preference_fulfillment_pct": 82.0,
+                                    "preferred_days_missed": 2,
+                                    "score": 120.0,
+                                },
+                            },
+                        },
+                        "ok_without_score": {
+                            "summary": "Same payload, but score may be omitted (optional field)",
+                            "value": {
+                                "version_id": 200,
+                                "computed_at": "2026-01-28T10:05:01Z",
+                                "doctor": {
+                                    "doctor_id": 101,
+                                    "display_name": "Doctor 101",
+                                    "assigned_onsite_total": 5,
+                                    "assigned_oncall_total": 3,
+                                    "rest_violations": 0,
+                                    "preference_fulfillment_pct": 82.0,
+                                    "preferred_days_missed": 2,
+                                    # score omitted intentionally
+                                },
+                            },
+                        },
+                    }
+                }
+            },
+        },
+        403: {
+            "description": "Forbidden (not a doctor account).",
+            "content": {"application/json": {"example": _err_example("forbidden")}},
+        },
+        404: {
+            "description": "Not found (published schedule missing or doctor not present in that snapshot).",
+            "content": {
+                "application/json": {
+                    "examples": {
+                        "published_missing": {
+                            "summary": "No published schedule for this period",
+                            "value": _err_example("not_found"),
+                        },
+                        "doctor_not_in_snapshot": {
+                            "summary": "Published schedule exists, but this doctor is not present in the snapshot",
+                            "value": _err_example("not_found"),
+                        },
+                    }
+                }
+            },
+        },
+        409: {
+            "description": "Snapshot is required (NO FALLBACKS policy).",
+            "content": {
+                "application/json": {
+                    "example": _err_example(
+                        "diagnostics_requires_snapshot",
+                        detail="Cannot compute diagnostics. Regenerate the schedule.",
+                        context={"year": 2026, "month": 2, "version_id": 200},
+                    )
+                }
+            },
+        },
+        500: {
+            "description": "Database error.",
+            "content": {
+                "application/json": {"example": _err_example("db_error", detail="Server error. Try again.", context={})}
+            },
+        },
+    },
+)
+def schedules_published_my_diagnostics(
+    user: UserCtx = Depends(require_doctor),
+    year: int = Path(..., ge=1900, le=2100, description="Calendar year"),
+    month: int = Path(..., ge=1, le=12, description="Month 1..12"),
+) -> MyDoctorDiagnosticsRead:
+    """
+    Doctor-facing diagnostics for published schedule.
+
+    Returns ONLY:
+    - totals (onsite/oncall),
+    - rest_violations,
+    - preference_fulfillment_pct,
+    - preferred_days_missed,
+    - optional score.
+
+    No findings, no rankings, no audit.
+    """
+    if user.doctor_id is None:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=make_error("forbidden"))
+
+    try:
+        diag = svc.get_diagnostics(year=year, month=month, target="published")
+
+        # Published must have a version_id.
+        if diag.version_id is None:
+            raise ValueError("not_found")
+
+        details = diag.details
+        if details is None:
+            raise ValueError("not_found")
+
+        my_row = next((r for r in details.per_doctor if int(r.doctor_id) == int(user.doctor_id)), None)
+        if my_row is None:
+            # Doctor not included in this published snapshot.
+            raise ValueError("not_found")
+
+        return MyDoctorDiagnosticsRead(
+            version_id=int(diag.version_id),
+            computed_at=diag.computed_at,
+            doctor=my_row,
+        )
+
     except ValueError as e:
         _raise(e)
         assert False
