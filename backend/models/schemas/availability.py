@@ -1,11 +1,23 @@
-# backend/models/schemas/availability.py
 from __future__ import annotations
 
 from pydantic import BaseModel, Field
 
-from backend.models.common_enums import PeriodStatus, RiskLevel
+from backend.models.common_enums import PeriodStatus, RiskLevel, ShiftType
 from backend.models.schemas.doctor import DoctorMini
 from backend.models.schemas.dto_common import DayInt, MonthInt, YearInt
+
+
+class AvailabilityIgnoreSlot(BaseModel):
+    """
+    One slot that the backend suggests to ignore during Generate,
+    so the solver can still produce a draft with intentional gaps.
+
+    - day: calendar day number (1..31)
+    - shift_type: "onsite" or "oncall"
+    """
+
+    day: DayInt
+    shift_type: ShiftType  # "onsite" | "oncall"
 
 
 class AvailabilityDaySummary(BaseModel):
@@ -22,8 +34,18 @@ class AvailabilityDaySummary(BaseModel):
     # Overall risk flag for this day (ok / alert / critical).
     risk: RiskLevel
 
-    # Machine-readable reasons for critical days (empty for ok/alert).
+    # Machine-readable issue codes explaining why the day is risky.
+    # - ok: usually []
+    # - alert: may contain warning codes (e.g. "few_candidates_total")
+    # - critical: contains blocking codes (e.g. "no_onsite_candidate")
     risk_issues: list[str] = Field(default_factory=list)
+
+    # Suggested ignores (ONLY for critical days):
+    # Backend computes a minimal set of slots to ignore so Generate can proceed.
+    suggested_ignored_slots: list[AvailabilityIgnoreSlot] = Field(default_factory=list)
+
+    # The reason codes that caused the suggestion above (usually a subset of risk_issues).
+    suggested_ignore_reason_codes: list[str] = Field(default_factory=list)
 
 
 class AvailabilityOverviewRead(BaseModel):
@@ -54,10 +76,17 @@ class AvailabilityDayRead(BaseModel):
     residents_oncall: list[DoctorMini] = Field(default_factory=list)
 
     risk: RiskLevel
+
+    # Same meaning as in AvailabilityDaySummary.
     risk_issues: list[str] = Field(default_factory=list)
+
+    # Same suggested ignores (only for critical).
+    suggested_ignored_slots: list[AvailabilityIgnoreSlot] = Field(default_factory=list)
+    suggested_ignore_reason_codes: list[str] = Field(default_factory=list)
 
 
 __all__ = [
+    "AvailabilityIgnoreSlot",
     "AvailabilityDaySummary",
     "AvailabilityOverviewRead",
     "AvailabilityDayRead",

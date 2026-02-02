@@ -1,3 +1,5 @@
+Jasne — poniżej masz **gotowy, kompletny README** do wklejenia (Twoja wersja + dopisane sekcje o nowych testach + poprawiony opis `no_specialist`).
+
 ````md
 # Tests
 
@@ -60,7 +62,7 @@ Important: availability and ignore rules are applied **before** the solver.
 `constraint_builder.build_hard_model(...)` builds:
 
 - `active_days` (days we actually schedule),
-- `allowed_slots` (who is allowed to work each `(day, shift)`).
+- `allowed_slots` (who is allowed to work each `(day, shift)`).  
 
 The solver (`engine.build_and_solve`) does not re-check unavailability lists.  
 It only uses `allowed_slots`, `active_days`, and `ignore_slots`.
@@ -238,7 +240,7 @@ Rules:
 
 - Prefer **day-level reasons** derived deterministically from `HardModel`:
   - missing candidates for a required slot (`no_onsite_candidate`, `no_oncall_candidate`)
-  - missing specialist among required shifts (`no_specialist`)
+  - missing specialist **only when BOTH shifts are required** (`no_specialist`)
   - forced double shift on the same day (`forced_double_shift_same_day`)
 - If no day-level reason can be derived, return a global fallback issue:
   - `day=0`, `code=cp_infeasible`
@@ -263,6 +265,73 @@ Tests:
 - `tests/solver/test_engine_non_ok_statuses.py`
   - `EMPTY` returns no issues
   - `NOT_SOLVED` returns no issues
+
+### Shared issue codes (single source of truth)
+
+All issue codes and their default human-readable messages live in:
+
+- `backend/core/issues.py`
+
+This module is the **single source of truth** for:
+
+- issue code constants (for feasibility, availability warnings, head commitments, CP-SAT infeasible),
+- default messages (`FEASIBILITY_ISSUE_MESSAGES`),
+- helper functions that classify issues (counts-based and identity-based),
+- availability risk helper that returns `RiskLevel` + machine-readable reasons for UI.
+
+Rule:
+- Do NOT re-implement issue classification in other modules.
+  Other code should call helpers from `backend/core/issues.py` instead.
+
+### Feasibility pre-check (ignore_slots + identity-based checks)
+
+Before CP-SAT is built, we run a fast feasibility pre-check (`backend/core/feasibility.analyze_problem`).
+These tests guarantee correct behavior around ignored slots and identity-aware edge cases.
+
+Key guarantees:
+
+- If a slot is ignored, it is NOT required, so we must NOT emit:
+  - `no_onsite_candidate` for an ignored onsite slot
+  - `no_oncall_candidate` for an ignored oncall slot
+- `single_candidate_for_both_roles` is emitted only when BOTH shifts are required.
+- `forced_double_shift_same_day` is emitted only when BOTH shifts are required and the only onsite candidate
+  and the only oncall candidate is the same single doctor (identity-based detection).
+- Policy: `no_specialist` is emitted only when BOTH shifts are required.
+
+Tests:
+
+- `tests/solver/test_feasibility_ignore_slots.py`
+  - ignored onsite does not emit `no_onsite_candidate`
+  - single-candidate-for-both not emitted when one shift is ignored
+  - only-oncall-required + no oncall candidates emits `no_oncall_candidate`
+- `tests/solver/test_feasibility_forced_double_shift.py`
+  - forced double shift is detected when the same single doctor is the only candidate for both shifts
+  - not emitted when the only candidates are different doctors
+- `tests/solver/test_feasibility_no_specialist_only_when_both_required.py`
+  - `no_specialist` is not emitted when only one shift is required
+  - `no_specialist` is emitted when both shifts are required and union has no specialist
+
+### Issue codes + availability risk helpers (counts-based)
+
+We also test shared helpers in `backend/core/issues.py` that are used by availability UI and other diagnostics.
+
+Rules:
+
+- If a day is totally empty (`total_onsite == 0` AND `total_oncall == 0`), return ONLY:
+  - `no_candidates_for_day`
+  (and do NOT duplicate it with `no_onsite_candidate` / `no_oncall_candidate`)
+- For non-empty cases, return the correct minimal set of issue codes.
+- Risk classifier:
+  - `RiskLevel.ok` returns `issues=[]`
+  - empty day becomes `RiskLevel.critical` and includes `no_candidates_for_day`
+
+Tests:
+
+- `tests/solver/test_issues_counts_and_risk.py`
+  - empty day -> only `no_candidates_for_day`
+  - only onsite missing -> only `no_onsite_candidate`
+  - ok risk -> no issues
+  - empty day risk -> critical + `no_candidates_for_day`
 
 ### How to run the tests (simple commands)
 
@@ -345,6 +414,30 @@ Engine non-OK statuses:
 
 ```bash
 pytest tests/solver/test_engine_non_ok_statuses.py -vv
+```
+
+Feasibility pre-check (ignore_slots rules):
+
+```bash
+pytest tests/solver/test_feasibility_ignore_slots.py -vv
+```
+
+Feasibility pre-check (forced double shift identity detection):
+
+```bash
+pytest tests/solver/test_feasibility_forced_double_shift.py -vv
+```
+
+Feasibility pre-check (NO_SPECIALIST only when both required):
+
+```bash
+pytest tests/solver/test_feasibility_no_specialist_only_when_both_required.py -vv
+```
+
+Shared issue codes + availability risk helpers:
+
+```bash
+pytest tests/solver/test_issues_counts_and_risk.py -vv
 ```
 
 Soft objective (rest rules):
