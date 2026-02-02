@@ -1,4 +1,4 @@
-# tests/solver.conftest.py
+# tests/solver/conftest.py
 """
 Pytest fixtures for solver tests.
 
@@ -8,7 +8,7 @@ not on building long HardModel objects each time.
 This file contains:
 
 * small "building blocks" fixtures (single doctors),
-* factory fixtures that return functions: make_doctors / make_preferences / make_hard_model.
+* factory fixtures that return functions: make_doctors / make_preferences / make_hard_model / make_problem_data.
 
 IMPORTANT design goals:
 
@@ -19,11 +19,12 @@ IMPORTANT design goals:
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Callable, Dict, List, Set, Tuple
 
 import pytest
 
-from backend.core.types import DoctorInput, HardModel, PreferencesInput
+from backend.core.types import DoctorInput, HardModel, PreferencesInput, ProblemData
 from backend.models.common_enums import DoctorRole, ShiftType
 
 # Small constants (optional, but helpful in tests)
@@ -32,9 +33,7 @@ DEFAULT_YEAR: int = 2026
 DEFAULT_MONTH: int = 1
 
 # ---------------------------
-
 # 1) Simple "building block" doctor fixtures
-
 # ---------------------------
 
 
@@ -45,6 +44,7 @@ def doctor_specialist() -> DoctorInput:
 
     ```
     Fixed ID=1 so it is stable across the test suite.
+    ```
     """
     return DoctorInput(id=1, role=DoctorRole.specialist, is_head=False)
 
@@ -56,6 +56,7 @@ def doctor_resident() -> DoctorInput:
 
     ```
     Fixed ID=2 so it is stable across the test suite.
+    ```
     """
     return DoctorInput(id=2, role=DoctorRole.resident, is_head=False)
 
@@ -67,14 +68,13 @@ def doctor_head_specialist() -> DoctorInput:
 
     ```
     Fixed ID=10 so it is easy to spot in logs and assertions.
+    ```
     """
     return DoctorInput(id=10, role=DoctorRole.specialist, is_head=True)
 
 
 # ---------------------------
-
 # 2) make_doctors() factory fixture
-
 # ---------------------------
 
 
@@ -89,6 +89,7 @@ def make_doctors() -> Callable[..., Dict[int, DoctorInput]]:
 
     Returned dict format:
         {doctor_id: DoctorInput(...), ...}
+    ```
     """
 
     def _make_doctors(
@@ -131,9 +132,7 @@ def make_doctors() -> Callable[..., Dict[int, DoctorInput]]:
 
 
 # ---------------------------
-
 # 3) make_preferences() factory fixture
-
 # ---------------------------
 
 
@@ -148,6 +147,7 @@ def make_preferences() -> Callable[..., Dict[int, PreferencesInput]]:
     - allow_weekend_consecutive_onsite_oncall defaults to False.
 
     You can override per doctor via dict parameters.
+    ```
     """
 
     def _make_preferences(
@@ -188,9 +188,7 @@ def make_preferences() -> Callable[..., Dict[int, PreferencesInput]]:
 
 
 # ---------------------------
-
 # 4) make_hard_model() factory fixture (most important)
-
 # ---------------------------
 
 
@@ -205,12 +203,12 @@ def make_hard_model(
     ```
     IMPORTANT:
     - This does NOT build ProblemData.
-    - This does NOT compute weekdays.
     - It focuses on HardModel fields used directly by the solver engine.
 
     active_days logic matches backend/core/constraint_builder.py:
     - exclude ignore_days,
     - exclude days where BOTH shifts are ignored via ignore_slots.
+    ```
     """
 
     def _compute_active_days_like_production(
@@ -311,8 +309,8 @@ def make_hard_model(
         return HardModel(
             year=int(year),
             month=int(month),
-            days=list(int(d) for d in days),
-            active_days=list(int(d) for d in active_days),
+            days=[int(d) for d in days],
+            active_days=[int(d) for d in active_days],
             doctors=dict(doctors),
             preferences=dict(preferences),
             participant_doctor_ids=set(int(x) for x in participant_doctor_ids),
@@ -323,3 +321,74 @@ def make_hard_model(
         )
 
     return _make_hard_model
+
+
+# ---------------------------
+# 5) make_problem_data() factory fixture (used by seeding/objective tests)
+# ---------------------------
+
+
+@pytest.fixture()
+def make_problem_data(
+    make_doctors: Callable[..., Dict[int, DoctorInput]],
+    make_preferences: Callable[..., Dict[int, PreferencesInput]],
+) -> Callable[..., ProblemData]:
+    """
+    Factory fixture that returns a function building a ProblemData without DB.
+
+    Why this exists:
+    - several tests need ProblemData only to pass through engine/seeding/objective code,
+    - building weekdays dict by hand in every test is noisy.
+
+    Notes:
+    - ProblemData uses weekdays (0=Mon .. 6=Sun).
+    - We keep defaults consistent with make_hard_model where possible.
+    """
+
+    def _make_problem_data(
+        *,
+        year: int = DEFAULT_YEAR,
+        month: int = DEFAULT_MONTH,
+        days: List[int] | None = None,
+        doctors: Dict[int, DoctorInput] | None = None,
+        preferences: Dict[int, PreferencesInput] | None = None,
+        participant_doctor_ids: Set[int] | None = None,
+        ignore_days: Set[int] | None = None,
+        ignore_slots: Set[Tuple[int, ShiftType]] | None = None,
+        weekdays: Dict[int, int] | None = None,
+    ) -> ProblemData:
+        if days is None:
+            days = [1, 2, 3]
+
+        if doctors is None:
+            doctors = make_doctors(num_specialists=1, num_residents=1, include_head=False, start_id=1)
+
+        if preferences is None:
+            preferences = make_preferences(doctors=doctors)
+
+        if participant_doctor_ids is None:
+            participant_doctor_ids = set(doctors.keys())
+
+        if ignore_days is None:
+            ignore_days = set()
+
+        if ignore_slots is None:
+            ignore_slots = set()
+
+        if weekdays is None:
+            # Deterministic weekday map (0=Mon .. 6=Sun)
+            weekdays = {int(d): datetime(int(year), int(month), int(d)).weekday() for d in days}
+
+        return ProblemData(
+            year=int(year),
+            month=int(month),
+            days=[int(d) for d in days],
+            weekdays={int(k): int(v) for k, v in weekdays.items()},
+            doctors=dict(doctors),
+            preferences=dict(preferences),
+            participant_doctor_ids=set(int(x) for x in participant_doctor_ids),
+            ignore_days=set(int(d) for d in ignore_days),
+            ignore_slots=set((int(d), s) for (d, s) in ignore_slots),
+        )
+
+    return _make_problem_data

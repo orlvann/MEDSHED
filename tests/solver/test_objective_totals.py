@@ -11,6 +11,9 @@ Important behavior:
 Design notes:
 - We use non-consecutive days so rest rules do not influence the choice.
 - Oncall is fixed to a resident to remove oncall choices.
+
+IMPORTANT:
+- For readable failure messages we use solution_snapshot(model, solution).
 """
 
 from __future__ import annotations
@@ -21,8 +24,10 @@ import pytest
 from ortools.sat.python import cp_model
 
 from backend.core import engine, objective_builder
-from backend.core.types import ProblemData, SolverStatus
-from backend.models.common_enums import DoctorRole, ShiftType
+from backend.core.types import SolverStatus
+from backend.models.common_enums import ShiftType
+
+from ._helpers import solution_snapshot
 
 pytestmark = [pytest.mark.solver]
 
@@ -56,8 +61,8 @@ def test_solver_avoids_exceeding_max_onsite_total_when_possible(make_hard_model,
     days = [1, 3]
 
     doctors = make_doctors(num_specialists=2, num_residents=1, include_head=False, start_id=1)
-    specialist_ids = [doc_id for doc_id, d in doctors.items() if d.role == DoctorRole.specialist]
-    resident_id = [doc_id for doc_id, d in doctors.items() if d.role == DoctorRole.resident][0]
+    specialist_ids = [doc_id for doc_id, d in doctors.items() if d.role.value == "specialist"]
+    resident_id = [doc_id for doc_id, d in doctors.items() if d.role.value == "resident"][0]
 
     prefs = make_preferences(doctors=doctors)
 
@@ -85,13 +90,13 @@ def test_solver_avoids_exceeding_max_onsite_total_when_possible(make_hard_model,
     )
 
     solution = engine.build_and_solve(model)
-    assert solution.status == SolverStatus.OK
+    assert solution.status == SolverStatus.OK, f"Expected OK.\n{solution_snapshot(model, solution)}"
 
     a_onsite = _count_assignments(solution, doctor_id=doc_a, shift_type=ShiftType.onsite)
     assert a_onsite <= 1, (
         "Expected solver to avoid violating max_onsite_total when it can.\n"
         f"doc_a={doc_a} a_onsite={a_onsite}\n"
-        f"assignments={solution.assignments}"
+        f"{solution_snapshot(model, solution)}"
     )
 
 
@@ -117,8 +122,8 @@ def test_quadratic_max_penalty_prefers_spreading_excess(make_hard_model, make_do
     days = [1, 3, 5, 7, 9, 11]  # non-consecutive => rest rules do nothing
 
     doctors = make_doctors(num_specialists=2, num_residents=1, include_head=False, start_id=1)
-    specialist_ids = [doc_id for doc_id, d in doctors.items() if d.role == DoctorRole.specialist]
-    resident_id = [doc_id for doc_id, d in doctors.items() if d.role == DoctorRole.resident][0]
+    specialist_ids = [doc_id for doc_id, d in doctors.items() if d.role.value == "specialist"]
+    resident_id = [doc_id for doc_id, d in doctors.items() if d.role.value == "resident"][0]
 
     doc_a, doc_b = specialist_ids[0], specialist_ids[1]
 
@@ -126,7 +131,7 @@ def test_quadratic_max_penalty_prefers_spreading_excess(make_hard_model, make_do
     prefs[doc_a].max_onsite_total = 2
     prefs[doc_b].max_onsite_total = 2
 
-    allowed_slots = {}
+    allowed_slots: dict[tuple[int, ShiftType], list[int]] = {}
     for d in days:
         allowed_slots[(d, ShiftType.onsite)] = [doc_a, doc_b]
         allowed_slots[(d, ShiftType.oncall)] = [resident_id]
@@ -143,7 +148,7 @@ def test_quadratic_max_penalty_prefers_spreading_excess(make_hard_model, make_do
     )
 
     solution = engine.build_and_solve(model)
-    assert solution.status == SolverStatus.OK
+    assert solution.status == SolverStatus.OK, f"Expected OK.\n{solution_snapshot(model, solution)}"
 
     a_onsite = _count_assignments(solution, doctor_id=doc_a, shift_type=ShiftType.onsite)
     b_onsite = _count_assignments(solution, doctor_id=doc_b, shift_type=ShiftType.onsite)
@@ -152,7 +157,7 @@ def test_quadratic_max_penalty_prefers_spreading_excess(make_hard_model, make_do
         "Expected solver to spread max violations because quadratic excess penalty "
         "makes concentration more expensive.\n"
         f"got (a,b)=({a_onsite},{b_onsite})\n"
-        f"assignments={solution.assignments}"
+        f"{solution_snapshot(model, solution)}"
     )
 
 
@@ -178,8 +183,8 @@ def test_quadratic_target_penalty_prefers_spreading_deviation(make_hard_model, m
     days = [1, 3]
 
     doctors = make_doctors(num_specialists=2, num_residents=1, include_head=False, start_id=1)
-    specialist_ids = [doc_id for doc_id, d in doctors.items() if d.role == DoctorRole.specialist]
-    resident_id = [doc_id for doc_id, d in doctors.items() if d.role == DoctorRole.resident][0]
+    specialist_ids = [doc_id for doc_id, d in doctors.items() if d.role.value == "specialist"]
+    resident_id = [doc_id for doc_id, d in doctors.items() if d.role.value == "resident"][0]
 
     prefs = make_preferences(doctors=doctors)
 
@@ -205,7 +210,7 @@ def test_quadratic_target_penalty_prefers_spreading_deviation(make_hard_model, m
     )
 
     solution = engine.build_and_solve(model)
-    assert solution.status == SolverStatus.OK
+    assert solution.status == SolverStatus.OK, f"Expected OK.\n{solution_snapshot(model, solution)}"
 
     d1 = _get_assigned_doctor(solution, day=1, shift_type=ShiftType.onsite)
     d3 = _get_assigned_doctor(solution, day=3, shift_type=ShiftType.onsite)
@@ -215,7 +220,7 @@ def test_quadratic_target_penalty_prefers_spreading_deviation(make_hard_model, m
         "Expected solver to spread onsite assignments across two specialists "
         "because quadratic target penalty makes concentration more expensive.\n"
         f"day1={d1} day3={d3}\n"
-        f"assignments={solution.assignments}"
+        f"{solution_snapshot(model, solution)}"
     )
 
 
@@ -239,8 +244,8 @@ def test_solver_avoids_weekend_onsite_when_max_weekends_zero(make_hard_model, ma
     days = [d_sat]
 
     doctors = make_doctors(num_specialists=2, num_residents=1, include_head=False, start_id=1)
-    specialist_ids = [doc_id for doc_id, d in doctors.items() if d.role == DoctorRole.specialist]
-    resident_id = [doc_id for doc_id, d in doctors.items() if d.role == DoctorRole.resident][0]
+    specialist_ids = [doc_id for doc_id, d in doctors.items() if d.role.value == "specialist"]
+    resident_id = [doc_id for doc_id, d in doctors.items() if d.role.value == "resident"][0]
 
     doc_a = specialist_ids[0]
     doc_b = specialist_ids[1]
@@ -265,13 +270,13 @@ def test_solver_avoids_weekend_onsite_when_max_weekends_zero(make_hard_model, ma
     )
 
     solution = engine.build_and_solve(model)
-    assert solution.status == SolverStatus.OK
+    assert solution.status == SolverStatus.OK, f"Expected OK.\n{solution_snapshot(model, solution)}"
 
     got_onsite = _get_assigned_doctor(solution, day=d_sat, shift_type=ShiftType.onsite)
     assert got_onsite == doc_b, (
         "Expected solver to avoid assigning doc A onsite on a weekend when max_onsite_weekends=0.\n"
         f"got_onsite={got_onsite} doc_a={doc_a} doc_b={doc_b}\n"
-        f"assignments={solution.assignments}"
+        f"{solution_snapshot(model, solution)}"
     )
 
 
@@ -309,11 +314,13 @@ def test_totals_objective_is_defensive_when_x_missing_in_ignored_day(make_hard_m
     )
 
     solution = engine.build_and_solve(model)
-    assert solution.status == SolverStatus.OK
+    assert solution.status == SolverStatus.OK, f"Expected OK (no crash).\n{solution_snapshot(model, solution)}"
 
 
 @pytest.mark.unit
-def test_totals_objective_returns_zero_var_when_participants_empty(make_hard_model, make_doctors, make_preferences):
+def test_totals_objective_returns_zero_var_when_participants_empty(
+    make_hard_model, make_doctors, make_preferences, make_problem_data
+):
     """
     Unit-ish test (direct objective_builder call).
 
@@ -341,16 +348,15 @@ def test_totals_objective_returns_zero_var_when_participants_empty(make_hard_mod
     cp = cp_model.CpModel()
     x: dict[tuple[int, ShiftType, int], cp_model.IntVar] = {}
 
-    problem = ProblemData(
+    problem = make_problem_data(
         year=model.year,
         month=model.month,
-        days=model.days,
-        weekdays={d: datetime(model.year, model.month, d).weekday() for d in model.days},
-        doctors=model.doctors,
-        preferences=model.preferences,
-        participant_doctor_ids=model.participant_doctor_ids,
-        ignore_days=model.ignore_days,
-        ignore_slots=model.ignore_slots,
+        days=list(model.days),
+        doctors=dict(model.doctors),
+        preferences=dict(model.preferences),
+        participant_doctor_ids=set(model.participant_doctor_ids),
+        ignore_days=set(model.ignore_days),
+        ignore_slots=set(model.ignore_slots),
     )
 
     v_tot = objective_builder.attach_totals_objective(cp=cp, x=x, model=model, problem=problem)

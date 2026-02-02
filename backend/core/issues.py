@@ -3,10 +3,16 @@
 Shared issue codes and helpers for solver feasibility and availability risk.
 
 Goals:
+- Keep issue codes and default messages in one place (single source of truth).
+- Avoid duplicating "no_onsite / no_oncall / no_specialist / single_candidate" logic.
+- Provide a richer availability risk helper with machine-readable reasons.
 
-* Keep issue codes and default messages in one place (single source of truth).
-* Avoid duplicating "no_onsite / no_oncall / no_specialist / single_candidate" logic.
-* Provide a richer availability risk helper with machine-readable reasons.
+NOTE:
+Despite the historical name `FEASIBILITY_ISSUE_MESSAGES`, this module now stores
+messages for multiple phases:
+- feasibility pre-check (cheap counts),
+- seeding validation (head commitments),
+- post model-build solver failures (CP-SAT infeasible, etc.).
 """
 
 from __future__ import annotations
@@ -23,21 +29,55 @@ from backend.models.common_enums import RiskLevel
 
 # ---- Shared issue codes -------------------------------------------------------
 
+# Feasibility (pre-check) primitives
 NO_ONSITE_CANDIDATE = "no_onsite_candidate"
 NO_ONCALL_CANDIDATE = "no_oncall_candidate"
 NO_SPECIALIST = "no_specialist"
 SINGLE_CANDIDATE_FOR_BOTH_ROLES = "single_candidate_for_both_roles"
-TOO_FEW_DOCTORS_TOTAL = "too_few_doctors_total"  # more general availability warning
 
-# Default human-readable messages for feasibility issues.
+# Availability risk (warning-ish, not always a hard stop)
+TOO_FEW_DOCTORS_TOTAL = "too_few_doctors_total"
 
+# ---- Solver infeasible (post model-build) ------------------------------------
+
+# Generic "CP-SAT found no feasible schedule"
+CP_INFEASIBLE = "cp_infeasible"
+
+# More specific day-level reason that can be emitted by a deeper check:
+# "only one unique doctor can cover both shifts, but double shift is forbidden"
+FORCED_DOUBLE_SHIFT_SAME_DAY = "forced_double_shift_same_day"
+
+# ---- Head commitment issues (must-have head preferred slots) ------------------
+
+HEAD_COMMITMENT_IGNORED_SLOT = "head_commitment_ignored_slot"
+HEAD_COMMITMENT_NOT_ALLOWED = "head_commitment_not_allowed"
+HEAD_COMMITMENT_CONFLICT = "head_commitment_conflict"
+HEAD_COMMITMENT_DOUBLE_SHIFT_SAME_DAY = "head_commitment_double_shift_same_day"
+
+# ---- Default human-readable messages -----------------------------------------
+
+# Historical name kept for compatibility (other modules import it).
+# It contains messages for ALL issue codes, not only feasibility.
 FEASIBILITY_ISSUE_MESSAGES: Dict[str, str] = {
+    # Feasibility pre-check
     NO_ONSITE_CANDIDATE: "No doctor is available for onsite duty on this day.",
     NO_ONCALL_CANDIDATE: "No doctor is available for on-call duty on this day.",
     NO_SPECIALIST: "No specialist is available on this day.",
     SINGLE_CANDIDATE_FOR_BOTH_ROLES: "Only one doctor is available, roles cannot be split.",
-    # TOO_FEW_DOCTORS_TOTAL is more of a soft availability flag; not used in solver feasibility.
+    # Availability risk (can be shown as warning in UI)
+    TOO_FEW_DOCTORS_TOTAL: "Very low availability: too few doctors are available in total.",
+    # Head commitments (must-haves)
+    HEAD_COMMITMENT_IGNORED_SLOT: "Head commitment targets an ignored slot.",
+    HEAD_COMMITMENT_NOT_ALLOWED: "Head commitment is not allowed (doctor is not available for this slot).",
+    HEAD_COMMITMENT_CONFLICT: "Multiple heads have a commitment for the same slot.",
+    HEAD_COMMITMENT_DOUBLE_SHIFT_SAME_DAY: "A head commitment requests both onsite and oncall on the same day.",
+    # CP-SAT / post-build solver outcomes
+    CP_INFEASIBLE: "No schedule satisfies all hard constraints for this month (CP-SAT infeasible).",
+    FORCED_DOUBLE_SHIFT_SAME_DAY: "Only one doctor can cover both shifts on this day, but double shift is forbidden.",
 }
+
+# Optional clearer alias (nice for new code; old name still works).
+ISSUE_MESSAGES = FEASIBILITY_ISSUE_MESSAGES
 
 
 def classify_feasibility_issues_for_counts(
@@ -49,12 +89,10 @@ def classify_feasibility_issues_for_counts(
     """
     Classify feasibility issues based on aggregate capacity counts.
 
-    ```
-    This mirrors the logic previously implemented in core/feasibility.py:
-    - no onsite candidates        -> "no_onsite_candidate"
-    - no oncall candidates        -> "no_oncall_candidate"
-    - no specialist at all        -> "no_specialist"
-    - only one total candidate    -> "single_candidate_for_both_roles"
+    IMPORTANT LIMITATION:
+    This function uses ONLY counts, so it cannot detect the case:
+    "one doctor is available for BOTH shifts" (onsite=1, oncall=1, but same person).
+    That more specific case must be detected by a deeper check that knows identities.
     """
     issues: List[str] = []
 
@@ -67,8 +105,8 @@ def classify_feasibility_issues_for_counts(
     if total_specialists == 0:
         issues.append(NO_SPECIALIST)
 
+    # This is a very rough signal based on counts only.
     total_candidates = total_onsite + total_oncall
-
     if total_candidates == 1:
         issues.append(SINGLE_CANDIDATE_FOR_BOTH_ROLES)
 
@@ -80,9 +118,8 @@ class AvailabilityRiskDetails:
     """
     Structured explanation for availability risk for a single day.
 
-    ```
-    - risk: overall RiskLevel ("ok" / "alert" / "critical"),
-    - issues: machine-readable issue codes explaining why the day is critical.
+    - risk: overall RiskLevel ("ok" / "alert" / "critical")
+    - issues: machine-readable issue codes explaining why the day is critical
 
     For non-critical days, issues is typically an empty list.
     """
@@ -103,11 +140,6 @@ def classify_availability_risk_with_reasons(
     """
     Classify RiskLevel and issue codes for a single day based on availability counts.
 
-    This combines:
-    - shared feasibility issue logic (no onsite/oncall/specialist, single candidate),
-    - availability-specific warning for "too few doctors in total",
-    - existing RiskLevel rules from core/risk.py.
-
     Only critical days surface issues by default; for ok/alert days issues are empty.
     """
     total_specialists = spec_onsite + spec_oncall
@@ -117,7 +149,6 @@ def classify_availability_risk_with_reasons(
     total_onsite = spec_onsite + res_onsite
     total_oncall = spec_oncall + res_oncall
 
-    # Start from the same feasibility primitives as the solver.
     issues = classify_feasibility_issues_for_counts(
         total_onsite=total_onsite,
         total_oncall=total_oncall,
@@ -125,10 +156,10 @@ def classify_availability_risk_with_reasons(
     )
 
     # Availability-specific flag: almost nobody available in total.
+    # (Keep it separate from SINGLE_CANDIDATE_FOR_BOTH_ROLES which is a feasibility hint.)
     if total_doctors <= 1 and SINGLE_CANDIDATE_FOR_BOTH_ROLES not in issues:
         issues.append(TOO_FEW_DOCTORS_TOTAL)
 
-    # Compute overall RiskLevel using the shared classifier.
     risk = classify_day_risk_for_availability(
         spec_onsite=spec_onsite,
         res_onsite=res_onsite,
@@ -138,7 +169,6 @@ def classify_availability_risk_with_reasons(
         min_ok_specialists_total=min_ok_specialists_total,
     )
 
-    # By default, only critical days expose issues to the API.
     if risk != RiskLevel.critical:
         issues = []
 
