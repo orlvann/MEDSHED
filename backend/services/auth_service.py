@@ -1,3 +1,4 @@
+# backend/services/auth_service.py
 """
 Auth Service — login, tokens, roles.
 

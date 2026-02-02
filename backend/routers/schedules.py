@@ -55,6 +55,7 @@ from backend.models.schemas.schedule import (
 )
 from backend.routers.deps import UserCtx, require_admin, require_doctor
 from backend.services import SchedulingService
+from backend.services.errors import DomainError
 
 router = APIRouter(prefix="/api/v1/schedules")
 svc = SchedulingService()
@@ -2083,8 +2084,41 @@ def schedules_export(
             },
         },
         404: {
-            "description": "Not found (no published pointer/version).",
-            "content": {"application/json": {"example": _err_example("not_found")}},
+            "description": "Not found (no published pointer/version for this period).",
+            "content": {
+                "application/json": {
+                    "examples": {
+                        "published_missing": {
+                            "summary": "No published schedule for this period (pointer missing "
+                            "or published pointer is empty)",
+                            "value": _err_example(
+                                "not_found",
+                                detail="not_found",
+                                context={
+                                    "where": "get_published.pointer_or_published_missing",
+                                    "year": 2026,
+                                    "month": 2,
+                                    "has_pointer": False,
+                                    "published_version_id": None,
+                                },
+                            ),
+                        },
+                        "published_version_missing": {
+                            "summary": "Published pointer exists, but the pointed version row is missing",
+                            "value": _err_example(
+                                "not_found",
+                                detail="not_found",
+                                context={
+                                    "where": "get_published.published_version_missing",
+                                    "year": 2026,
+                                    "month": 2,
+                                    "published_version_id": 200,
+                                },
+                            ),
+                        },
+                    }
+                }
+            },
         },
         500: {
             "description": "Database error.",
@@ -2132,8 +2166,43 @@ def schedules_published_read(
             },
         },
         404: {
-            "description": "Not found (no published pointer/version).",
-            "content": {"application/json": {"example": _err_example("not_found")}},
+            "description": "Not found (no published pointer/version for this period).",
+            "content": {
+                "application/json": {
+                    "examples": {
+                        "published_missing": {
+                            "summary": "No published schedule for this period (pointer missing "
+                            "or published pointer is empty)",
+                            "value": _err_example(
+                                "not_found",
+                                detail="not_found",
+                                context={
+                                    "where": "get_my_assignments.pointer_or_published_missing",
+                                    "year": 2026,
+                                    "month": 2,
+                                    "doctor_id": 101,
+                                    "has_pointer": False,
+                                    "published_version_id": None,
+                                },
+                            ),
+                        },
+                        "published_version_missing": {
+                            "summary": "Published pointer exists, but the pointed version row is missing",
+                            "value": _err_example(
+                                "not_found",
+                                detail="not_found",
+                                context={
+                                    "where": "get_my_assignments.published_version_missing",
+                                    "year": 2026,
+                                    "month": 2,
+                                    "doctor_id": 101,
+                                    "published_version_id": 200,
+                                },
+                            ),
+                        },
+                    }
+                }
+            },
         },
         500: {
             "description": "Database error.",
@@ -2148,8 +2217,10 @@ def schedules_my_assignments(
     month: int = Path(..., ge=1, le=12),
     user: UserCtx = Depends(require_doctor),
 ) -> MyAssignmentsRead:
+    if user.doctor_id is None:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=make_error("forbidden"))
     try:
-        return svc.get_my_assignments(year=year, month=month, doctor_id=user.user_id if user else -1)
+        return svc.get_my_assignments(year=year, month=month, doctor_id=int(user.doctor_id))
     except ValueError as e:
         _raise(e)
         assert False
@@ -2225,11 +2296,31 @@ def schedules_my_assignments(
                     "examples": {
                         "published_missing": {
                             "summary": "No published schedule for this period",
-                            "value": _err_example("not_found"),
+                            "value": _err_example(
+                                "not_found",
+                                detail="Published schedule not found for this period.",
+                                context={
+                                    "where": "get_diagnostics.pointer_or_published_missing",
+                                    "target": "published",
+                                    "year": 2026,
+                                    "month": 2,
+                                },
+                            ),
                         },
                         "doctor_not_in_snapshot": {
                             "summary": "Published schedule exists, but this doctor is not present in the snapshot",
-                            "value": _err_example("not_found"),
+                            "value": _err_example(
+                                "not_found",
+                                detail="Doctor not present in the published snapshot for this period.",
+                                context={
+                                    "where": "published_my_diagnostics.doctor_not_in_snapshot",
+                                    "target": "published",
+                                    "year": 2026,
+                                    "month": 2,
+                                    "doctor_id": 101,
+                                    "version_id": 200,
+                                },
+                            ),
                         },
                     }
                 }
@@ -2280,16 +2371,43 @@ def schedules_published_my_diagnostics(
 
         # Published must have a version_id.
         if diag.version_id is None:
-            raise ValueError("not_found")
+            raise DomainError(
+                "not_found",
+                context={
+                    "where": "published_my_diagnostics.published_missing",
+                    "target": "published",
+                    "year": int(year),
+                    "month": int(month),
+                },
+            )
 
         details = diag.details
         if details is None:
-            raise ValueError("not_found")
+            raise DomainError(
+                "not_found",
+                context={
+                    "where": "published_my_diagnostics.details_missing",
+                    "target": "published",
+                    "year": int(year),
+                    "month": int(month),
+                    "version_id": int(diag.version_id),
+                },
+            )
 
         my_row = next((r for r in details.per_doctor if int(r.doctor_id) == int(user.doctor_id)), None)
         if my_row is None:
             # Doctor not included in this published snapshot.
-            raise ValueError("not_found")
+            raise DomainError(
+                "not_found",
+                context={
+                    "where": "published_my_diagnostics.doctor_not_in_snapshot",
+                    "target": "published",
+                    "year": int(year),
+                    "month": int(month),
+                    "version_id": int(diag.version_id),
+                    "doctor_id": int(user.doctor_id),
+                },
+            )
 
         return MyDoctorDiagnosticsRead(
             version_id=int(diag.version_id),

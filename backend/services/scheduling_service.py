@@ -1794,10 +1794,27 @@ class SchedulingService:
         with SessionLocal() as session:
             ptr = session.get(SchedulePointer, {"year": year, "month": month})
             if ptr is None or ptr.current_published_version_id is None:
-                raise ValueError("not_found")
+                raise DomainError(
+                    "not_found",
+                    context={
+                        "where": "get_published.pointer_or_published_missing",
+                        "year": int(year),
+                        "month": int(month),
+                        "has_pointer": bool(ptr is not None),
+                        "published_version_id": None if ptr is None else ptr.current_published_version_id,
+                    },
+                )
             ver = session.get(ScheduleVersion, int(ptr.current_published_version_id))
             if ver is None:
-                raise ValueError("not_found")
+                raise DomainError(
+                    "not_found",
+                    context={
+                        "where": "get_published.published_version_missing",
+                        "year": int(year),
+                        "month": int(month),
+                        "published_version_id": int(ptr.current_published_version_id),
+                    },
+                )
 
             publications_total = _published_total(session, year, month)
             has_prev, has_next = _published_neighbors(session, year, month, int(ver.id))
@@ -1826,11 +1843,30 @@ class SchedulingService:
         with SessionLocal() as session:
             ptr = session.get(SchedulePointer, {"year": year, "month": month})
             if ptr is None or ptr.current_published_version_id is None:
-                raise ValueError("not_found")
+                raise DomainError(
+                    "not_found",
+                    context={
+                        "where": "get_my_assignments.pointer_or_published_missing",
+                        "year": int(year),
+                        "month": int(month),
+                        "doctor_id": int(doctor_id),
+                        "has_pointer": bool(ptr is not None),
+                        "published_version_id": None if ptr is None else ptr.current_published_version_id,
+                    },
+                )
 
             ver = session.get(ScheduleVersion, int(ptr.current_published_version_id))
             if ver is None:
-                raise ValueError("not_found")
+                raise DomainError(
+                    "not_found",
+                    context={
+                        "where": "get_my_assignments.published_version_missing",
+                        "year": int(year),
+                        "month": int(month),
+                        "doctor_id": int(doctor_id),
+                        "published_version_id": int(ptr.current_published_version_id),
+                    },
+                )
 
             payload_obj = SchedulePayload.model_validate(ver.payload)
 
@@ -1911,15 +1947,42 @@ class SchedulingService:
 
             ptr = db.get(SchedulePointer, {"year": year, "month": month})
             if not ptr:
-                raise ValueError("not_found")
+                raise DomainError(
+                    "not_found",
+                    context={
+                        "where": "get_diagnostics.pointer_missing",
+                        "target": str(target),
+                        "year": int(year),
+                        "month": int(month),
+                    },
+                )
 
             vid = ptr.current_draft_version_id if target == "draft" else ptr.current_published_version_id
             if vid is None:
-                raise ValueError("not_found")
+                raise DomainError(
+                    "not_found",
+                    context={
+                        "where": "get_diagnostics.version_pointer_empty",
+                        "target": str(target),
+                        "year": int(year),
+                        "month": int(month),
+                        "draft_version_id": None if target != "draft" else ptr.current_draft_version_id,
+                        "published_version_id": None if target != "published" else ptr.current_published_version_id,
+                    },
+                )
 
             ver = db.get(ScheduleVersion, int(vid))
             if ver is None:
-                raise ValueError("not_found")
+                raise DomainError(
+                    "not_found",
+                    context={
+                        "where": "get_diagnostics.version_row_missing",
+                        "target": str(target),
+                        "year": int(year),
+                        "month": int(month),
+                        "version_id": int(vid),
+                    },
+                )
 
             diag = _compute_or_upsert_diagnostics(
                 db,
