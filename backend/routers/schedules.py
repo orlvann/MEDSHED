@@ -423,15 +423,23 @@ _OPENAPI_EXAMPLES_PUBLISH_REQUEST = {
                                 context={
                                     "year": 2026,
                                     "month": 2,
-                                    "issues_total": 7,
+                                    "issues_total": 1,
                                     "issues_truncated": False,
                                     "issues_summary": [
-                                        {"code": "no_oncall_candidate", "count": 3},
-                                        {"code": "no_onsite_candidate", "count": 4},
+                                        {"code": "no_specialist", "count": 1},
                                     ],
                                     "issues_sample": [
-                                        {"day": 3, "code": "no_onsite_candidate", "message": "no_onsite_candidate"},
-                                        {"day": 3, "code": "no_oncall_candidate", "message": "no_oncall_candidate"},
+                                        {
+                                            "day": 24,
+                                            "code": "no_specialist",
+                                            "message": "No specialist is available on this day.",
+                                        }
+                                    ],
+                                    "suggested_ignored_slots": [
+                                        {"day": 24, "shift_type": "onsite"},
+                                    ],
+                                    "suggested_ignore_reason_codes": [
+                                        "no_specialist",
                                     ],
                                 },
                             ),
