@@ -45,10 +45,18 @@ def test_partner_bonus_pushes_partners_to_work_same_days(make_hard_model, make_d
     - days: [6, 8] (non-consecutive)
     - 2 specialists: A, B
     - 1 resident: E
-    - allowed_slots: everyone can do both shifts on both days
+    - onsite can be done ONLY by specialists
+    - oncall can be done by anyone (including specialists)
 
-    Without partner bonus, many schedules are equally valid.
-    With partner bonus A prefers B, solver should pick a schedule that maximizes together days for (A,B).
+    Why this setup?
+    - If we allow resident to do everything, fairness/totals may prefer "one specialist per day"
+      and push oncall into the resident, which makes partners never work together.
+    - Here we keep the model flexible (oncall can be specialist or resident),
+      but we avoid the situation where non-partner objectives dominate the choice.
+
+    Expectation:
+    - With partner bonus A prefers B, the solver should pick a schedule that maximizes
+      together days for (A,B). In this 2-day setup the best is: together on BOTH days.
     """
     year = 2026
     month = 1
@@ -63,13 +71,30 @@ def test_partner_bonus_pushes_partners_to_work_same_days(make_hard_model, make_d
 
     a_id = specialist_ids[0]
     b_id = specialist_ids[1]
+    r_id = resident_ids[0]
 
     prefs = make_preferences(doctors=doctors)
+
+    # Partner preference: A prefers to work with B.
     prefs[a_id].preferred_partners = [b_id]
+
+    # IMPORTANT STABILITY NOTE:
+    # Neutralize totals/fairness pressure that could otherwise push oncall into the resident.
+    # We want the model to naturally allow A+B to be "together" without being dominated
+    # by other objectives.
+    prefs[a_id].target_onsite_total = 1
+    prefs[b_id].target_onsite_total = 1
+    prefs[a_id].target_oncall_total = 1
+    prefs[b_id].target_oncall_total = 1
+
+    # Resident is not "expected" to take oncall in this tiny scenario.
+    prefs[r_id].target_oncall_total = 0
 
     allowed_slots = {}
     for d in days:
-        allowed_slots[(d, ShiftType.onsite)] = list(doctors.keys())
+        # onsite: only specialists
+        allowed_slots[(d, ShiftType.onsite)] = list(specialist_ids)
+        # oncall: anyone
         allowed_slots[(d, ShiftType.oncall)] = list(doctors.keys())
 
     model = make_hard_model(
@@ -121,18 +146,27 @@ def test_partner_bonus_increases_or_keeps_together_count(make_hard_model, make_d
 
     doctors = make_doctors(num_specialists=2, num_residents=1, include_head=False, start_id=1)
     specialist_ids = [doc_id for doc_id, d in doctors.items() if d.role == DoctorRole.specialist]
+    resident_ids = [doc_id for doc_id, d in doctors.items() if d.role == DoctorRole.resident]
 
     a_id = specialist_ids[0]
     b_id = specialist_ids[1]
+    r_id = resident_ids[0]
 
     allowed_slots = {}
     for d in days:
-        allowed_slots[(d, ShiftType.onsite)] = list(doctors.keys())
+        allowed_slots[(d, ShiftType.onsite)] = list(specialist_ids)
         allowed_slots[(d, ShiftType.oncall)] = list(doctors.keys())
 
     # Run A: with partner
     prefs_with = make_preferences(doctors=doctors)
     prefs_with[a_id].preferred_partners = [b_id]
+
+    # Keep the same stabilization targets as in the test above.
+    prefs_with[a_id].target_onsite_total = 1
+    prefs_with[b_id].target_onsite_total = 1
+    prefs_with[a_id].target_oncall_total = 1
+    prefs_with[b_id].target_oncall_total = 1
+    prefs_with[r_id].target_oncall_total = 0
 
     model_with = make_hard_model(
         year=year,
@@ -150,6 +184,12 @@ def test_partner_bonus_increases_or_keeps_together_count(make_hard_model, make_d
 
     # Run B: without partner
     prefs_without = make_preferences(doctors=doctors)
+
+    prefs_without[a_id].target_onsite_total = 1
+    prefs_without[b_id].target_onsite_total = 1
+    prefs_without[a_id].target_oncall_total = 1
+    prefs_without[b_id].target_oncall_total = 1
+    prefs_without[r_id].target_oncall_total = 0
 
     model_without = make_hard_model(
         year=year,

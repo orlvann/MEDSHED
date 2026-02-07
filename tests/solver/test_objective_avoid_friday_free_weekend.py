@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+from backend.core import scoring
 from backend.core.engine import build_and_solve
 from backend.models.common_enums import ShiftType
 from tests.solver._helpers import assignments_to_map, solution_snapshot
 
 
-def test_avoid_friday_if_weekend_off_prefers_doctor_who_works_weekend(make_hard_model, make_doctors, make_preferences):
+def test_avoid_friday_if_weekend_off_prefers_doctor_who_works_weekend(
+    make_hard_model, make_doctors, make_preferences, monkeypatch
+):
     """
     INTEGRATION TEST.
 
@@ -16,7 +19,18 @@ def test_avoid_friday_if_weekend_off_prefers_doctor_who_works_weekend(make_hard_
 
     The objective adds a small penalty when someone works on Friday AND has a fully free weekend after it.
     So the solver should prefer assigning Friday onsite to B (because B does not have a free weekend).
+
+    IMPORTANT STABILITY NOTE:
+    Friday rule is a very low-priority tie-breaker in the global objective.
+    After fairness refactor, fairness terms may dominate the decision even in this tiny scenario.
+
+    This test is specifically about the FRIDAY RULE behavior, not about global priority tuning,
+    so we disable fairness weights here to isolate the tie-breaker.
     """
+
+    # Disable fairness objective influence for this test only.
+    monkeypatch.setattr(scoring, "fairness_weight", lambda *args, **kwargs: 0)
+
     doctors = make_doctors(num_specialists=2, num_residents=2, include_head=False, start_id=1)
     prefs = make_preferences(doctors=doctors)
 

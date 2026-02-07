@@ -170,6 +170,7 @@ def build_and_solve(model: HardModel) -> SolverSolution:
         preferences=model.preferences,
         participant_doctor_ids=model.participant_doctor_ids,
         ignore_slots=model.ignore_slots,
+        carryover=model.carryover,
     )
 
     # Add rest-rule penalties (ETAP 3A).

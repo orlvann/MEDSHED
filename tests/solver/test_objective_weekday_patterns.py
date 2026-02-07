@@ -63,6 +63,16 @@ def test_preferred_weekday_breaks_tie(make_hard_model, make_doctors, make_prefer
 
     prefs = make_preferences(doctors=doctors)
 
+    # IMPORTANT TEST STABILITY NOTE:
+    # We must keep totals + fairness from breaking the tie in a 1-day scenario.
+    # Otherwise the solver may pick a doctor based on fairness "expected" (base/base+1)
+    # instead of weekday patterns.
+    #
+    # Setting the SAME target for both specialists makes totals + fairness symmetric:
+    # whichever specialist gets the onsite shift, the total penalty is the same.
+    prefs[preferred_doc_id].target_onsite_total = 0
+    prefs[other_doc_id].target_onsite_total = 0
+
     # Only one specialist prefers this weekday for onsite.
     prefs[preferred_doc_id].preferred_onsite_weekdays = [weekday_x]
     prefs[other_doc_id].preferred_onsite_weekdays = []
@@ -131,6 +141,12 @@ def test_avoid_weekday_breaks_tie(make_hard_model, make_doctors, make_preference
     other_doc_id = specialist_ids[1]
 
     prefs = make_preferences(doctors=doctors)
+
+    # IMPORTANT TEST STABILITY NOTE:
+    # Same idea as in test_preferred_weekday_breaks_tie:
+    # make totals + fairness symmetric so weekday patterns decide the tie.
+    prefs[avoid_doc_id].target_onsite_total = 0
+    prefs[other_doc_id].target_onsite_total = 0
 
     # One specialist wants to avoid this weekday for onsite.
     prefs[avoid_doc_id].avoid_onsite_weekdays = [weekday_x]

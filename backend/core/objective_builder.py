@@ -14,7 +14,7 @@ STAGE 2:
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Dict, List, Set, Tuple
+from typing import Dict, List, Optional, Set, Tuple
 
 from ortools.sat.python import cp_model
 
@@ -476,6 +476,13 @@ def attach_fairness_objective(
         else:
             group_to_doctors["resident"].append(doc_id)
 
+    # 2.5) NEW: compute deterministic per-doctor expected (business algorithm)
+    expected_map = _compute_expected_map_for_fairness(
+        model=model,
+        problem=problem,
+        group_to_doctors=group_to_doctors,
+    )
+
     def _add_fairness_for_category(
         *,
         group_name: str,
@@ -517,62 +524,13 @@ def attach_fairness_objective(
 
             totals.append(total)
 
-        sum_totals = cp.NewIntVar(0, n * max_per_doctor, f"fair_sum_{group_name}_{category_name}")
-        cp.Add(sum_totals == sum(totals))
-
-        average_total = cp.NewIntVar(0, max_per_doctor, f"fair_avg_{group_name}_{category_name}")
-        cp.Add(n * average_total <= sum_totals)
-        cp.Add(sum_totals <= n * average_total + (n - 1))
-
         for idx, doc_id in enumerate(group_doctors):
-            # Expected per doctor:
-            # - if the doctor has a target for this category -> expected = target
-            # - else -> expected = group average (fairness)
-            #
-            # NOTE:
-            # Our PreferenceInput has targets for:
-            # - monthly totals: target_onsite_total / target_oncall_total
-            # - weekend totals: target_onsite_weekends / target_oncall_weekends
-            #
-            # For fairness categories:
-            # - weekend category uses target_*_weekends
-            # - weekday category uses target_*_total (and if weekend target exists, we use: total - weekend_target)
-            # This keeps "I want more total duties" compatible with fairness (expected is shifted).
-            prefs = problem.preferences.get(doc_id)
-
-            is_weekend_category = "weekend" in category_name
-            expected_value: int | None = None
-
-            if prefs is not None:
-                if shift_type == ShiftType.onsite:
-                    if is_weekend_category:
-                        if prefs.target_onsite_weekends is not None:
-                            expected_value = int(prefs.target_onsite_weekends)
-                    else:
-                        if prefs.target_onsite_total is not None:
-                            expected_value = int(prefs.target_onsite_total)
-                            # If weekend target exists, interpret total target as (weekday + weekend).
-                            if prefs.target_onsite_weekends is not None:
-                                expected_value = expected_value - int(prefs.target_onsite_weekends)
-                else:
-                    if is_weekend_category:
-                        if prefs.target_oncall_weekends is not None:
-                            expected_value = int(prefs.target_oncall_weekends)
-                    else:
-                        if prefs.target_oncall_total is not None:
-                            expected_value = int(prefs.target_oncall_total)
-                            if prefs.target_oncall_weekends is not None:
-                                expected_value = expected_value - int(prefs.target_oncall_weekends)
-
-            # Keep expected inside [0..max_per_doctor] to avoid invalid bounds.
-            if expected_value is not None:
-                expected_value = max(0, min(int(expected_value), int(max_per_doctor)))
+            # NEW: expected comes from our business algorithm (group targets + caps + +1 rotation + personal targets)
+            expected_value = expected_map.get((int(doc_id), shift_type, category_name), 0)
+            expected_value = max(0, min(int(expected_value), int(max_per_doctor)))
 
             expected_total = cp.NewIntVar(0, max_per_doctor, f"fair_expected_{group_name}_{category_name}_doc{doc_id}")
-            if expected_value is not None:
-                cp.Add(expected_total == int(expected_value))
-            else:
-                cp.Add(expected_total == average_total)
+            cp.Add(expected_total == int(expected_value))
 
             deviation_pos = cp.NewIntVar(0, max_per_doctor, f"fair_dev_pos_{group_name}_{category_name}_doc{doc_id}")
             deviation_neg = cp.NewIntVar(0, max_per_doctor, f"fair_dev_neg_{group_name}_{category_name}_doc{doc_id}")
@@ -653,6 +611,389 @@ def attach_fairness_objective(
         cp.Add(total_penalty == 0)
 
     return total_penalty
+
+
+def _compute_expected_map_for_fairness(
+    *,
+    model: HardModel,
+    problem: ProblemData,
+    group_to_doctors: Dict[str, List[int]],
+) -> Dict[Tuple[int, ShiftType, str], int]:
+    """
+    Compute deterministic expected per doctor in 4 categories:
+    - onsite_weekend, onsite_weekday, oncall_weekend, oncall_weekday
+
+    Business rules implemented:
+    - Demand R_* is counted only for REQUIRED slots (active_days minus ignore_slots).
+    - Resident caps come from "full days" (both shifts required) and allowed_slots:
+        * CAP_resident_onsite_total = count(full_days where any resident allowed on onsite)
+        * CAP_resident_oncall_total = count(full_days where any resident allowed on oncall)
+      (This models "max 1 resident per full day", split by shift capability.)
+    - Forced share: if a required slot can be covered ONLY by one group, that group target must include it.
+    - Group targets are proportional to group size, clamped by caps and forced share.
+    - Split totals into weekend/weekdays.
+    - Allocate group targets to doctors without personal targets as base/base+1,
+      where +1 rotates using carryover.had_plus1_*_last.
+    - If doctor has personal target(s), override expected for that shift type (with normalization + max trimming).
+    """
+
+    # -----------------------------
+    # Helpers
+    # -----------------------------
+    def _weekday(day: int) -> int:
+        wd = problem.weekdays.get(int(day))
+        if wd is not None:
+            return int(wd)
+        return datetime(problem.year, problem.month, int(day)).weekday()
+
+    def _is_weekend(day: int) -> bool:
+        return _weekday(int(day)) in (5, 6)
+
+    def _clamp(v: int, lo: int, hi: int) -> int:
+        return max(int(lo), min(int(v), int(hi)))
+
+    def _round_int(v: float) -> int:
+        return int(round(v))
+
+    residents = list(group_to_doctors.get("resident", []))
+    specialists = list(group_to_doctors.get("specialist", []))
+    n_res = len(residents)
+    n_spec = len(specialists)
+    n_all = n_res + n_spec
+
+    # Role lookup
+    is_resident: Dict[int, bool] = {}
+    for did, doc in model.doctors.items():
+        if doc is None:
+            continue
+        is_resident[int(did)] = doc.role != DoctorRole.specialist
+
+    # -----------------------------
+    # STEP 0: Demand R_* (required slots only)
+    # -----------------------------
+    R_onsite_total = 0
+    R_oncall_total = 0
+    R_onsite_weekends = 0
+    R_oncall_weekends = 0
+
+    for day in model.active_days:
+        if (day, ShiftType.onsite) not in model.ignore_slots:
+            R_onsite_total += 1
+            if _is_weekend(day):
+                R_onsite_weekends += 1
+        if (day, ShiftType.oncall) not in model.ignore_slots:
+            R_oncall_total += 1
+            if _is_weekend(day):
+                R_oncall_weekends += 1
+
+    # -----------------------------
+    # STEP 1: Caps from resident pairing on full days (both required)
+    # -----------------------------
+    # BUSINESS NOTE (why these caps exist):
+    #
+    # In engine.py we enforce the hard rule:
+    #   "at least one specialist per day" ONLY when BOTH shifts are required.
+    #
+    # For a "full day" (onsite + oncall required), this implies:
+    # - the day cannot be staffed as (resident + resident),
+    # - therefore at most ONE of the two slots can be assigned to a resident.
+    #
+    # So, even if we have many residents in the pool, the total number of resident
+    # assignments across full days is bounded by how many full days exist AND
+    # whether residents are actually allowed in a given slot.
+    #
+    # We compute two slot-specific caps (more precise than one global cap):
+    # - CAP_resident_onsite_total: number of full days where ANY resident can do onsite
+    # - CAP_resident_oncall_total: number of full days where ANY resident can do oncall
+    #
+    # These caps are used only for FAIRNESS expected/targets (soft objective),
+    # not as additional hard constraints.
+
+    full_days: List[int] = []
+    for day in model.active_days:
+        onsite_req = (day, ShiftType.onsite) not in model.ignore_slots
+        oncall_req = (day, ShiftType.oncall) not in model.ignore_slots
+        if onsite_req and oncall_req:
+            full_days.append(int(day))
+
+    def _any_resident_allowed(day: int, shift: ShiftType) -> bool:
+        allowed = model.allowed_slots.get((int(day), shift), [])
+        return any(bool(is_resident.get(int(did), False)) for did in allowed)
+
+    CAP_resident_onsite_total = sum(1 for d in full_days if _any_resident_allowed(d, ShiftType.onsite))
+    CAP_resident_oncall_total = sum(1 for d in full_days if _any_resident_allowed(d, ShiftType.oncall))
+
+    # -----------------------------
+    # STEP 1.5: Forced share (feasibility-aware)
+    # If for a required slot only residents are possible -> residents MUST take it (in targets),
+    # similarly if only specialists are possible -> specialists forced.
+    # -----------------------------
+    def _forced_counts_for_shift(shift: ShiftType) -> Tuple[int, int, int, int]:
+        """
+        Returns:
+            forced_res_total, forced_spec_total, forced_res_weekends, forced_spec_weekends
+        """
+        forced_res_total = 0
+        forced_spec_total = 0
+        forced_res_weekends = 0
+        forced_spec_weekends = 0
+
+        for day in model.active_days:
+            if (day, shift) in model.ignore_slots:
+                continue
+
+            allowed = model.allowed_slots.get((int(day), shift), [])
+            has_res = any(bool(is_resident.get(int(did), False)) for did in allowed)
+            has_spec = any(not bool(is_resident.get(int(did), False)) for did in allowed)
+
+            if has_res and not has_spec:
+                forced_res_total += 1
+                if _is_weekend(day):
+                    forced_res_weekends += 1
+            elif has_spec and not has_res:
+                forced_spec_total += 1
+                if _is_weekend(day):
+                    forced_spec_weekends += 1
+
+        return forced_res_total, forced_spec_total, forced_res_weekends, forced_spec_weekends
+
+    forced_res_ons_total, forced_spec_ons_total, forced_res_ons_wknd, forced_spec_ons_wknd = _forced_counts_for_shift(
+        ShiftType.onsite
+    )
+    forced_res_onc_total, forced_spec_onc_total, forced_res_onc_wknd, forced_spec_onc_wknd = _forced_counts_for_shift(
+        ShiftType.oncall
+    )
+
+    # -----------------------------
+    # STEP 2: Group targets between groups (proportional, clamped)
+    # -----------------------------
+    share_res = (n_res / n_all) if n_all > 0 else 0.0
+
+    def _compute_group_target_total(
+        *,
+        R_total: int,
+        forced_res_total: int,
+        forced_spec_total: int,
+        cap_res_total: int,
+    ) -> int:
+        """
+        Compute resident target total for a shift type.
+        - start from proportional ideal
+        - clamp by cap (pairing)
+        - but must be >= forced_res_total
+        - and <= R_total - forced_spec_total
+        """
+        if n_all <= 0:
+            return int(forced_res_total)
+
+        ideal = _round_int(R_total * share_res)
+        lo = int(forced_res_total)
+        hi = int(max(0, R_total - forced_spec_total))
+        # apply cap
+        hi = min(int(hi), int(cap_res_total))
+        return _clamp(int(ideal), int(lo), int(hi))
+
+    target_resident_onsite_total = _compute_group_target_total(
+        R_total=R_onsite_total,
+        forced_res_total=forced_res_ons_total,
+        forced_spec_total=forced_spec_ons_total,
+        cap_res_total=CAP_resident_onsite_total,
+    )
+    target_resident_oncall_total = _compute_group_target_total(
+        R_total=R_oncall_total,
+        forced_res_total=forced_res_onc_total,
+        forced_spec_total=forced_spec_onc_total,
+        cap_res_total=CAP_resident_oncall_total,
+    )
+
+    target_specialist_onsite_total = max(0, R_onsite_total - target_resident_onsite_total)
+    target_specialist_oncall_total = max(0, R_oncall_total - target_resident_oncall_total)
+
+    # -----------------------------
+    # STEP 3: Split group totals into weekend/weekdays (with consistency fix)
+    # -----------------------------
+    def _split_group_total(
+        *,
+        group_total: int,
+        R_weekends: int,
+        forced_group_weekends: int,
+        share: float,
+    ) -> Tuple[int, int]:
+        """
+        Returns: (weekend_target, weekday_target)
+        Policy:
+        - start from proportional weekend ideal
+        - clamp weekends to [forced_weekends .. min(group_total, R_weekends)]
+        - ensure total >= weekends by raising total if needed (your rule)
+        """
+        ideal_weekends = _round_int(R_weekends * share)
+        wknd = _clamp(int(ideal_weekends), int(forced_group_weekends), int(min(group_total, R_weekends)))
+        fixed_total = max(int(group_total), int(wknd))
+        wd = int(fixed_total) - int(wknd)
+        return int(wknd), int(wd)
+
+    # Residents
+    res_ons_wknd, res_ons_wd = _split_group_total(
+        group_total=target_resident_onsite_total,
+        R_weekends=R_onsite_weekends,
+        forced_group_weekends=forced_res_ons_wknd,
+        share=share_res,
+    )
+    res_onc_wknd, res_onc_wd = _split_group_total(
+        group_total=target_resident_oncall_total,
+        R_weekends=R_oncall_weekends,
+        forced_group_weekends=forced_res_onc_wknd,
+        share=share_res,
+    )
+
+    # Specialists = remainder (also must cover their forced weekends, but forced already handled by remainder)
+    spec_ons_wknd = max(0, R_onsite_weekends - res_ons_wknd)
+    spec_onc_wknd = max(0, R_oncall_weekends - res_onc_wknd)
+    spec_ons_wd = max(0, target_specialist_onsite_total - spec_ons_wknd)
+    spec_onc_wd = max(0, target_specialist_oncall_total - spec_onc_wknd)
+
+    # -----------------------------
+    # STEP 4: Allocate group targets to doctors without personal targets (base/base+1 with rotation)
+    # -----------------------------
+    def _had_plus1_last(doc_id: int, category_name: str) -> bool:
+        """
+        category_name in:
+        - onsite_weekday, onsite_weekend, oncall_weekday, oncall_weekend
+        """
+        co = problem.carryover
+        if co is None:
+            return False
+        dco = co.per_doctor.get(int(doc_id))
+        if dco is None:
+            return False
+
+        if category_name == "onsite_weekday":
+            return bool(dco.had_plus1_onsite_weekday_last)
+        if category_name == "onsite_weekend":
+            return bool(dco.had_plus1_onsite_weekend_last)
+        if category_name == "oncall_weekday":
+            return bool(dco.had_plus1_oncall_weekday_last)
+        if category_name == "oncall_weekend":
+            return bool(dco.had_plus1_oncall_weekend_last)
+        return False
+
+    def _allocate_base_plus_one(
+        doctors: List[int],
+        target: int,
+        category_name: str,
+    ) -> Dict[int, int]:
+        n = len(doctors)
+        if n <= 0:
+            return {}
+        base = int(target) // int(n)
+        rem = int(target) % int(n)
+
+        # Rotation: those who did NOT have +1 last month get priority for +1 now.
+        ordered = sorted(doctors, key=lambda did: (bool(_had_plus1_last(int(did), category_name)), int(did)))
+
+        out = {int(did): int(base) for did in doctors}
+        for did in ordered[:rem]:
+            out[int(did)] = int(base) + 1
+        return out
+
+    # Determine who has personal targets for a given shift type (onsite/oncall)
+    def _has_personal_target(doc_id: int, shift_type: ShiftType) -> bool:
+        prefs = problem.preferences.get(int(doc_id))
+        if prefs is None:
+            return False
+        if shift_type == ShiftType.onsite:
+            return (prefs.target_onsite_total is not None) or (prefs.target_onsite_weekends is not None)
+        return (prefs.target_oncall_total is not None) or (prefs.target_oncall_weekends is not None)
+
+    expected: Dict[Tuple[int, ShiftType, str], int] = {}
+
+    def _fill_group_expected(
+        group_name: str,
+        shift_type: ShiftType,
+        category_name: str,
+        target_value: int,
+    ) -> None:
+        docs = list(group_to_doctors.get(group_name, []))
+        # Only doctors WITHOUT personal targets participate in base/base+1 allocation
+        docs_no_personal = [int(did) for did in docs if not _has_personal_target(int(did), shift_type)]
+        alloc = _allocate_base_plus_one(docs_no_personal, int(target_value), category_name)
+        for did, v in alloc.items():
+            expected[(int(did), shift_type, category_name)] = int(v)
+
+    # Fill defaults for non-personal-target doctors
+    _fill_group_expected("resident", ShiftType.onsite, "onsite_weekend", res_ons_wknd)
+    _fill_group_expected("resident", ShiftType.onsite, "onsite_weekday", res_ons_wd)
+    _fill_group_expected("resident", ShiftType.oncall, "oncall_weekend", res_onc_wknd)
+    _fill_group_expected("resident", ShiftType.oncall, "oncall_weekday", res_onc_wd)
+
+    _fill_group_expected("specialist", ShiftType.onsite, "onsite_weekend", spec_ons_wknd)
+    _fill_group_expected("specialist", ShiftType.onsite, "onsite_weekday", spec_ons_wd)
+    _fill_group_expected("specialist", ShiftType.oncall, "oncall_weekend", spec_onc_wknd)
+    _fill_group_expected("specialist", ShiftType.oncall, "oncall_weekday", spec_onc_wd)
+
+    # -----------------------------
+    # STEP 4A: Override expected for doctors with personal targets
+    # - normalize (max trims target)
+    # - clamp to month demand limits
+    # - fix consistency: total >= weekends by raising total
+    # -----------------------------
+    def _normalize_personal(
+        *,
+        t_total: Optional[int],
+        t_weekends: Optional[int],
+        max_total: Optional[int],
+        max_weekends: Optional[int],
+        R_total_limit: int,
+        R_weekend_limit: int,
+    ) -> Tuple[int, int, int]:
+        total = 0 if t_total is None else int(t_total)
+        wknd = 0 if t_weekends is None else int(t_weekends)
+
+        if max_total is not None:
+            total = min(int(total), int(max_total))
+        if max_weekends is not None:
+            wknd = min(int(wknd), int(max_weekends))
+
+        total = _clamp(int(total), 0, int(R_total_limit))
+        wknd = _clamp(int(wknd), 0, int(R_weekend_limit))
+
+        fixed_total = max(int(total), int(wknd))  # your rule: weekends priority, raise total
+        fixed_wknd = int(wknd)
+        fixed_wd = int(fixed_total) - int(fixed_wknd)
+        return int(fixed_total), int(fixed_wknd), int(fixed_wd)
+
+    for doc_id in sorted(model.participant_doctor_ids):
+        prefs = problem.preferences.get(int(doc_id))
+        if prefs is None:
+            continue
+
+        # Onsite
+        if prefs.target_onsite_total is not None or prefs.target_onsite_weekends is not None:
+            _, wknd, wd = _normalize_personal(
+                t_total=prefs.target_onsite_total,
+                t_weekends=prefs.target_onsite_weekends,
+                max_total=getattr(prefs, "max_onsite_total", None),
+                max_weekends=getattr(prefs, "max_onsite_weekends", None),
+                R_total_limit=R_onsite_total,
+                R_weekend_limit=R_onsite_weekends,
+            )
+            expected[(int(doc_id), ShiftType.onsite, "onsite_weekend")] = int(wknd)
+            expected[(int(doc_id), ShiftType.onsite, "onsite_weekday")] = int(wd)
+
+        # Oncall
+        if prefs.target_oncall_total is not None or prefs.target_oncall_weekends is not None:
+            _, wknd, wd = _normalize_personal(
+                t_total=prefs.target_oncall_total,
+                t_weekends=prefs.target_oncall_weekends,
+                max_total=getattr(prefs, "max_oncall_total", None),
+                max_weekends=getattr(prefs, "max_oncall_weekends", None),
+                R_total_limit=R_oncall_total,
+                R_weekend_limit=R_oncall_weekends,
+            )
+            expected[(int(doc_id), ShiftType.oncall, "oncall_weekend")] = int(wknd)
+            expected[(int(doc_id), ShiftType.oncall, "oncall_weekday")] = int(wd)
+
+    return expected
 
 
 def attach_weekday_patterns_objective(
