@@ -91,4 +91,5 @@ def build_hard_model(problem: ProblemData, seed_hints: Any | None = None) -> Har
         ignore_slots=set(problem.ignore_slots),
         allowed_slots=allowed_slots,
         seed_hints=seed_hints,
+        carryover=problem.carryover,
     )
