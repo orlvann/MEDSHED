@@ -8,7 +8,7 @@ from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 import pytest
 
 from backend.core import constraint_builder
-from backend.core.types import DoctorInput, HardModel, PreferencesInput
+from backend.core.types import DoctorInput, HardModel, MonthCarryover, PreferencesInput
 from backend.models.common_enums import DoctorRole, ShiftType
 
 
@@ -51,6 +51,7 @@ def _problemdata_kwargs_with_aliases(
     participant_doctor_ids: Set[int],
     ignore_slots: Set[Tuple[int, ShiftType]],
     allowed_slots: Dict[Tuple[int, ShiftType], List[int]],
+    carryover: Optional[MonthCarryover],
     required_slots: Optional[Dict[str, Any]],
 ) -> Dict[str, Any]:
     """
@@ -94,6 +95,11 @@ def _problemdata_kwargs_with_aliases(
         "required_slots": required_slots,
         "required_shifts": required_slots,
         "required_by_day": required_slots,
+        # Optional previous-month context (aliases)
+        "carryover": carryover,
+        "month_carryover": carryover,
+        "prev_month_carryover": carryover,
+        "previous_month": carryover,
     }
 
 
@@ -270,6 +276,7 @@ def make_problem_data(make_doctors, make_preferences) -> Callable[..., Any]:
         participant_doctor_ids: Optional[Set[int]] = None,
         ignore_slots: Optional[Set[Tuple[int, ShiftType]]] = None,
         allowed_slots: Optional[Dict[Tuple[int, ShiftType], List[int]]] = None,
+        carryover: Optional[MonthCarryover] = None,
         required_slots: Optional[Dict[str, Any]] = None,
     ) -> Any:
         if days is None:
@@ -316,6 +323,7 @@ def make_problem_data(make_doctors, make_preferences) -> Callable[..., Any]:
             participant_doctor_ids=set(participant_doctor_ids),
             ignore_slots=set(ignore_slots),
             allowed_slots=dict(allowed_slots),
+            carryover=carryover,
             required_slots=required_slots,
         )
 
@@ -363,6 +371,7 @@ def make_hard_model(make_problem_data) -> Callable[..., Any]:
         participant_doctor_ids: Optional[Set[int]] = None,
         ignore_slots: Optional[Set[Tuple[int, ShiftType]]] = None,
         allowed_slots: Optional[Dict[Tuple[int, ShiftType], List[int]]] = None,
+        carryover: Optional[MonthCarryover] = None,
         required_slots: Optional[Dict[str, Any]] = None,
     ) -> Any:
         # Still reuse ProblemData builder (real repo structure, weekdays, etc.)
@@ -376,6 +385,7 @@ def make_hard_model(make_problem_data) -> Callable[..., Any]:
             participant_doctor_ids=participant_doctor_ids,
             ignore_slots=ignore_slots,
             allowed_slots=allowed_slots,
+            carryover=carryover,
             required_slots=required_slots,
         )
 
@@ -396,18 +406,22 @@ def make_hard_model(make_problem_data) -> Callable[..., Any]:
             else:
                 active_days_list = _compute_active_days(days_list, ignore)
 
-            return HardModel(
-                year=int(getattr(problem_data, "year")),
-                month=int(getattr(problem_data, "month")),
-                days=days_list,
-                active_days=active_days_list,
-                doctors=dict(getattr(problem_data, "doctors")),
-                preferences=dict(getattr(problem_data, "preferences")),
-                participant_doctor_ids=participants,
-                ignore_slots=ignore,
-                allowed_slots=dict(allowed_slots),  # EXACTLY as test provided (can be empty)
-                seed_hints=None,
-            )
+            hard_kwargs: Dict[str, Any] = {
+                "year": int(getattr(problem_data, "year")),
+                "month": int(getattr(problem_data, "month")),
+                "days": days_list,
+                "active_days": active_days_list,
+                "doctors": dict(getattr(problem_data, "doctors")),
+                "preferences": dict(getattr(problem_data, "preferences")),
+                "participant_doctor_ids": participants,
+                "ignore_slots": ignore,
+                "allowed_slots": dict(allowed_slots),  # EXACTLY as test provided (can be empty)
+                "seed_hints": None,
+                # carryover may or may not exist on HardModel depending on repo version
+                "carryover": getattr(problem_data, "carryover", None),
+            }
+
+            return _call_with_supported_kwargs(HardModel, hard_kwargs)
 
         # Default path: use real builder (repo computes candidates itself)
         return constraint_builder.build_hard_model(problem_data)
