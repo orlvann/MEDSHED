@@ -69,6 +69,7 @@ from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
 from backend.core import issues, scoring
 from backend.core.fairness_expected_edit import compute_expected_map_for_fairness_edit
+from backend.core.rest_window import is_sat_to_sun, rest_violation_kind
 from backend.core.types import HardModel, ProblemData
 from backend.models.common_enums import DoctorRole, ShiftType
 
@@ -734,6 +735,7 @@ def _compute_rest_stats(
     rest_findings: List[Dict[str, Any]] = []
 
     days_sorted = [int(d) for d in problem.days]
+    days_set = set(days_sorted)
 
     for doc_id in sorted(problem.participant_doctor_ids):
         doctor = problem.doctors.get(doc_id)
@@ -744,6 +746,153 @@ def _compute_rest_stats(
 
         cross_w = int(scoring.rest_cross_shift_weight(role=role))
 
+        # ------------------------------------------------------------------
+        # Cross-month rest: last day of previous month -> day 1 of current month
+        # Mirrors solver logic from objective_builder.attach_rest_objective()
+        # ------------------------------------------------------------------
+        carry = problem.carryover
+        if carry is not None:
+            doc_carry = carry.per_doctor.get(int(doc_id))
+            edge = list(doc_carry.edge_assignments_last) if doc_carry else []
+
+            if edge:
+                # Last calendar day from previous month that appears in edge_assignments_last
+                last_prev_day = max(int(e.day) for e in edge)
+
+                # All shift types the doctor had on that last previous day
+                prev_day_shifts = [e.shift_type for e in edge if int(e.day) == int(last_prev_day)]
+
+                day1 = 1
+
+                # GUARD: only evaluate if day 1 exists in this ProblemData
+                if day1 in days_set:
+                    # Weekend boundary check (Sat->Sun across month boundary)
+                    weekend_pair = is_sat_to_sun(
+                        prev_year=int(carry.prev_year),
+                        prev_month=int(carry.prev_month),
+                        prev_day=int(last_prev_day),
+                        next_year=int(problem.year),
+                        next_month=int(problem.month),
+                        next_day=int(day1),
+                    )
+
+                    # Only evaluate if doctor actually works on day 1 in the current schedule
+                    has_day1_onsite = _doctor_has(
+                        idx, doctor_id=int(doc_id), day=int(day1), shift_type=ShiftType.onsite
+                    )
+                    has_day1_oncall = _doctor_has(
+                        idx, doctor_id=int(doc_id), day=int(day1), shift_type=ShiftType.oncall
+                    )
+
+                    if has_day1_onsite or has_day1_oncall:
+                        for prev_st in prev_day_shifts:
+                            # prev -> onsite(day 1)
+                            if has_day1_onsite:
+                                kind = rest_violation_kind(
+                                    prev_shift=prev_st,
+                                    next_shift=ShiftType.onsite,
+                                    is_weekend_pair=bool(weekend_pair),
+                                    allow_weekend_consecutive=bool(allow_weekend_consecutive),
+                                )
+
+                                if kind == "onsite_onsite":
+                                    w = int(scoring.REST_ONS_ONS_WEIGHT)
+                                    total_penalty += w
+                                    total_violations += 1
+                                    violations_by_doctor[int(doc_id)] += 1
+                                    penalty_by_doctor[int(doc_id)] += w
+                                    rest_findings.append(
+                                        _finding(
+                                            code=_CODE_REST_CONSECUTIVE_VIOLATION,
+                                            severity="warning",
+                                            context={
+                                                "doctor_id": int(doc_id),
+                                                "day": int(day1),
+                                                "kind": "onsite_onsite",
+                                                "cross_month": True,
+                                                "prev_year": int(carry.prev_year),
+                                                "prev_month": int(carry.prev_month),
+                                                "prev_day": int(last_prev_day),
+                                            },
+                                        )
+                                    )
+                                elif kind == "cross":
+                                    w = int(cross_w)
+                                    total_penalty += w
+                                    total_violations += 1
+                                    violations_by_doctor[int(doc_id)] += 1
+                                    penalty_by_doctor[int(doc_id)] += w
+                                    rest_findings.append(
+                                        _finding(
+                                            code=_CODE_REST_CONSECUTIVE_VIOLATION,
+                                            severity="warning",
+                                            context={
+                                                "doctor_id": int(doc_id),
+                                                "day": int(day1),
+                                                "kind": "cross",
+                                                "cross_month": True,
+                                                "prev_year": int(carry.prev_year),
+                                                "prev_month": int(carry.prev_month),
+                                                "prev_day": int(last_prev_day),
+                                            },
+                                        )
+                                    )
+
+                            # prev -> oncall(day 1)
+                            if has_day1_oncall:
+                                kind = rest_violation_kind(
+                                    prev_shift=prev_st,
+                                    next_shift=ShiftType.oncall,
+                                    is_weekend_pair=bool(weekend_pair),
+                                    allow_weekend_consecutive=bool(allow_weekend_consecutive),
+                                )
+
+                                if kind == "oncall_oncall":
+                                    w = int(scoring.REST_ONCALL_ONCALL_WEIGHT)
+                                    total_penalty += w
+                                    total_violations += 1
+                                    violations_by_doctor[int(doc_id)] += 1
+                                    penalty_by_doctor[int(doc_id)] += w
+                                    rest_findings.append(
+                                        _finding(
+                                            code=_CODE_REST_CONSECUTIVE_VIOLATION,
+                                            severity="warning",
+                                            context={
+                                                "doctor_id": int(doc_id),
+                                                "day": int(day1),
+                                                "kind": "oncall_oncall",
+                                                "cross_month": True,
+                                                "prev_year": int(carry.prev_year),
+                                                "prev_month": int(carry.prev_month),
+                                                "prev_day": int(last_prev_day),
+                                            },
+                                        )
+                                    )
+                                elif kind == "cross":
+                                    w = int(cross_w)
+                                    total_penalty += w
+                                    total_violations += 1
+                                    violations_by_doctor[int(doc_id)] += 1
+                                    penalty_by_doctor[int(doc_id)] += w
+                                    rest_findings.append(
+                                        _finding(
+                                            code=_CODE_REST_CONSECUTIVE_VIOLATION,
+                                            severity="warning",
+                                            context={
+                                                "doctor_id": int(doc_id),
+                                                "day": int(day1),
+                                                "kind": "cross",
+                                                "cross_month": True,
+                                                "prev_year": int(carry.prev_year),
+                                                "prev_month": int(carry.prev_month),
+                                                "prev_day": int(last_prev_day),
+                                            },
+                                        )
+                                    )
+
+        # -----------------------------
+        # In-month consecutive day pairs
+        # -----------------------------
         for i in range(len(days_sorted) - 1):
             d = days_sorted[i]
             d_next = days_sorted[i + 1]
@@ -1501,10 +1650,32 @@ def _build_rankings(
             reasons.append("preferences_not_fully_met")
         return reasons[:3]
 
-    unhappy_sorted = sorted(per_doctor_rows, key=lambda r: (_score(r), int(r.get("doctor_id", 0))))
+    # Unhappy: lowest score first, tie-break by doctor_id ascending.
+    # Defensive: normalize NaN to 0.0 so ordering is deterministic.
+    def _unhappy_sort_key(r: Dict[str, Any]) -> tuple:
+        s = _score(r)
+        try:
+            if s != s:  # NaN check
+                s = 0.0
+        except Exception:
+            s = 0.0
+        return (float(s), int(r.get("doctor_id", 0)))
+
+    unhappy_sorted = sorted(per_doctor_rows, key=_unhappy_sort_key)
     unhappy = unhappy_sorted[: int(top_n)]
 
-    happy_sorted = sorted(per_doctor_rows, key=lambda r: (-_score(r), int(r.get("doctor_id", 0))))
+    # Happy: highest score first, tie-break by doctor_id ascending.
+    # Defensive: normalize NaN to 0.0 so ordering is deterministic.
+    def _happy_sort_key(r: Dict[str, Any]) -> tuple:
+        s = _score(r)
+        try:
+            if s != s:  # NaN check
+                s = 0.0
+        except Exception:
+            s = 0.0
+        return (-float(s), int(r.get("doctor_id", 0)))
+
+    happy_sorted = sorted(per_doctor_rows, key=_happy_sort_key)
     happy = happy_sorted[: int(top_n)]
 
     top_unhappy = [

@@ -20,6 +20,7 @@ from ortools.sat.python import cp_model
 
 from backend.core import scoring
 from backend.core.fairness_expected import compute_expected_map_for_fairness
+from backend.core.rest_window import is_sat_to_sun, rest_violation_kind
 from backend.core.types import HardModel, ProblemData
 from backend.models.common_enums import DoctorRole, ShiftType
 
@@ -34,23 +35,6 @@ def _is_weekend_pair(year: int, month: int, d: int, d_next: int) -> bool:
     wd = datetime(year, month, d).weekday()
     wd_next = datetime(year, month, d_next).weekday()
     return wd == 5 and wd_next == 6
-
-
-def _add_pair_violation(
-    cp: cp_model.CpModel,
-    a: cp_model.IntVar,
-    b: cp_model.IntVar,
-    name: str,
-) -> cp_model.IntVar:
-    """
-    Create a BoolVar v that becomes 1 when BOTH a==1 and b==1.
-
-    AND encoding for binary vars:
-    v >= a + b - 1
-    """
-    v = cp.NewBoolVar(name)
-    cp.Add(v >= a + b - 1)
-    return v
 
 
 def attach_preferred_days_objective(
@@ -366,6 +350,72 @@ def attach_rest_objective(
 
         weight_cross = scoring.rest_cross_shift_weight(role=role)
 
+        # ------------------------------------------------------------------
+        # Cross-month rest: last day of previous month -> day 1 of current month
+        # ------------------------------------------------------------------
+        carry = getattr(problem, "carryover", None)
+        if carry is not None:
+            doc_carry = (carry.per_doctor or {}).get(int(doc_id))
+            edge = list(doc_carry.edge_assignments_last) if doc_carry else []
+
+            # If we have any edge assignments, pick the last calendar day from previous month.
+            if edge:
+                last_prev_day = max(int(e.day) for e in edge)
+
+                # Collect all shift types the doctor had on that last previous day.
+                prev_day_shifts = [e.shift_type for e in edge if int(e.day) == int(last_prev_day)]
+
+                # Compare against day 1 of the current month.
+                day1 = 1
+
+                # Decision vars for day 1 (may not exist if slot is forbidden/ignored).
+                ons_day1 = x.get((day1, ShiftType.onsite, doc_id))
+                oncall_day1 = x.get((day1, ShiftType.oncall, doc_id))
+
+                # If the solver has no variables for day 1, there is nothing to penalize.
+                if ons_day1 is not None or oncall_day1 is not None:
+                    is_weekend_pair = is_sat_to_sun(
+                        prev_year=int(carry.prev_year),
+                        prev_month=int(carry.prev_month),
+                        prev_day=int(last_prev_day),
+                        next_year=int(problem.year),
+                        next_month=int(problem.month),
+                        next_day=int(day1),
+                    )
+
+                    for prev_st in prev_day_shifts:
+                        # prev -> onsite(day1)
+                        if ons_day1 is not None:
+                            kind = rest_violation_kind(
+                                prev_shift=prev_st,
+                                next_shift=ShiftType.onsite,
+                                is_weekend_pair=bool(is_weekend_pair),
+                                allow_weekend_consecutive=bool(allow_weekend_consecutive),
+                            )
+
+                            if kind == "onsite_onsite":
+                                penalty_terms.append(int(scoring.REST_ONS_ONS_WEIGHT) * ons_day1)
+                                ub += int(scoring.REST_ONS_ONS_WEIGHT)
+                            elif kind == "cross":
+                                penalty_terms.append(int(weight_cross) * ons_day1)
+                                ub += int(weight_cross)
+
+                        # prev -> oncall(day1)
+                        if oncall_day1 is not None:
+                            kind = rest_violation_kind(
+                                prev_shift=prev_st,
+                                next_shift=ShiftType.oncall,
+                                is_weekend_pair=bool(is_weekend_pair),
+                                allow_weekend_consecutive=bool(allow_weekend_consecutive),
+                            )
+
+                            if kind == "oncall_oncall":
+                                penalty_terms.append(int(scoring.REST_ONCALL_ONCALL_WEIGHT) * oncall_day1)
+                                ub += int(scoring.REST_ONCALL_ONCALL_WEIGHT)
+                            elif kind == "cross":
+                                penalty_terms.append(int(weight_cross) * oncall_day1)
+                                ub += int(weight_cross)
+
         # Iterate consecutive day pairs in the MONTH calendar days list.
         for idx in range(len(model.days) - 1):
             d = model.days[idx]
@@ -385,13 +435,19 @@ def attach_rest_objective(
 
             # onsite -> onsite
             if ons_d is not None and ons_dn is not None:
-                v = _add_pair_violation(cp, ons_d, ons_dn, f"rest_ons_ons_d{d}_doc{doc_id}")
+                v = cp.NewBoolVar(f"rest_ons_ons_d{d}_doc{doc_id}")
+                # v == 1 only if both days are onsite for this doctor
+                cp.AddMultiplicationEquality(v, [ons_d, ons_dn])
+
                 penalty_terms.append(int(scoring.REST_ONS_ONS_WEIGHT) * v)
                 ub += int(scoring.REST_ONS_ONS_WEIGHT)
 
             # oncall -> oncall
             if oncall_d is not None and oncall_dn is not None:
-                v = _add_pair_violation(cp, oncall_d, oncall_dn, f"rest_oncall_oncall_d{d}_doc{doc_id}")
+                v = cp.NewBoolVar(f"rest_oncall_oncall_d{d}_doc{doc_id}")
+                # v == 1 only if both days are oncall for this doctor
+                cp.AddMultiplicationEquality(v, [oncall_d, oncall_dn])
+
                 penalty_terms.append(int(scoring.REST_ONCALL_ONCALL_WEIGHT) * v)
                 ub += int(scoring.REST_ONCALL_ONCALL_WEIGHT)
 
@@ -401,12 +457,18 @@ def attach_rest_objective(
 
             if not skip_weekend_cross:
                 if ons_d is not None and oncall_dn is not None:
-                    v = _add_pair_violation(cp, ons_d, oncall_dn, f"rest_ons_oncall_d{d}_doc{doc_id}")
+                    v = cp.NewBoolVar(f"rest_ons_oncall_d{d}_doc{doc_id}")
+                    # v == 1 only if (onsite on day d) AND (oncall on day d_next)
+                    cp.AddMultiplicationEquality(v, [ons_d, oncall_dn])
+
                     penalty_terms.append(int(weight_cross) * v)
                     ub += int(weight_cross)
 
                 if oncall_d is not None and ons_dn is not None:
-                    v = _add_pair_violation(cp, oncall_d, ons_dn, f"rest_oncall_ons_d{d}_doc{doc_id}")
+                    v = cp.NewBoolVar(f"rest_oncall_ons_d{d}_doc{doc_id}")
+                    # v == 1 only if (oncall on day d) AND (onsite on day d_next)
+                    cp.AddMultiplicationEquality(v, [oncall_d, ons_dn])
+
                     penalty_terms.append(int(weight_cross) * v)
                     ub += int(weight_cross)
 
