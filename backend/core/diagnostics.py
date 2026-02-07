@@ -68,7 +68,8 @@ from datetime import datetime
 from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
 from backend.core import issues, scoring
-from backend.core.types import ProblemData
+from backend.core.fairness_expected_edit import compute_expected_map_for_fairness_edit
+from backend.core.types import HardModel, ProblemData
 from backend.models.common_enums import DoctorRole, ShiftType
 
 # ----------------------------- issues codes (safe) -----------------------------
@@ -945,11 +946,10 @@ def compute_fairness_penalty_and_index(*, problem: ProblemData, idx: _Index) -> 
 
 def _compute_fairness_stats(*, problem: ProblemData, idx: _Index) -> tuple[int, float, Dict[int, int]]:
     """
-    Fairness like objective_builder:
-    - groups: specialists (including heads) vs residents
-    - categories: onsite weekday/weekend, oncall weekday/weekend
-    - expected = target if present else group average (floor)
-    - penalty = weight * (abs_dev^2)
+    Fairness for diagnostics (EDIT stage):
+    - expected is computed by compute_expected_map_for_fairness_edit(...)
+    - penalty = weight * (abs_dev^2) per category
+    - fairness_index is based on mean absolute deviation from expected (per category)
 
     Returns:
         (total_penalty, fairness_index, penalty_by_doctor)
@@ -957,10 +957,12 @@ def _compute_fairness_stats(*, problem: ProblemData, idx: _Index) -> tuple[int, 
     total_penalty = 0
     penalty_by_doctor: Dict[int, int] = {int(d): 0 for d in problem.participant_doctor_ids}
 
+    # Weekend / weekday day lists (calendar-based)
     weekend = _weekend_days(problem)
     weekday_days: List[int] = [int(d) for d in problem.days if int(d) not in weekend]
     weekend_days: List[int] = sorted(int(d) for d in weekend)
 
+    # Build groups from current participants
     specialist_ids: List[int] = []
     resident_ids: List[int] = []
 
@@ -973,108 +975,94 @@ def _compute_fairness_stats(*, problem: ProblemData, idx: _Index) -> tuple[int, 
         else:
             resident_ids.append(int(doc_id))
 
+    group_to_doctors: Dict[str, List[int]] = {
+        "specialist": list(specialist_ids),
+        "resident": list(resident_ids),
+    }
+
+    # Build a lightweight HardModel ONLY to satisfy the helper signature.
+    # In EDIT stage expected does NOT use allowed_slots, so we can pass {} safely.
+    model = HardModel(
+        year=int(problem.year),
+        month=int(problem.month),
+        days=[int(d) for d in problem.days],
+        active_days=[int(d) for d in problem.days],
+        doctors=dict(problem.doctors),
+        preferences=dict(problem.preferences),
+        participant_doctor_ids=set(int(d) for d in problem.participant_doctor_ids),
+        ignore_slots=set(),  # ignored markers must NOT affect fairness evaluation
+        allowed_slots={},  # unused in EDIT-stage expected
+        seed_hints=None,
+    )
+
+    expected_map = compute_expected_map_for_fairness_edit(
+        model=model, problem=problem, group_to_doctors=group_to_doctors
+    )
+
     def _count(doc_id: int, days: List[int], st: ShiftType) -> int:
         c = 0
         for d in days:
-            if _doctor_has(idx, doctor_id=doc_id, day=int(d), shift_type=st):
+            if _doctor_has(idx, doctor_id=int(doc_id), day=int(d), shift_type=st):
                 c += 1
-        return c
+        return int(c)
 
-    def _expected_for_category(doc_id: int, *, st: ShiftType, is_weekend_category: bool, group_avg_floor: int) -> int:
-        prefs = problem.preferences.get(doc_id)
-
-        expected: Optional[int] = None
-        if prefs is not None:
-            if st == ShiftType.onsite:
-                if is_weekend_category:
-                    if prefs.target_onsite_weekends is not None:
-                        expected = int(prefs.target_onsite_weekends)
-                else:
-                    if prefs.target_onsite_total is not None:
-                        expected = int(prefs.target_onsite_total)
-                        if prefs.target_onsite_weekends is not None:
-                            expected = expected - int(prefs.target_onsite_weekends)
-            else:
-                if is_weekend_category:
-                    if prefs.target_oncall_weekends is not None:
-                        expected = int(prefs.target_oncall_weekends)
-                else:
-                    if prefs.target_oncall_total is not None:
-                        expected = int(prefs.target_oncall_total)
-                        if prefs.target_oncall_weekends is not None:
-                            expected = expected - int(prefs.target_oncall_weekends)
-
-        if expected is None:
-            expected = int(group_avg_floor)
-
-        return max(0, expected)
-
-    categories: List[tuple[List[int], List[int], ShiftType, bool, int]] = []
-
-    for group_ids in (specialist_ids, resident_ids):
-        if len(group_ids) <= 1:
-            continue
-
-        categories.append(
-            (
-                group_ids,
-                weekday_days,
-                ShiftType.onsite,
-                False,
-                int(scoring.fairness_weight(shift_type=ShiftType.onsite, is_weekend=False)),
-            )
-        )
-        categories.append(
-            (
-                group_ids,
-                weekend_days,
-                ShiftType.onsite,
-                True,
-                int(scoring.fairness_weight(shift_type=ShiftType.onsite, is_weekend=True)),
-            )
-        )
-        categories.append(
-            (
-                group_ids,
-                weekday_days,
-                ShiftType.oncall,
-                False,
-                int(scoring.fairness_weight(shift_type=ShiftType.oncall, is_weekend=False)),
-            )
-        )
-        categories.append(
-            (
-                group_ids,
-                weekend_days,
-                ShiftType.oncall,
-                True,
-                int(scoring.fairness_weight(shift_type=ShiftType.oncall, is_weekend=True)),
-            )
-        )
+    # Categories definition:
+    # (days_list, shift_type, category_name, weight)
+    categories: List[tuple[List[int], ShiftType, str, int]] = [
+        (
+            weekday_days,
+            ShiftType.onsite,
+            "onsite_weekday",
+            int(scoring.fairness_weight(shift_type=ShiftType.onsite, is_weekend=False)),
+        ),
+        (
+            weekend_days,
+            ShiftType.onsite,
+            "onsite_weekend",
+            int(scoring.fairness_weight(shift_type=ShiftType.onsite, is_weekend=True)),
+        ),
+        (
+            weekday_days,
+            ShiftType.oncall,
+            "oncall_weekday",
+            int(scoring.fairness_weight(shift_type=ShiftType.oncall, is_weekend=False)),
+        ),
+        (
+            weekend_days,
+            ShiftType.oncall,
+            "oncall_weekend",
+            int(scoring.fairness_weight(shift_type=ShiftType.oncall, is_weekend=True)),
+        ),
+    ]
 
     index_parts: List[float] = []
 
-    for group_ids, days, st, is_weekend_cat, w in categories:
-        totals = [_count(doc_id, days, st) for doc_id in group_ids]
-        n = len(totals)
-        sum_tot = sum(totals)
-        avg_floor = sum_tot // n
+    for days_list, st, category_name, w in categories:
+        # We compute fairness within each group separately, then average index parts.
+        for group_ids in (specialist_ids, resident_ids):
+            if len(group_ids) <= 1:
+                # If group has 0 or 1 person, fairness in that group is trivially perfect.
+                index_parts.append(1.0)
+                continue
 
-        for doc_id, total in zip(group_ids, totals):
-            exp = _expected_for_category(doc_id, st=st, is_weekend_category=is_weekend_cat, group_avg_floor=avg_floor)
-            abs_dev = abs(int(total) - int(exp))
-            p = int(w) * (abs_dev * abs_dev)
+            actuals = [_count(doc_id, days_list, st) for doc_id in group_ids]
+            expecteds = [int(expected_map.get((int(doc_id), st, category_name), 0)) for doc_id in group_ids]
 
-            total_penalty += int(p)
-            penalty_by_doctor[int(doc_id)] += int(p)
+            # Penalty per doctor (abs_dev^2)
+            for doc_id, actual, exp in zip(group_ids, actuals, expecteds):
+                abs_dev = abs(int(actual) - int(exp))
+                p = int(w) * (abs_dev * abs_dev)
+                total_penalty += int(p)
+                penalty_by_doctor[int(doc_id)] += int(p)
 
-        mean = (sum_tot / n) if n > 0 else 0.0
-        if mean <= 0.0:
-            index_parts.append(1.0)
-        else:
-            mean_abs_dev = sum(abs(t - mean) for t in totals) / n
-            score = 1.0 - min(1.0, float(mean_abs_dev / mean))
-            index_parts.append(max(0.0, score))
+            # Index part: deviation relative to expected mean (not actual mean)
+            mean_exp = (sum(expecteds) / len(expecteds)) if expecteds else 0.0
+            if mean_exp <= 0.0:
+                index_parts.append(1.0)
+            else:
+                mean_abs_dev = sum(abs(int(a) - int(e)) for a, e in zip(actuals, expecteds)) / len(expecteds)
+                score = 1.0 - min(1.0, float(mean_abs_dev / mean_exp))
+                index_parts.append(max(0.0, float(score)))
 
     fairness_index = float(sum(index_parts) / len(index_parts)) if index_parts else 1.0
     fairness_index = float(max(0.0, min(1.0, fairness_index)))
