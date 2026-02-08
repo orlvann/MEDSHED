@@ -119,6 +119,24 @@ class DoctorDiagnosticsRead(BaseModel):
         ),
     )
 
+    # ------------------------------
+    # UI quality (optional, FE-friendly)
+    # ------------------------------
+    ui_stars: Optional[int] = Field(
+        default=None,
+        description="UI-only quality stars in range 1..5 (higher = better). Computed from diagnostics components.",
+    )
+
+    ui_reasons_codes: list[str] = Field(
+        default_factory=list,
+        description="Short stable reason codes explaining the ui_stars (max ~3).",
+    )
+
+    ui_components: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Optional per-doctor UI breakdown (free-form, small).",
+    )
+
 
 class MyDoctorDiagnosticsRead(BaseModel):
     """
@@ -139,7 +157,14 @@ class DoctorRankingItemRead(BaseModel):
     score: float
     reasons_codes: list[str] = Field(
         default_factory=list,
-        description="Stable reason codes explaining why the doctor is in this ranking list.",
+        description=(
+            "Stable reason codes explaining why the doctor is in this ranking list. "
+            "Frontend maps code -> label/icon/color. "
+            "Known codes (non-exhaustive, may grow over time): "
+            "rest_violations, preferred_days_missed, hard_double_shift_same_day, "
+            "preferences_not_fully_met, unfair_workload, overloaded_totals, "
+            "friday_penalty, weekday_pattern_mismatch, good_rest, preferences_met, partners_bonus."
+        ),
     )
 
 

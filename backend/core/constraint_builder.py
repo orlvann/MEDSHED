@@ -93,3 +93,70 @@ def build_hard_model(problem: ProblemData, seed_hints: Any | None = None) -> Har
         seed_hints=seed_hints,
         carryover=problem.carryover,
     )
+
+
+def build_hard_model_for_diagnostics(problem: ProblemData, seed_hints: Any | None = None) -> HardModel:
+    """
+    Build a HardModel for DIAGNOSTICS (variant B):
+
+    Goals:
+    - Fairness should be feasibility-aware (use unavailable filters via allowed_slots).
+    - Ignore markers MUST NOT improve metrics (a gap is still a gap),
+      so diagnostics fairness must treat the whole month as required.
+
+    Policy:
+    - active_days = ALL problem.days (full month)
+    - ignore_slots = empty set (so expected demand is "full month required")
+    - allowed_slots are computed for ALL days and BOTH shift types,
+      filtering only by unavailable_* days (same as solver feasibility logic),
+      but NOT skipping ignored slots.
+
+    This model is used only by diagnostics (pure core) and does not affect solving.
+    """
+
+    # Build a safe preferences mapping for all participants.
+    # If a doctor has no preferences, treat it as "empty" (no unavailable days).
+    prefs_by_doctor: Dict[int, PreferencesInput] = {}
+    for doctor_id in problem.participant_doctor_ids:
+        prefs_by_doctor[doctor_id] = problem.preferences.get(doctor_id, PreferencesInput(doctor_id=doctor_id))
+
+    allowed_slots: Dict[Tuple[int, ShiftType], List[int]] = {}
+
+    # DIAGNOSTICS: active days are always the full month.
+    active_days: List[int] = [int(d) for d in problem.days]
+
+    for day in active_days:
+        for shift_type in (ShiftType.onsite, ShiftType.oncall):
+            allowed: List[int] = []
+
+            for doctor_id in problem.participant_doctor_ids:
+                prefs = prefs_by_doctor.get(int(doctor_id))
+
+                # Apply unavailable-day filters (feasibility-aware).
+                if shift_type == ShiftType.onsite:
+                    if prefs and day in (prefs.unavailable_onsite_days or []):
+                        continue
+                else:  # ShiftType.oncall
+                    if prefs and day in (prefs.unavailable_oncall_days or []):
+                        continue
+
+                allowed.append(int(doctor_id))
+
+            # Keep the key even if the list is empty (helps diagnostics later).
+            allowed_slots[(int(day), shift_type)] = sorted(allowed)
+
+    return HardModel(
+        year=int(problem.year),
+        month=int(problem.month),
+        days=[int(d) for d in problem.days],
+        active_days=list(active_days),
+        doctors=dict(problem.doctors),
+        preferences=dict(problem.preferences),
+        participant_doctor_ids=set(int(d) for d in problem.participant_doctor_ids),
+        # IMPORTANT (variant B):
+        # ignore markers must NOT shrink required scope for diagnostics metrics.
+        ignore_slots=set(),
+        allowed_slots=allowed_slots,
+        seed_hints=seed_hints,
+        carryover=problem.carryover,
+    )
