@@ -64,9 +64,19 @@ from sqlalchemy.orm import Session
 from backend.core import diagnostics as core_diagnostics
 from backend.core import feasibility as core_feasibility
 from backend.core import issues
-from backend.core.types import DoctorInput, FeasibilityIssue, PreferencesInput, ProblemData, SolverStatus
+from backend.core.types import (
+    DoctorCarryover,
+    DoctorInput,
+    EdgeAssignment,
+    FeasibilityIssue,
+    MonthCarryover,
+    PreferencesInput,
+    ProblemData,
+    SolverStatus,
+)
 from backend.db.session import SessionLocal
 from backend.models.common_enums import (
+    DoctorRole,
     PeriodStatus,
     ScheduleStatus,
     ShiftType,
@@ -797,6 +807,164 @@ def _build_inputs_snapshot(
 
 
 # --------------------------------- DTO builders --------------------------------
+def _prev_year_month(year: int, month: int) -> tuple[int, int]:
+    """Return (prev_year, prev_month) for a given (year, month)."""
+    y = int(year)
+    m = int(month)
+    if m == 1:
+        return (y - 1, 12)
+    return (y, m - 1)
+
+
+def _try_load_prev_published_payload(session: Session, year: int, month: int) -> SchedulePayload | None:
+    """
+    Best-effort: load previous month's PUBLISHED schedule payload.
+    Returns SchedulePayload if exists, else None. Never raises DomainError.
+    """
+    ptr = session.get(SchedulePointer, {"year": int(year), "month": int(month)})
+    if ptr is None or ptr.current_published_version_id is None:
+        return None
+
+    ver = session.get(ScheduleVersion, int(ptr.current_published_version_id))
+    if ver is None or not isinstance(ver.payload, dict):
+        return None
+
+    try:
+        return SchedulePayload.model_validate(ver.payload)
+    except Exception:
+        # If payload shape is invalid/old, treat as "no carryover"
+        return None
+
+
+def _build_prev_month_carryover(
+    *,
+    session: Session,
+    year: int,
+    month: int,
+    doctors: Dict[int, DoctorInput],
+    participant_doctor_ids: set[int],
+    tail_days: int = 7,
+) -> MonthCarryover | None:
+    """
+    Build MonthCarryover from previous month's PUBLISHED schedule.
+
+    Includes:
+    - actual counts in 4 categories per doctor
+    - 'had +1' rotation marker per category within role group (specialist/resident)
+    - edge assignments from the last N days of previous month
+    """
+    prev_year, prev_month = _prev_year_month(int(year), int(month))
+
+    prev_payload = _try_load_prev_published_payload(session, prev_year, prev_month)
+    if prev_payload is None:
+        return None
+
+    # Prepare weekday map for prev month days
+    prev_days_count = days_in_month(prev_year, prev_month)
+    prev_weekdays = {d: calendar.weekday(prev_year, prev_month, d) for d in range(1, prev_days_count + 1)}
+
+    def _is_weekend(d: int) -> bool:
+        return int(prev_weekdays.get(int(d), 0)) in (5, 6)
+
+    carry = MonthCarryover(prev_year=int(prev_year), prev_month=int(prev_month))
+
+    # Initialize per-doctor buckets only for current participants
+    for did in participant_doctor_ids:
+        carry.per_doctor[int(did)] = DoctorCarryover()
+
+    # 1) Actual counts + edge assignments
+    edge_start = max(1, int(prev_days_count) - int(tail_days) + 1)
+
+    for a in prev_payload.assignments:
+        did = int(a.doctor_id)
+        if did not in carry.per_doctor:
+            continue
+
+        day = int(a.day)
+        st = a.shift_type
+        weekend = _is_weekend(day)
+
+        dc = carry.per_doctor[did]
+
+        if st == ShiftType.onsite:
+            if weekend:
+                dc.actual_onsite_weekends_last += 1
+            else:
+                dc.actual_onsite_weekdays_last += 1
+        else:  # ShiftType.oncall
+            if weekend:
+                dc.actual_oncall_weekends_last += 1
+            else:
+                dc.actual_oncall_weekdays_last += 1
+
+        if day >= edge_start:
+            dc.edge_assignments_last.append(EdgeAssignment(day=day, shift_type=st, doctor_id=did))
+
+    # 2) Compute "had +1 last month" markers within role groups for each category
+    def _role_group(doc_id: int) -> str:
+        d = doctors.get(int(doc_id))
+        if d and d.role == DoctorRole.resident:
+            return "resident"
+        return "specialist"
+
+    # categories: (name, getter(actual_count), setter(flag))
+    categories = [
+        (
+            "onsite_weekday",
+            lambda dc: int(dc.actual_onsite_weekdays_last),
+            lambda dc, v: setattr(dc, "had_plus1_onsite_weekday_last", bool(v)),
+        ),
+        (
+            "onsite_weekend",
+            lambda dc: int(dc.actual_onsite_weekends_last),
+            lambda dc, v: setattr(dc, "had_plus1_onsite_weekend_last", bool(v)),
+        ),
+        (
+            "oncall_weekday",
+            lambda dc: int(dc.actual_oncall_weekdays_last),
+            lambda dc, v: setattr(dc, "had_plus1_oncall_weekday_last", bool(v)),
+        ),
+        (
+            "oncall_weekend",
+            lambda dc: int(dc.actual_oncall_weekends_last),
+            lambda dc, v: setattr(dc, "had_plus1_oncall_weekend_last", bool(v)),
+        ),
+    ]
+
+    # split docs by role group (only among current participants)
+    group_to_ids: Dict[str, List[int]] = {"specialist": [], "resident": []}
+    for did in sorted(carry.per_doctor.keys()):
+        group_to_ids[_role_group(did)].append(int(did))
+
+    for group_name, ids in group_to_ids.items():
+        if not ids:
+            continue
+
+        for _cat_name, get_count, set_flag in categories:
+            # Reset flags to False for this group/category
+            for did in ids:
+                set_flag(carry.per_doctor[did], False)
+
+            # Sum + remainder logic
+            counts = [(did, get_count(carry.per_doctor[did])) for did in ids]
+            total = sum(c for _did, c in counts)
+            n = len(counts)
+            rem = int(total) % int(n)
+
+            if rem <= 0:
+                continue
+
+            # Winners = those who were "above the floor" last month.
+            # Deterministic: sort by (count desc, doc_id asc)
+            counts_sorted = sorted(counts, key=lambda t: (-int(t[1]), int(t[0])))
+            winners = {did for did, _c in counts_sorted[:rem]}
+
+            for did in winners:
+                set_flag(carry.per_doctor[int(did)], True)
+
+    return carry
+
+
 def _build_problem_data_for_generate(session: Session, req: ScheduleGenerateRequest) -> ProblemData:
     """
     Build ProblemData for a generate request.
@@ -919,6 +1087,14 @@ def _build_problem_data_for_generate(session: Session, req: ScheduleGenerateRequ
         if 1 <= d <= days_count:
             ignore_slots.add((d, slot.shift_type))
 
+    carryover = _build_prev_month_carryover(
+        session=session,
+        year=year,
+        month=month,
+        doctors=doctors,
+        participant_doctor_ids=participant_doctor_ids,
+        tail_days=7,
+    )
     problem = ProblemData(
         year=year,
         month=month,
@@ -928,6 +1104,7 @@ def _build_problem_data_for_generate(session: Session, req: ScheduleGenerateRequ
         preferences=preferences,
         participant_doctor_ids=participant_doctor_ids,
         ignore_slots=ignore_slots,
+        carryover=carryover,
     )
 
     try:

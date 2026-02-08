@@ -19,6 +19,8 @@ from typing import Dict, List, Set, Tuple
 from ortools.sat.python import cp_model
 
 from backend.core import scoring
+from backend.core.fairness_expected import compute_expected_map_for_fairness
+from backend.core.rest_window import is_sat_to_sun, rest_violation_kind
 from backend.core.types import HardModel, ProblemData
 from backend.models.common_enums import DoctorRole, ShiftType
 
@@ -33,23 +35,6 @@ def _is_weekend_pair(year: int, month: int, d: int, d_next: int) -> bool:
     wd = datetime(year, month, d).weekday()
     wd_next = datetime(year, month, d_next).weekday()
     return wd == 5 and wd_next == 6
-
-
-def _add_pair_violation(
-    cp: cp_model.CpModel,
-    a: cp_model.IntVar,
-    b: cp_model.IntVar,
-    name: str,
-) -> cp_model.IntVar:
-    """
-    Create a BoolVar v that becomes 1 when BOTH a==1 and b==1.
-
-    AND encoding for binary vars:
-    v >= a + b - 1
-    """
-    v = cp.NewBoolVar(name)
-    cp.Add(v >= a + b - 1)
-    return v
 
 
 def attach_preferred_days_objective(
@@ -365,6 +350,72 @@ def attach_rest_objective(
 
         weight_cross = scoring.rest_cross_shift_weight(role=role)
 
+        # ------------------------------------------------------------------
+        # Cross-month rest: last day of previous month -> day 1 of current month
+        # ------------------------------------------------------------------
+        carry = getattr(problem, "carryover", None)
+        if carry is not None:
+            doc_carry = (carry.per_doctor or {}).get(int(doc_id))
+            edge = list(doc_carry.edge_assignments_last) if doc_carry else []
+
+            # If we have any edge assignments, pick the last calendar day from previous month.
+            if edge:
+                last_prev_day = max(int(e.day) for e in edge)
+
+                # Collect all shift types the doctor had on that last previous day.
+                prev_day_shifts = [e.shift_type for e in edge if int(e.day) == int(last_prev_day)]
+
+                # Compare against day 1 of the current month.
+                day1 = 1
+
+                # Decision vars for day 1 (may not exist if slot is forbidden/ignored).
+                ons_day1 = x.get((day1, ShiftType.onsite, doc_id))
+                oncall_day1 = x.get((day1, ShiftType.oncall, doc_id))
+
+                # If the solver has no variables for day 1, there is nothing to penalize.
+                if ons_day1 is not None or oncall_day1 is not None:
+                    is_weekend_pair = is_sat_to_sun(
+                        prev_year=int(carry.prev_year),
+                        prev_month=int(carry.prev_month),
+                        prev_day=int(last_prev_day),
+                        next_year=int(problem.year),
+                        next_month=int(problem.month),
+                        next_day=int(day1),
+                    )
+
+                    for prev_st in prev_day_shifts:
+                        # prev -> onsite(day1)
+                        if ons_day1 is not None:
+                            kind = rest_violation_kind(
+                                prev_shift=prev_st,
+                                next_shift=ShiftType.onsite,
+                                is_weekend_pair=bool(is_weekend_pair),
+                                allow_weekend_consecutive=bool(allow_weekend_consecutive),
+                            )
+
+                            if kind == "onsite_onsite":
+                                penalty_terms.append(int(scoring.REST_ONS_ONS_WEIGHT) * ons_day1)
+                                ub += int(scoring.REST_ONS_ONS_WEIGHT)
+                            elif kind == "cross":
+                                penalty_terms.append(int(weight_cross) * ons_day1)
+                                ub += int(weight_cross)
+
+                        # prev -> oncall(day1)
+                        if oncall_day1 is not None:
+                            kind = rest_violation_kind(
+                                prev_shift=prev_st,
+                                next_shift=ShiftType.oncall,
+                                is_weekend_pair=bool(is_weekend_pair),
+                                allow_weekend_consecutive=bool(allow_weekend_consecutive),
+                            )
+
+                            if kind == "oncall_oncall":
+                                penalty_terms.append(int(scoring.REST_ONCALL_ONCALL_WEIGHT) * oncall_day1)
+                                ub += int(scoring.REST_ONCALL_ONCALL_WEIGHT)
+                            elif kind == "cross":
+                                penalty_terms.append(int(weight_cross) * oncall_day1)
+                                ub += int(weight_cross)
+
         # Iterate consecutive day pairs in the MONTH calendar days list.
         for idx in range(len(model.days) - 1):
             d = model.days[idx]
@@ -384,13 +435,19 @@ def attach_rest_objective(
 
             # onsite -> onsite
             if ons_d is not None and ons_dn is not None:
-                v = _add_pair_violation(cp, ons_d, ons_dn, f"rest_ons_ons_d{d}_doc{doc_id}")
+                v = cp.NewBoolVar(f"rest_ons_ons_d{d}_doc{doc_id}")
+                # v == 1 only if both days are onsite for this doctor
+                cp.AddMultiplicationEquality(v, [ons_d, ons_dn])
+
                 penalty_terms.append(int(scoring.REST_ONS_ONS_WEIGHT) * v)
                 ub += int(scoring.REST_ONS_ONS_WEIGHT)
 
             # oncall -> oncall
             if oncall_d is not None and oncall_dn is not None:
-                v = _add_pair_violation(cp, oncall_d, oncall_dn, f"rest_oncall_oncall_d{d}_doc{doc_id}")
+                v = cp.NewBoolVar(f"rest_oncall_oncall_d{d}_doc{doc_id}")
+                # v == 1 only if both days are oncall for this doctor
+                cp.AddMultiplicationEquality(v, [oncall_d, oncall_dn])
+
                 penalty_terms.append(int(scoring.REST_ONCALL_ONCALL_WEIGHT) * v)
                 ub += int(scoring.REST_ONCALL_ONCALL_WEIGHT)
 
@@ -400,12 +457,18 @@ def attach_rest_objective(
 
             if not skip_weekend_cross:
                 if ons_d is not None and oncall_dn is not None:
-                    v = _add_pair_violation(cp, ons_d, oncall_dn, f"rest_ons_oncall_d{d}_doc{doc_id}")
+                    v = cp.NewBoolVar(f"rest_ons_oncall_d{d}_doc{doc_id}")
+                    # v == 1 only if (onsite on day d) AND (oncall on day d_next)
+                    cp.AddMultiplicationEquality(v, [ons_d, oncall_dn])
+
                     penalty_terms.append(int(weight_cross) * v)
                     ub += int(weight_cross)
 
                 if oncall_d is not None and ons_dn is not None:
-                    v = _add_pair_violation(cp, oncall_d, ons_dn, f"rest_oncall_ons_d{d}_doc{doc_id}")
+                    v = cp.NewBoolVar(f"rest_oncall_ons_d{d}_doc{doc_id}")
+                    # v == 1 only if (oncall on day d) AND (onsite on day d_next)
+                    cp.AddMultiplicationEquality(v, [oncall_d, ons_dn])
+
                     penalty_terms.append(int(weight_cross) * v)
                     ub += int(weight_cross)
 
@@ -476,6 +539,13 @@ def attach_fairness_objective(
         else:
             group_to_doctors["resident"].append(doc_id)
 
+    # 2.5) NEW: compute deterministic per-doctor expected (business algorithm)
+    expected_map = compute_expected_map_for_fairness(
+        model=model,
+        problem=problem,
+        group_to_doctors=group_to_doctors,
+    )
+
     def _add_fairness_for_category(
         *,
         group_name: str,
@@ -517,62 +587,13 @@ def attach_fairness_objective(
 
             totals.append(total)
 
-        sum_totals = cp.NewIntVar(0, n * max_per_doctor, f"fair_sum_{group_name}_{category_name}")
-        cp.Add(sum_totals == sum(totals))
-
-        average_total = cp.NewIntVar(0, max_per_doctor, f"fair_avg_{group_name}_{category_name}")
-        cp.Add(n * average_total <= sum_totals)
-        cp.Add(sum_totals <= n * average_total + (n - 1))
-
         for idx, doc_id in enumerate(group_doctors):
-            # Expected per doctor:
-            # - if the doctor has a target for this category -> expected = target
-            # - else -> expected = group average (fairness)
-            #
-            # NOTE:
-            # Our PreferenceInput has targets for:
-            # - monthly totals: target_onsite_total / target_oncall_total
-            # - weekend totals: target_onsite_weekends / target_oncall_weekends
-            #
-            # For fairness categories:
-            # - weekend category uses target_*_weekends
-            # - weekday category uses target_*_total (and if weekend target exists, we use: total - weekend_target)
-            # This keeps "I want more total duties" compatible with fairness (expected is shifted).
-            prefs = problem.preferences.get(doc_id)
-
-            is_weekend_category = "weekend" in category_name
-            expected_value: int | None = None
-
-            if prefs is not None:
-                if shift_type == ShiftType.onsite:
-                    if is_weekend_category:
-                        if prefs.target_onsite_weekends is not None:
-                            expected_value = int(prefs.target_onsite_weekends)
-                    else:
-                        if prefs.target_onsite_total is not None:
-                            expected_value = int(prefs.target_onsite_total)
-                            # If weekend target exists, interpret total target as (weekday + weekend).
-                            if prefs.target_onsite_weekends is not None:
-                                expected_value = expected_value - int(prefs.target_onsite_weekends)
-                else:
-                    if is_weekend_category:
-                        if prefs.target_oncall_weekends is not None:
-                            expected_value = int(prefs.target_oncall_weekends)
-                    else:
-                        if prefs.target_oncall_total is not None:
-                            expected_value = int(prefs.target_oncall_total)
-                            if prefs.target_oncall_weekends is not None:
-                                expected_value = expected_value - int(prefs.target_oncall_weekends)
-
-            # Keep expected inside [0..max_per_doctor] to avoid invalid bounds.
-            if expected_value is not None:
-                expected_value = max(0, min(int(expected_value), int(max_per_doctor)))
+            # NEW: expected comes from our business algorithm (group targets + caps + +1 rotation + personal targets)
+            expected_value = expected_map.get((int(doc_id), shift_type, category_name), 0)
+            expected_value = max(0, min(int(expected_value), int(max_per_doctor)))
 
             expected_total = cp.NewIntVar(0, max_per_doctor, f"fair_expected_{group_name}_{category_name}_doc{doc_id}")
-            if expected_value is not None:
-                cp.Add(expected_total == int(expected_value))
-            else:
-                cp.Add(expected_total == average_total)
+            cp.Add(expected_total == int(expected_value))
 
             deviation_pos = cp.NewIntVar(0, max_per_doctor, f"fair_dev_pos_{group_name}_{category_name}_doc{doc_id}")
             deviation_neg = cp.NewIntVar(0, max_per_doctor, f"fair_dev_neg_{group_name}_{category_name}_doc{doc_id}")

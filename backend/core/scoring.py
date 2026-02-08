@@ -116,7 +116,6 @@ def preferred_day_miss_weight_for_doctor(*, is_head: bool, role: DoctorRole) -> 
 
 # MVP weights: a bit lower than rest rules, comparable or slightly lower than totals.
 # Weekends are slightly more important because they are usually less preferred.
-
 FAIRNESS_WEEKDAY_ONSITE_WEIGHT = 10
 FAIRNESS_WEEKEND_ONSITE_WEIGHT = 14
 FAIRNESS_WEEKDAY_ONCALL_WEIGHT = 8

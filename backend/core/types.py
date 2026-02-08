@@ -78,6 +78,54 @@ class PreferencesInput:
 
 
 @dataclass
+class EdgeAssignment:
+    """
+    Assignment near the month boundary (previous month),
+    used later for cross-month rest checks.
+    """
+
+    day: int
+    shift_type: ShiftType
+    doctor_id: int
+
+
+@dataclass
+class DoctorCarryover:
+    """
+    Previous-month stats for one doctor:
+    - actual counts in 4 categories (weekday/weekend x onsite/oncall)
+    - rotation markers ("had +1" last month in that category)
+    - last N days assignments (for future rest checks across months)
+    """
+
+    # Actual counts last month
+    actual_onsite_weekdays_last: int = 0
+    actual_onsite_weekends_last: int = 0
+    actual_oncall_weekdays_last: int = 0
+    actual_oncall_weekends_last: int = 0
+
+    # Rotation markers (who got the +1 last month)
+    had_plus1_onsite_weekday_last: bool = False
+    had_plus1_onsite_weekend_last: bool = False
+    had_plus1_oncall_weekday_last: bool = False
+    had_plus1_oncall_weekend_last: bool = False
+
+    # Tail assignments from previous month (last N days)
+    edge_assignments_last: List[EdgeAssignment] = field(default_factory=list)
+
+
+@dataclass
+class MonthCarryover:
+    """
+    Container for previous-month context attached to ProblemData.
+    """
+
+    prev_year: int
+    prev_month: int
+    per_doctor: Dict[int, DoctorCarryover] = field(default_factory=dict)
+
+
+@dataclass
 class ProblemData:
     """
     Full input for the solver for a single month (year+month).
@@ -113,6 +161,9 @@ class ProblemData:
 
     # Slots the solver must completely ignore (Admin wants to keep them empty)
     ignore_slots: Set[Tuple[int, ShiftType]] = field(default_factory=set)
+
+    # Optional previous-month context (fairness rotation, cross-month rest)
+    carryover: MonthCarryover | None = None
 
 
 @dataclass
@@ -158,6 +209,9 @@ class HardModel:
     preferences: Dict[int, PreferencesInput]
     participant_doctor_ids: Set[int]
     ignore_slots: Set[Tuple[int, ShiftType]] = field(default_factory=set)
+
+    # Optional previous-month context (passed through from ProblemData)
+    carryover: MonthCarryover | None = None
 
     # HardModel-specific:
     # For each (day, shift_type) store doctors that are allowed to work in this slot.

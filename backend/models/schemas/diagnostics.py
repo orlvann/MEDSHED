@@ -93,31 +93,102 @@ class DiagnosticsFindingRead(BaseModel):
 # ------------------------------ Per-doctor breakdown ------------------------------
 
 
+# ------------------------------
+# Per-doctor UI categories (stable, typed)
+# ------------------------------
+class _CategoryBaseRead(BaseModel):
+    applicable: bool
+    badness: float
+    stars: Optional[int] = None  # can be null when not applicable
+
+
+class RestCategoryRead(_CategoryBaseRead):
+    pass
+
+
+class PreferredDaysCategoryRead(_CategoryBaseRead):
+    requested: int = 0
+    missed: int = 0
+
+
+class FairnessCategoryRead(_CategoryBaseRead):
+    pass
+
+
+class TotalsCategoryRead(_CategoryBaseRead):
+    pass
+
+
+class WeekdayPatternsCategoryRead(_CategoryBaseRead):
+    avoid_penalty: int = 0
+    preferred_bonus: int = 0
+    preferred_declared: bool = False
+    avoid_declared: bool = False
+
+
+class FridayFreeWeekendCategoryRead(_CategoryBaseRead):
+    pass
+
+
+class PreferredPartnersCategoryRead(_CategoryBaseRead):
+    pass
+
+
+class DoctorCategoriesRead(BaseModel):
+    # Field order here is intentional (nice readable JSON)
+    rest: RestCategoryRead
+    preferred_days: PreferredDaysCategoryRead
+    fairness: FairnessCategoryRead
+    totals: TotalsCategoryRead
+    weekday_patterns: WeekdayPatternsCategoryRead
+    friday_free_weekend: FridayFreeWeekendCategoryRead
+    preferred_partners: PreferredPartnersCategoryRead
+
+
+class SolverComponentsByDocRead(BaseModel):
+    # Keep exactly these keys as requested
+    rest_penalty: int = 0
+    preferred_days_penalty: int = 0
+    totals_penalty: int = 0
+    fairness_penalty: int = 0
+    weekday_patterns_penalty: int = 0
+    weekday_patterns_bonus: int = 0
+    friday_free_weekend_penalty: int = 0
+    preferred_partners_bonus: float = 0.0
+
+
 class DoctorDiagnosticsRead(BaseModel):
+    # IMPORTANT:
+    # This field order is intentional and matches the exact requested JSON order.
+
     doctor_id: int
     display_name: str
 
     assigned_onsite_total: int = 0
     assigned_oncall_total: int = 0
-
     rest_violations: int = 0
+
+    preferred_days_requested: int = 0
+    preferred_days_missed: int = 0
 
     preference_fulfillment_pct: float = Field(
         100.0,
         description="Satisfied preferences for this doctor in percent (0..100).",
     )
-    preferred_days_missed: int = Field(
-        0,
-        description="How many preferred concrete days were missed (soft objective signal).",
+
+    ui_stars: Optional[int] = Field(
+        default=None,
+        description="UI-only quality stars in range 1..5 (higher = better).",
     )
 
-    # Optional score if rankings need it; keep optional to avoid forcing it everywhere.
-    score: Optional[float] = Field(
-        default=None,
-        description=(
-            "Optional per-doctor score used by rankings (higher=better or lower=better depending on convention)."
-        ),
+    ui_reasons_codes: list[str] = Field(
+        default_factory=list,
+        description="Short stable reason codes explaining the ui_stars (max ~3).",
     )
+
+    categories: DoctorCategoriesRead
+
+    solver_components_by_doc: SolverComponentsByDocRead
 
 
 class MyDoctorDiagnosticsRead(BaseModel):
@@ -139,13 +210,20 @@ class DoctorRankingItemRead(BaseModel):
     score: float
     reasons_codes: list[str] = Field(
         default_factory=list,
-        description="Stable reason codes explaining why the doctor is in this ranking list.",
+        description=(
+            "Stable reason codes explaining why the doctor is in this ranking list. "
+            "Frontend maps code -> label/icon/color. "
+            "Known codes (non-exhaustive, may grow over time): "
+            "rest_violations, preferred_days_missed, hard_double_shift_same_day, "
+            "preferences_not_fully_met, unfair_workload, overloaded_totals, "
+            "friday_penalty, weekday_pattern_mismatch, good_rest, preferences_met, partners_bonus."
+        ),
     )
 
 
 class RankingsRead(BaseModel):
-    top_unhappy: list[DoctorRankingItemRead] = Field(default_factory=list)
-    top_happy: list[DoctorRankingItemRead] = Field(default_factory=list)
+    unhappy: list[DoctorRankingItemRead] = Field(default_factory=list)
+    happy: list[DoctorRankingItemRead] = Field(default_factory=list)
 
 
 # ------------------------------ Details envelope ------------------------------
@@ -224,9 +302,9 @@ class DiagnosticsDetailsRead(BaseModel):
 
     # Optional debug breakdown from core (safe free-form dict).
     # Example keys depend on the core diagnostics implementation (scoring components, penalties, etc.).
-    components: dict[str, Any] = Field(
+    solver_components_total: dict[str, Any] = Field(
         default_factory=dict,
-        description="Optional debug breakdown of scoring components (free-form JSON).",
+        description="Solver debug breakdown of objective components (technical; mirrors solver objective parts).",
     )
 
     # This field is only used when diagnostics target="working".

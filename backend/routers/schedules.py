@@ -13,7 +13,7 @@ OpenAPI examples are kept consistent with DTOs in:
 - backend/models/schemas/diagnostics.py
 
 IMPORTANT ABOUT DIAGNOSTICS DTO:
-- DiagnosticsRead.details is a typed structure (findings/per_doctor/rankings/audit/components).
+- DiagnosticsRead.details is a typed structure (findings/per_doctor/rankings/audit/solver_components_total).
 - Slot ignores (COVERAGE_IGNORED_SLOT) are NOT emitted as findings anymore.
   They only mark matching coverage gaps with context.was_ignored=True.
 - Human decisions are exposed via details.audit[] (extracted from payload.meta.exceptions).
@@ -209,6 +209,40 @@ _OPENAPI_EXAMPLES_PUBLISH_REQUEST = {
 }
 
 
+def _example_categories() -> dict:
+    # Minimal valid DoctorCategoriesRead (typed, stable keys)
+    return {
+        "rest": {"applicable": True, "badness": 0.0, "stars": 5},
+        "preferred_days": {"applicable": True, "badness": 0.2, "stars": 4, "requested": 2, "missed": 0},
+        "fairness": {"applicable": True, "badness": 0.3, "stars": 4},
+        "totals": {"applicable": True, "badness": 0.4, "stars": 4},
+        "weekday_patterns": {
+            "applicable": False,
+            "badness": 0.0,
+            "stars": None,
+            "avoid_penalty": 0,
+            "preferred_bonus": 0,
+            "preferred_declared": False,
+            "avoid_declared": False,
+        },
+        "friday_free_weekend": {"applicable": False, "badness": 0.0, "stars": None},
+        "preferred_partners": {"applicable": False, "badness": 0.0, "stars": None},
+    }
+
+
+def _example_solver_components_by_doc() -> dict:
+    return {
+        "rest_penalty": 0,
+        "preferred_days_penalty": 10,
+        "totals_penalty": 0,
+        "fairness_penalty": 0,
+        "weekday_patterns_penalty": 0,
+        "weekday_patterns_bonus": 0,
+        "friday_free_weekend_penalty": 0,
+        "preferred_partners_bonus": 0.0,
+    }
+
+
 @router.post(
     "/generate",
     status_code=status.HTTP_201_CREATED,
@@ -382,10 +416,34 @@ _OPENAPI_EXAMPLES_PUBLISH_REQUEST = {
                             },
                             "details": {
                                 "findings": [],
-                                "per_doctor": [],
-                                "rankings": {"top_unhappy": [], "top_happy": []},
+                                "per_doctor": [
+                                    {
+                                        "doctor_id": 101,
+                                        "display_name": "Jan Kowalski",
+                                        "assigned_onsite_total": 0,
+                                        "assigned_oncall_total": 0,
+                                        "rest_violations": 0,
+                                        "preferred_days_requested": 0,
+                                        "preferred_days_missed": 0,
+                                        "preference_fulfillment_pct": 100.0,
+                                        "ui_stars": 5,
+                                        "ui_reasons_codes": ["preferences_met", "good_rest"],
+                                        "categories": _example_categories(),
+                                        "solver_components_by_doc": _example_solver_components_by_doc(),
+                                    }
+                                ],
+                                "rankings": {
+                                    "unhappy": [],
+                                    "happy": [
+                                        {
+                                            "doctor_id": 101,
+                                            "score": 5,
+                                            "reasons_codes": ["preferences_met", "good_rest"],
+                                        }
+                                    ],
+                                },
                                 "audit": [],
-                                "components": {},
+                                "solver_components_total": {},
                                 "working_lock_version": None,
                             },
                         },
@@ -535,6 +593,10 @@ def generate_schedule(
         "- working: analyze the current working buffer (live edits)\n"
         "- draft: analyze the current draft checkpoint (pointer -> version)\n"
         "- published: analyze the current published version (pointer -> version)\n\n"
+        "DTO notes (stable contract):\n"
+        "- details.rankings uses keys: happy and unhappy (full lists).\n"
+        "- DoctorRankingItemRead.score is the UI stars (1..5).\n"
+        "- details.per_doctor items include categories and solver_components_by_doc.\n"
         "Important rules:\n"
         "- inputs_snapshot is required (NO FALLBACKS). If missing -> 409.\n"
         "- working is computed live (version_id=null).\n"
@@ -566,23 +628,7 @@ def generate_schedule(
                                             "code": _issue_code(issues.COVERAGE_MISSING_REQUIRED_SLOT),
                                             "severity": "critical",
                                             "context": {"day": 2, "shift_type": "onsite", "was_ignored": True},
-                                        },
-                                        {
-                                            "code": _issue_code(issues.COVERAGE_MISSING_REQUIRED_SLOT),
-                                            "severity": "critical",
-                                            "context": {"day": 2, "shift_type": "oncall", "was_ignored": False},
-                                        },
-                                        {
-                                            "code": _issue_code(issues.PREFERENCE_MISS),
-                                            "severity": "warning",
-                                            "context": {"doctor_id": 101, "day": 5, "shift_type": "onsite"},
-                                        },
-                                        # Rest findings are also warnings (example shape; context keys may vary).
-                                        {
-                                            "code": _issue_code(issues.REST_CONSECUTIVE_VIOLATION),
-                                            "severity": "warning",
-                                            "context": {"doctor_id": 101, "day": 6},
-                                        },
+                                        }
                                     ],
                                     "per_doctor": [
                                         {
@@ -591,29 +637,21 @@ def generate_schedule(
                                             "assigned_onsite_total": 5,
                                             "assigned_oncall_total": 3,
                                             "rest_violations": 0,
+                                            "preferred_days_requested": 2,
+                                            "preferred_days_missed": 1,
                                             "preference_fulfillment_pct": 78.0,
-                                            "preferred_days_missed": 2,
-                                            # score points: higher => better (core uses points = -penalty_like)
-                                            "score": 120.0,
+                                            "ui_stars": 3,
+                                            "ui_reasons_codes": ["preferred_days_missed", "preferences_not_fully_met"],
+                                            "categories": _example_categories(),
+                                            "solver_components_by_doc": _example_solver_components_by_doc(),
                                         }
                                     ],
                                     "rankings": {
-                                        "top_unhappy": [
-                                            {
-                                                "doctor_id": 101,
-                                                "score": 120.0,
-                                                "reasons_codes": ["preferred_days_missed", "preferences_not_fully_met"],
-                                            }
+                                        "unhappy": [
+                                            {"doctor_id": 101, "score": 3, "reasons_codes": ["preferred_days_missed"]}
                                         ],
-                                        "top_happy": [
-                                            {
-                                                "doctor_id": 101,
-                                                "score": 120.0,
-                                                "reasons_codes": ["good_rest"],
-                                            }
-                                        ],
+                                        "happy": [],
                                     },
-                                    # Audit is extracted from payload.meta.exceptions (history of human decisions).
                                     "audit": [
                                         {
                                             "kind": "generation_ignore",
@@ -625,15 +663,15 @@ def generate_schedule(
                                             "accepted_at": "2026-01-28T09:10:00Z",
                                         }
                                     ],
-                                    # Optional debug breakdown from core scoring components.
-                                    "components": {
+                                    "solver_components_total": {
                                         "rest_penalty": 0,
                                         "preferred_days_penalty": 30,
                                         "totals_penalty": 40,
                                         "fairness_penalty": 10,
                                         "weekday_patterns_penalty": 0,
-                                        "preferred_partners_penalty": 0,
+                                        "weekday_patterns_bonus": 0,
                                         "friday_free_weekend_penalty": 0,
+                                        "preferred_partners_bonus": 0.0,
                                     },
                                     "working_lock_version": 7,
                                 },
@@ -652,20 +690,57 @@ def generate_schedule(
                                     "preference_fulfillment_pct": 100.0,
                                 },
                                 "details": {
-                                    "findings": [],
-                                    "per_doctor": [],
-                                    "rankings": {"top_unhappy": [], "top_happy": []},
-                                    "audit": [],
-                                    "components": {
-                                        "rest_penalty": 0,
-                                        "preferred_days_penalty": 0,
-                                        "totals_penalty": 0,
-                                        "fairness_penalty": 0,
-                                        "weekday_patterns_penalty": 0,
-                                        "preferred_partners_penalty": 0,
-                                        "friday_free_weekend_penalty": 0,
+                                    "findings": [
+                                        {
+                                            "code": _issue_code(issues.COVERAGE_MISSING_REQUIRED_SLOT),
+                                            "severity": "critical",
+                                            "context": {"day": 2, "shift_type": "onsite", "was_ignored": True},
+                                        }
+                                    ],
+                                    "per_doctor": [
+                                        {
+                                            "doctor_id": 101,
+                                            "display_name": "Doctor 101",
+                                            "assigned_onsite_total": 5,
+                                            "assigned_oncall_total": 3,
+                                            "rest_violations": 0,
+                                            "preferred_days_requested": 2,
+                                            "preferred_days_missed": 1,
+                                            "preference_fulfillment_pct": 78.0,
+                                            "ui_stars": 3,
+                                            "ui_reasons_codes": ["preferred_days_missed", "preferences_not_fully_met"],
+                                            "categories": _example_categories(),
+                                            "solver_components_by_doc": _example_solver_components_by_doc(),
+                                        }
+                                    ],
+                                    "rankings": {
+                                        "unhappy": [
+                                            {"doctor_id": 101, "score": 3, "reasons_codes": ["preferred_days_missed"]}
+                                        ],
+                                        "happy": [],
                                     },
-                                    "working_lock_version": None,
+                                    "audit": [
+                                        {
+                                            "kind": "generation_ignore",
+                                            "code": _issue_code(issues.COVERAGE_IGNORED_SLOT),
+                                            "day": 2,
+                                            "shift_type": "onsite",
+                                            "justification": "Holiday staffing shortage — generating draft with gaps.",
+                                            "accepted_by_user_id": 1,
+                                            "accepted_at": "2026-01-28T09:10:00Z",
+                                        }
+                                    ],
+                                    "solver_components_total": {
+                                        "rest_penalty": 0,
+                                        "preferred_days_penalty": 30,
+                                        "totals_penalty": 40,
+                                        "fairness_penalty": 10,
+                                        "weekday_patterns_penalty": 0,
+                                        "weekday_patterns_bonus": 0,
+                                        "friday_free_weekend_penalty": 0,
+                                        "preferred_partners_bonus": 0.0,
+                                    },
+                                    "working_lock_version": 7,
                                 },
                             },
                         },
@@ -686,45 +761,53 @@ def generate_schedule(
                                         {
                                             "code": _issue_code(issues.COVERAGE_MISSING_REQUIRED_SLOT),
                                             "severity": "critical",
-                                            "context": {"day": 10, "shift_type": "oncall", "was_ignored": False},
-                                        },
-                                        {
-                                            "code": _issue_code(issues.COVERAGE_NO_SPECIALIST_DAY),
-                                            "severity": "critical",
-                                            "context": {
-                                                "day": 10,
-                                                "day_empty": True,
-                                                "assigned_doctor_ids": [],
-                                                "was_ignored_day": False,
-                                                "was_ignored_onsite": False,
-                                                "was_ignored_oncall": False,
-                                            },
-                                        },
-                                    ],
-                                    "per_doctor": [],
-                                    "rankings": {"top_unhappy": [], "top_happy": []},
-                                    # Example: a human accepted a hard issue during force publish.
-                                    "audit": [
-                                        {
-                                            "kind": "publish_acceptance",
-                                            "code": _issue_code(issues.COVERAGE_MISSING_REQUIRED_SLOT),
-                                            "day": 10,
-                                            "shift_type": "oncall",
-                                            "justification": "Force publish: duty shortage accepted for day 10 oncall.",
-                                            "accepted_by_user_id": 1,
-                                            "accepted_at": "2026-01-28T10:00:10Z",
+                                            "context": {"day": 2, "shift_type": "onsite", "was_ignored": True},
                                         }
                                     ],
-                                    "components": {
+                                    "per_doctor": [
+                                        {
+                                            "doctor_id": 101,
+                                            "display_name": "Doctor 101",
+                                            "assigned_onsite_total": 5,
+                                            "assigned_oncall_total": 3,
+                                            "rest_violations": 0,
+                                            "preferred_days_requested": 2,
+                                            "preferred_days_missed": 1,
+                                            "preference_fulfillment_pct": 78.0,
+                                            "ui_stars": 3,
+                                            "ui_reasons_codes": ["preferred_days_missed", "preferences_not_fully_met"],
+                                            "categories": _example_categories(),
+                                            "solver_components_by_doc": _example_solver_components_by_doc(),
+                                        }
+                                    ],
+                                    "rankings": {
+                                        "unhappy": [
+                                            {"doctor_id": 101, "score": 3, "reasons_codes": ["preferred_days_missed"]}
+                                        ],
+                                        "happy": [],
+                                    },
+                                    "audit": [
+                                        {
+                                            "kind": "generation_ignore",
+                                            "code": _issue_code(issues.COVERAGE_IGNORED_SLOT),
+                                            "day": 2,
+                                            "shift_type": "onsite",
+                                            "justification": "Holiday staffing shortage — generating draft with gaps.",
+                                            "accepted_by_user_id": 1,
+                                            "accepted_at": "2026-01-28T09:10:00Z",
+                                        }
+                                    ],
+                                    "solver_components_total": {
                                         "rest_penalty": 0,
-                                        "preferred_days_penalty": 20,
-                                        "totals_penalty": 30,
+                                        "preferred_days_penalty": 30,
+                                        "totals_penalty": 40,
                                         "fairness_penalty": 10,
                                         "weekday_patterns_penalty": 0,
-                                        "preferred_partners_penalty": 0,
+                                        "weekday_patterns_bonus": 0,
                                         "friday_free_weekend_penalty": 0,
+                                        "preferred_partners_bonus": 0.0,
                                     },
-                                    "working_lock_version": None,
+                                    "working_lock_version": 7,
                                 },
                             },
                         },
@@ -803,6 +886,11 @@ def schedules_diagnostics(
         "Note:\n"
         "- draft.payload / published.payload is null ONLY when the pointer does not exist.\n"
         "  If pointer exists, payload is always a full SchedulePayload (validated by the service)."
+        "\n\n"
+        "Diagnostics DTO notes (stable contract):\n"
+        "- diagnostics.details.rankings uses keys: happy and unhappy (full lists).\n"
+        "- DoctorRankingItemRead.score is the UI stars (1..5).\n"
+        "- diagnostics.details.per_doctor items include categories and solver_components_by_doc.\n"
     ),
     responses={
         200: {
@@ -917,12 +1005,65 @@ def schedules_diagnostics(
                                         "preference_fulfillment_pct": 100.0,
                                     },
                                     "details": {
-                                        "findings": [],
-                                        "per_doctor": [],
-                                        "rankings": {"top_unhappy": [], "top_happy": []},
-                                        "audit": [],
-                                        "components": {},
-                                        "working_lock_version": None,
+                                        "findings": [
+                                            {
+                                                "code": _issue_code(issues.COVERAGE_MISSING_REQUIRED_SLOT),
+                                                "severity": "critical",
+                                                "context": {"day": 2, "shift_type": "onsite", "was_ignored": True},
+                                            }
+                                        ],
+                                        "per_doctor": [
+                                            {
+                                                "doctor_id": 101,
+                                                "display_name": "Doctor 101",
+                                                "assigned_onsite_total": 5,
+                                                "assigned_oncall_total": 3,
+                                                "rest_violations": 0,
+                                                "preferred_days_requested": 2,
+                                                "preferred_days_missed": 1,
+                                                "preference_fulfillment_pct": 78.0,
+                                                "ui_stars": 3,
+                                                "ui_reasons_codes": [
+                                                    "preferred_days_missed",
+                                                    "preferences_not_fully_met",
+                                                ],
+                                                "categories": _example_categories(),
+                                                "solver_components_by_doc": _example_solver_components_by_doc(),
+                                            }
+                                        ],
+                                        "rankings": {
+                                            "unhappy": [
+                                                {
+                                                    "doctor_id": 101,
+                                                    "score": 3,
+                                                    "reasons_codes": ["preferred_days_missed"],
+                                                }
+                                            ],
+                                            "happy": [],
+                                        },
+                                        "audit": [
+                                            {
+                                                "kind": "generation_ignore",
+                                                "code": _issue_code(issues.COVERAGE_IGNORED_SLOT),
+                                                "day": 2,
+                                                "shift_type": "onsite",
+                                                "justification": "Holiday staffing shortage "
+                                                "— generating draft with gaps.",
+                                                "accepted_by_user_id": 1,
+                                                "accepted_at": "2026-01-28T09:10:00Z",
+                                            }
+                                        ],
+                                        "solver_components_total": {
+                                            "rest_penalty": 0,
+                                            "preferred_days_penalty": 30,
+                                            "totals_penalty": 40,
+                                            "fairness_penalty": 10,
+                                            "weekday_patterns_penalty": 0,
+                                            "weekday_patterns_bonus": 0,
+                                            "friday_free_weekend_penalty": 0,
+                                            "preferred_partners_bonus": 0.0,
+                                        },
+                                        "working_lock_version": 7,
                                     },
                                 },
                             },
@@ -1039,12 +1180,65 @@ def schedules_diagnostics(
                                         "preference_fulfillment_pct": 100.0,
                                     },
                                     "details": {
-                                        "findings": [],
-                                        "per_doctor": [],
-                                        "rankings": {"top_unhappy": [], "top_happy": []},
-                                        "audit": [],
-                                        "components": {},
-                                        "working_lock_version": None,
+                                        "findings": [
+                                            {
+                                                "code": _issue_code(issues.COVERAGE_MISSING_REQUIRED_SLOT),
+                                                "severity": "critical",
+                                                "context": {"day": 2, "shift_type": "onsite", "was_ignored": True},
+                                            }
+                                        ],
+                                        "per_doctor": [
+                                            {
+                                                "doctor_id": 101,
+                                                "display_name": "Doctor 101",
+                                                "assigned_onsite_total": 5,
+                                                "assigned_oncall_total": 3,
+                                                "rest_violations": 0,
+                                                "preferred_days_requested": 2,
+                                                "preferred_days_missed": 1,
+                                                "preference_fulfillment_pct": 78.0,
+                                                "ui_stars": 3,
+                                                "ui_reasons_codes": [
+                                                    "preferred_days_missed",
+                                                    "preferences_not_fully_met",
+                                                ],
+                                                "categories": _example_categories(),
+                                                "solver_components_by_doc": _example_solver_components_by_doc(),
+                                            }
+                                        ],
+                                        "rankings": {
+                                            "unhappy": [
+                                                {
+                                                    "doctor_id": 101,
+                                                    "score": 3,
+                                                    "reasons_codes": ["preferred_days_missed"],
+                                                }
+                                            ],
+                                            "happy": [],
+                                        },
+                                        "audit": [
+                                            {
+                                                "kind": "generation_ignore",
+                                                "code": _issue_code(issues.COVERAGE_IGNORED_SLOT),
+                                                "day": 2,
+                                                "shift_type": "onsite",
+                                                "justification": "Holiday staffing shortage "
+                                                "— generating draft with gaps.",
+                                                "accepted_by_user_id": 1,
+                                                "accepted_at": "2026-01-28T09:10:00Z",
+                                            }
+                                        ],
+                                        "solver_components_total": {
+                                            "rest_penalty": 0,
+                                            "preferred_days_penalty": 30,
+                                            "totals_penalty": 40,
+                                            "fairness_penalty": 10,
+                                            "weekday_patterns_penalty": 0,
+                                            "weekday_patterns_bonus": 0,
+                                            "friday_free_weekend_penalty": 0,
+                                            "preferred_partners_bonus": 0.0,
+                                        },
+                                        "working_lock_version": 7,
                                     },
                                 },
                             },
@@ -1122,7 +1316,7 @@ def schedules_period_view(
                                 "participant_doctor_ids": [1, 2, 3],
                                 "assignments": [
                                     {"day": 1, "shift_type": "onsite", "doctor_id": 2},
-                                    {"day": 1, "shift_type": "on_call", "doctor_id": 1},
+                                    {"day": 1, "shift_type": "oncall", "doctor_id": 1},
                                 ],
                                 "meta": {"labels": ["edited_by_admin"], "exceptions": []},
                                 "updated_at": "2026-02-02T10:15:30Z",
@@ -1328,12 +1522,57 @@ def schedules_working_put(
                                 "preference_fulfillment_pct": 100.0,
                             },
                             "details": {
-                                "findings": [],
-                                "per_doctor": [],
-                                "rankings": {"top_unhappy": [], "top_happy": []},
-                                "audit": [],
-                                "components": {},
-                                "working_lock_version": None,
+                                "findings": [
+                                    {
+                                        "code": _issue_code(issues.COVERAGE_MISSING_REQUIRED_SLOT),
+                                        "severity": "critical",
+                                        "context": {"day": 2, "shift_type": "onsite", "was_ignored": True},
+                                    }
+                                ],
+                                "per_doctor": [
+                                    {
+                                        "doctor_id": 101,
+                                        "display_name": "Doctor 101",
+                                        "assigned_onsite_total": 5,
+                                        "assigned_oncall_total": 3,
+                                        "rest_violations": 0,
+                                        "preferred_days_requested": 2,
+                                        "preferred_days_missed": 1,
+                                        "preference_fulfillment_pct": 78.0,
+                                        "ui_stars": 3,
+                                        "ui_reasons_codes": ["preferred_days_missed", "preferences_not_fully_met"],
+                                        "categories": _example_categories(),
+                                        "solver_components_by_doc": _example_solver_components_by_doc(),
+                                    }
+                                ],
+                                "rankings": {
+                                    "unhappy": [
+                                        {"doctor_id": 101, "score": 3, "reasons_codes": ["preferred_days_missed"]}
+                                    ],
+                                    "happy": [],
+                                },
+                                "audit": [
+                                    {
+                                        "kind": "generation_ignore",
+                                        "code": _issue_code(issues.COVERAGE_IGNORED_SLOT),
+                                        "day": 2,
+                                        "shift_type": "onsite",
+                                        "justification": "Holiday staffing shortage — generating draft with gaps.",
+                                        "accepted_by_user_id": 1,
+                                        "accepted_at": "2026-01-28T09:10:00Z",
+                                    }
+                                ],
+                                "solver_components_total": {
+                                    "rest_penalty": 0,
+                                    "preferred_days_penalty": 30,
+                                    "totals_penalty": 40,
+                                    "fairness_penalty": 10,
+                                    "weekday_patterns_penalty": 0,
+                                    "weekday_patterns_bonus": 0,
+                                    "friday_free_weekend_penalty": 0,
+                                    "preferred_partners_bonus": 0.0,
+                                },
+                                "working_lock_version": 7,
                             },
                         },
                     }
@@ -1454,12 +1693,57 @@ def schedules_checkpoint(
                                 "preference_fulfillment_pct": 100.0,
                             },
                             "details": {
-                                "findings": [],
-                                "per_doctor": [],
-                                "rankings": {"top_unhappy": [], "top_happy": []},
-                                "audit": [],
-                                "components": {},
-                                "working_lock_version": None,
+                                "findings": [
+                                    {
+                                        "code": _issue_code(issues.COVERAGE_MISSING_REQUIRED_SLOT),
+                                        "severity": "critical",
+                                        "context": {"day": 2, "shift_type": "onsite", "was_ignored": True},
+                                    }
+                                ],
+                                "per_doctor": [
+                                    {
+                                        "doctor_id": 101,
+                                        "display_name": "Doctor 101",
+                                        "assigned_onsite_total": 5,
+                                        "assigned_oncall_total": 3,
+                                        "rest_violations": 0,
+                                        "preferred_days_requested": 2,
+                                        "preferred_days_missed": 1,
+                                        "preference_fulfillment_pct": 78.0,
+                                        "ui_stars": 3,
+                                        "ui_reasons_codes": ["preferred_days_missed", "preferences_not_fully_met"],
+                                        "categories": _example_categories(),
+                                        "solver_components_by_doc": _example_solver_components_by_doc(),
+                                    }
+                                ],
+                                "rankings": {
+                                    "unhappy": [
+                                        {"doctor_id": 101, "score": 3, "reasons_codes": ["preferred_days_missed"]}
+                                    ],
+                                    "happy": [],
+                                },
+                                "audit": [
+                                    {
+                                        "kind": "generation_ignore",
+                                        "code": _issue_code(issues.COVERAGE_IGNORED_SLOT),
+                                        "day": 2,
+                                        "shift_type": "onsite",
+                                        "justification": "Holiday staffing shortage — generating draft with gaps.",
+                                        "accepted_by_user_id": 1,
+                                        "accepted_at": "2026-01-28T09:10:00Z",
+                                    }
+                                ],
+                                "solver_components_total": {
+                                    "rest_penalty": 0,
+                                    "preferred_days_penalty": 30,
+                                    "totals_penalty": 40,
+                                    "fairness_penalty": 10,
+                                    "weekday_patterns_penalty": 0,
+                                    "weekday_patterns_bonus": 0,
+                                    "friday_free_weekend_penalty": 0,
+                                    "preferred_partners_bonus": 0.0,
+                                },
+                                "working_lock_version": 7,
                             },
                         },
                     }
@@ -1585,12 +1869,57 @@ def schedules_draft_undo(
                                 "preference_fulfillment_pct": 100.0,
                             },
                             "details": {
-                                "findings": [],
-                                "per_doctor": [],
-                                "rankings": {"top_unhappy": [], "top_happy": []},
-                                "audit": [],
-                                "components": {},
-                                "working_lock_version": None,
+                                "findings": [
+                                    {
+                                        "code": _issue_code(issues.COVERAGE_MISSING_REQUIRED_SLOT),
+                                        "severity": "critical",
+                                        "context": {"day": 2, "shift_type": "onsite", "was_ignored": True},
+                                    }
+                                ],
+                                "per_doctor": [
+                                    {
+                                        "doctor_id": 101,
+                                        "display_name": "Doctor 101",
+                                        "assigned_onsite_total": 5,
+                                        "assigned_oncall_total": 3,
+                                        "rest_violations": 0,
+                                        "preferred_days_requested": 2,
+                                        "preferred_days_missed": 1,
+                                        "preference_fulfillment_pct": 78.0,
+                                        "ui_stars": 3,
+                                        "ui_reasons_codes": ["preferred_days_missed", "preferences_not_fully_met"],
+                                        "categories": _example_categories(),
+                                        "solver_components_by_doc": _example_solver_components_by_doc(),
+                                    }
+                                ],
+                                "rankings": {
+                                    "unhappy": [
+                                        {"doctor_id": 101, "score": 3, "reasons_codes": ["preferred_days_missed"]}
+                                    ],
+                                    "happy": [],
+                                },
+                                "audit": [
+                                    {
+                                        "kind": "generation_ignore",
+                                        "code": _issue_code(issues.COVERAGE_IGNORED_SLOT),
+                                        "day": 2,
+                                        "shift_type": "onsite",
+                                        "justification": "Holiday staffing shortage — generating draft with gaps.",
+                                        "accepted_by_user_id": 1,
+                                        "accepted_at": "2026-01-28T09:10:00Z",
+                                    }
+                                ],
+                                "solver_components_total": {
+                                    "rest_penalty": 0,
+                                    "preferred_days_penalty": 30,
+                                    "totals_penalty": 40,
+                                    "fairness_penalty": 10,
+                                    "weekday_patterns_penalty": 0,
+                                    "weekday_patterns_bonus": 0,
+                                    "friday_free_weekend_penalty": 0,
+                                    "preferred_partners_bonus": 0.0,
+                                },
+                                "working_lock_version": 7,
                             },
                         },
                     }
@@ -2237,7 +2566,7 @@ def schedules_my_assignments(
         "Return published per-doctor diagnostics for the current doctor for {year, month}.\n\n"
         "Privacy:\n"
         "- Returns ONLY the current doctor's stats (totals, rest_violations, preference %, "
-        "preferred_days_missed, optional score).\n"
+        "preferred_days_missed, ui_stars (1..5)).\n"
         "- No findings, no rankings, no audit, no other doctors.\n\n"
         "inputs_snapshot is required (NO FALLBACKS). If missing -> 409.\n"
     ),
@@ -2258,26 +2587,13 @@ def schedules_my_assignments(
                                     "assigned_onsite_total": 5,
                                     "assigned_oncall_total": 3,
                                     "rest_violations": 0,
-                                    "preference_fulfillment_pct": 82.0,
+                                    "preferred_days_requested": 2,
                                     "preferred_days_missed": 2,
-                                    "score": 120.0,
-                                },
-                            },
-                        },
-                        "ok_without_score": {
-                            "summary": "Same payload, but score may be omitted (optional field)",
-                            "value": {
-                                "version_id": 200,
-                                "computed_at": "2026-01-28T10:05:01Z",
-                                "doctor": {
-                                    "doctor_id": 101,
-                                    "display_name": "Doctor 101",
-                                    "assigned_onsite_total": 5,
-                                    "assigned_oncall_total": 3,
-                                    "rest_violations": 0,
                                     "preference_fulfillment_pct": 82.0,
-                                    "preferred_days_missed": 2,
-                                    # score omitted intentionally
+                                    "ui_stars": 4,
+                                    "ui_reasons_codes": ["preferences_not_fully_met"],
+                                    "categories": _example_categories(),
+                                    "solver_components_by_doc": _example_solver_components_by_doc(),
                                 },
                             },
                         },
