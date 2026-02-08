@@ -2,19 +2,21 @@
 """
 Core diagnostics — per_doctor[] + rankings determinism.
 
-What we test here (human-friendly, UPDATED to new UI rankings):
-- per_doctor contains a row for each participant doctor id.
-- rankings are stable and deterministic:
-  - every doctor appears in EXACTLY ONE list: top_happy OR top_unhappy
-  - happy list order:
-      ui_stars DESC, then alphabetical by "surname" (last token of display_name),
-      then display_name, then doctor_id (stable tie-break)
-  - unhappy list order:
-      ui_stars ASC, then alphabetical by "surname" (last token of display_name),
-      then display_name, then doctor_id
+UPDATED to new UI rankings:
+- rankings keys: happy / unhappy (full lists, no top_n slicing)
+- every doctor is in EXACTLY ONE list: happy OR unhappy
+- sorting rules:
+    happy:   ui_stars DESC, then surname(last token), then display_name, then doctor_id
+    unhappy: ui_stars ASC,  then surname(last token), then display_name, then doctor_id
 
 Notes:
-- Ranking "score" is UI stars (for backward-compat schema), not solver score_points.
+- Ranking "score" is UI stars (float/int), not solver score_points.
+
+IMPORTANT (contract update):
+- per_doctor rows no longer include "ui_components"
+- detailed UI breakdown is now returned as:
+  - categories
+  - solver_components_by_doc
 """
 
 from __future__ import annotations
@@ -49,6 +51,7 @@ def _payload(
         }
         for did in participant_ids
     }
+
     return {
         "participant_doctor_ids": list(participant_ids),
         "assignments": list(assignments),
@@ -99,18 +102,50 @@ def test_per_doctor_rows_exist_for_all_participants(make_problem_data):
     assert {int(r["doctor_id"]) for r in per_doctor} == {1, 2}
 
     # Minimal fields required by contract.
+    required_category_keys = {
+        "rest",
+        "preferred_days",
+        "fairness",
+        "totals",
+        "weekday_patterns",
+        "friday_free_weekend",
+        "preferred_partners",
+    }
+    required_solver_components_keys = {
+        "rest_penalty",
+        "preferred_days_penalty",
+        "totals_penalty",
+        "fairness_penalty",
+        "weekday_patterns_penalty",
+        "weekday_patterns_bonus",
+        "friday_free_weekend_penalty",
+        "preferred_partners_bonus",
+    }
+
     for r in per_doctor:
         assert "doctor_id" in r
         assert "display_name" in r
         assert "assigned_onsite_total" in r
         assert "assigned_oncall_total" in r
         assert "rest_violations" in r
-        assert "preference_fulfillment_pct" in r
+
+        # Preference stats are now all top-level
+        assert "preferred_days_requested" in r
         assert "preferred_days_missed" in r
-        assert "score" in r  # legacy points; rankings no longer derive from this
+        assert "preference_fulfillment_pct" in r
+
+        # UI summary
         assert "ui_stars" in r
         assert "ui_reasons_codes" in r
-        assert "ui_components" in r
+
+        # Detailed UI breakdown is now top-level:
+        assert "categories" in r
+        assert isinstance(r["categories"], dict)
+        assert set(r["categories"].keys()) == required_category_keys
+
+        assert "solver_components_by_doc" in r
+        assert isinstance(r["solver_components_by_doc"], dict)
+        assert set(r["solver_components_by_doc"].keys()) == required_solver_components_keys
 
 
 def test_rankings_are_consistent_with_per_doctor_scores_and_stable(make_problem_data):
@@ -155,29 +190,25 @@ def test_rankings_are_consistent_with_per_doctor_scores_and_stable(make_problem_
     ]
 
     payload = _payload(participant_ids=[1, 2, 3, 4], assignments=assignments, display_names=display_names)
-
     out = compute_quality(problem=problem, payload=payload)
 
     rankings = out["details"]["rankings"]
-    assert "top_unhappy" in rankings
-    assert "top_happy" in rankings
+    assert "unhappy" in rankings
+    assert "happy" in rankings
 
-    top_unhappy = list(rankings["top_unhappy"])
-    top_happy = list(rankings["top_happy"])
+    unhappy = list(rankings["unhappy"])
+    happy = list(rankings["happy"])
 
     per_doctor = out["details"]["per_doctor"]
     assert len(per_doctor) >= 4
 
     # Everyone must be in exactly one list
-    ids_unhappy = {int(r["doctor_id"]) for r in top_unhappy}
-    ids_happy = {int(r["doctor_id"]) for r in top_happy}
+    ids_unhappy = {int(r["doctor_id"]) for r in unhappy}
+    ids_happy = {int(r["doctor_id"]) for r in happy}
     assert ids_unhappy.isdisjoint(ids_happy)
     assert ids_unhappy.union(ids_happy) == {int(r["doctor_id"]) for r in per_doctor}
 
     # Build expected orders from per_doctor and the NEW sorting rules.
-    # Partition rule must match diagnostics:
-    # happy: ui_stars >= 4
-    # unhappy: ui_stars <= 3
     HAPPY_MIN_STARS = 4
     expected_happy = [r for r in per_doctor if int(r.get("ui_stars", 0)) >= HAPPY_MIN_STARS]
     expected_unhappy = [r for r in per_doctor if int(r.get("ui_stars", 0)) < HAPPY_MIN_STARS]
@@ -201,8 +232,8 @@ def test_rankings_are_consistent_with_per_doctor_scores_and_stable(make_problem_
         ),
     )
 
-    assert [int(r["doctor_id"]) for r in top_happy] == [int(r["doctor_id"]) for r in expected_happy_sorted]
-    assert [int(r["doctor_id"]) for r in top_unhappy] == [int(r["doctor_id"]) for r in expected_unhappy_sorted]
+    assert [int(r["doctor_id"]) for r in happy] == [int(r["doctor_id"]) for r in expected_happy_sorted]
+    assert [int(r["doctor_id"]) for r in unhappy] == [int(r["doctor_id"]) for r in expected_unhappy_sorted]
 
 
 def test_rankings_ui_rows_have_valid_reason_codes_and_score_matches_ui_stars(make_problem_data):
@@ -236,12 +267,12 @@ def test_rankings_ui_rows_have_valid_reason_codes_and_score_matches_ui_stars(mak
     out = compute_quality(problem=problem, payload=payload)
 
     rankings = out["details"]["rankings"]
-    top_unhappy = list(rankings["top_unhappy"])
-    top_happy = list(rankings["top_happy"])
+    unhappy = list(rankings["unhappy"])
+    happy = list(rankings["happy"])
 
     # Everyone must be in exactly one list
-    ids_unhappy = {int(r["doctor_id"]) for r in top_unhappy}
-    ids_happy = {int(r["doctor_id"]) for r in top_happy}
+    ids_unhappy = {int(r["doctor_id"]) for r in unhappy}
+    ids_happy = {int(r["doctor_id"]) for r in happy}
     assert ids_unhappy.isdisjoint(ids_happy)
     assert ids_unhappy | ids_happy == {1, 2, 3}
 
@@ -249,7 +280,7 @@ def test_rankings_ui_rows_have_valid_reason_codes_and_score_matches_ui_stars(mak
     per_map = {int(r["doctor_id"]): r for r in per_doctor}
 
     # Ranking rows: score == per_doctor.ui_stars, reasons_codes are short + whitelisted
-    for r in top_unhappy + top_happy:
+    for r in unhappy + happy:
         did = int(r["doctor_id"])
         assert did in per_map
 
@@ -268,8 +299,8 @@ def test_rankings_partition_no_overlap_even_when_all_doctors_have_three_stars(ma
     """
     Edge-case: everyone has exactly 3 stars.
     Expectation (by partition rule):
-    - top_happy is empty (since happy requires >= 4)
-    - top_unhappy contains everyone
+    - happy is empty (since happy requires >= 4)
+    - unhappy contains everyone
     - still no overlaps
     """
     doctors = {
@@ -293,11 +324,41 @@ def test_rankings_partition_no_overlap_even_when_all_doctors_have_three_stars(ma
     )
 
     # Force UI stars to 3 for everyone (testing partition logic, not the star algorithm here).
-    # We patch the function inside backend.core.diagnostics module.
     import backend.core.diagnostics as diag
 
     def _forced_ui_quality_for_doctor(**kwargs):
-        return 3, [], {"stars": 3}
+        # compute_quality extracts:
+        # - categories from ui_components["categories"]
+        # - solver_components_by_doc from ui_components["solver_components_by_doc"]
+        # so we must provide them even in this forced stub.
+        minimal_categories = {
+            "rest": {"applicable": True, "badness": 0.0, "stars": 3},
+            "preferred_days": {"applicable": False, "badness": 0.0, "stars": None, "requested": 0, "missed": 0},
+            "fairness": {"applicable": True, "badness": 0.0, "stars": 3},
+            "totals": {"applicable": False, "badness": 0.0, "stars": None},
+            "weekday_patterns": {
+                "applicable": False,
+                "badness": 0.0,
+                "stars": None,
+                "avoid_penalty": 0,
+                "preferred_bonus": 0,
+                "preferred_declared": False,
+                "avoid_declared": False,
+            },
+            "friday_free_weekend": {"applicable": False, "badness": 0.0, "stars": None},
+            "preferred_partners": {"applicable": False, "badness": 0.0, "stars": None},
+        }
+        minimal_solver_components = {
+            "rest_penalty": 0,
+            "preferred_days_penalty": 0,
+            "totals_penalty": 0,
+            "fairness_penalty": 0,
+            "weekday_patterns_penalty": 0,
+            "weekday_patterns_bonus": 0,
+            "friday_free_weekend_penalty": 0,
+            "preferred_partners_bonus": 0.0,
+        }
+        return 3, [], {"categories": minimal_categories, "solver_components_by_doc": minimal_solver_components}
 
     monkeypatch.setattr(diag, "_ui_quality_for_doctor", _forced_ui_quality_for_doctor)
 
@@ -311,13 +372,13 @@ def test_rankings_partition_no_overlap_even_when_all_doctors_have_three_stars(ma
     out = compute_quality(problem=problem, payload=payload)
 
     rankings = out["details"]["rankings"]
-    top_unhappy = list(rankings["top_unhappy"])
-    top_happy = list(rankings["top_happy"])
+    unhappy = list(rankings["unhappy"])
+    happy = list(rankings["happy"])
 
-    assert len(top_happy) == 0
-    assert {int(r["doctor_id"]) for r in top_unhappy} == {1, 2, 3, 4}
+    assert len(happy) == 0
+    assert {int(r["doctor_id"]) for r in unhappy} == {1, 2, 3, 4}
 
-    ids_unhappy = {int(r["doctor_id"]) for r in top_unhappy}
-    ids_happy = {int(r["doctor_id"]) for r in top_happy}
+    ids_unhappy = {int(r["doctor_id"]) for r in unhappy}
+    ids_happy = {int(r["doctor_id"]) for r in happy}
     assert ids_unhappy.isdisjoint(ids_happy)
     assert ids_unhappy | ids_happy == {1, 2, 3, 4}

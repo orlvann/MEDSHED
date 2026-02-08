@@ -115,7 +115,9 @@ from backend.models.constants.diagnostics_reason_codes import (
     REASON_PREFERENCES_NOT_FULLY_MET,
     REASON_PREFERRED_DAYS_MISSED,
     REASON_REST_VIOLATIONS,
-    REASON_WEEKDAY_PATTERN_MISMATCH,
+    REASON_WEEKDAY_AVOID_HIT,
+    REASON_WEEKDAY_PREFERRED_MATCHED,
+    REASON_WEEKDAY_PREFERRED_NOT_MATCHED,
 )
 
 # ----------------------------- issues codes (safe) -----------------------------
@@ -1235,25 +1237,32 @@ def _compute_fairness_stats(*, problem: ProblemData, idx: _Index) -> tuple[int, 
 
 
 def compute_weekday_patterns_penalty(*, problem: ProblemData, idx: _Index) -> int:
-    """Backward-compatible wrapper (total penalty)."""
-    total_penalty, _pen_by_doc = _compute_weekday_patterns_penalty_per_doctor(problem=problem, idx=idx)
-    return int(total_penalty)
+    """Backward-compatible wrapper (NET = penalty + bonus)."""
+    total_pen, total_bonus, _pen_by_doc, _bonus_by_doc = _compute_weekday_patterns_components_per_doctor(
+        problem=problem, idx=idx
+    )
+    return int(total_pen + total_bonus)
 
 
-def _compute_weekday_patterns_penalty_per_doctor(
+def _compute_weekday_patterns_components_per_doctor(
     *,
     problem: ProblemData,
     idx: _Index,
-) -> tuple[int, Dict[int, int]]:
+) -> tuple[int, int, Dict[int, int], Dict[int, int]]:
     """
-    Weekday pattern terms:
-    - preferred weekdays -> small BONUS (negative penalty)
-    - avoid weekdays -> small PENALTY (positive penalty)
+    Weekday pattern terms split into two components (NO mixed signs in one field):
 
-    Returns: (total_penalty, penalty_by_doctor)
+    - weekday_patterns_penalty: >= 0 (avoid weekdays)
+    - weekday_patterns_bonus: <= 0 (preferred weekdays; solver convention: negative)
+
+    Returns:
+        (total_penalty, total_bonus, penalty_by_doctor, bonus_by_doctor)
     """
-    total_penalty = 0
+    total_penalty = 0  # >= 0
+    total_bonus = 0  # <= 0
+
     penalty_by_doctor: Dict[int, int] = {int(d): 0 for d in problem.participant_doctor_ids}
+    bonus_by_doctor: Dict[int, int] = {int(d): 0 for d in problem.participant_doctor_ids}
 
     preferred_w = int(scoring.weekday_pattern_weight(kind="preferred"))
     avoid_w = int(scoring.weekday_pattern_weight(kind="avoid"))
@@ -1268,24 +1277,32 @@ def _compute_weekday_patterns_penalty_per_doctor(
         avoid_ons = set(int(v) for v in prefs.avoid_onsite_weekdays)
         avoid_onc = set(int(v) for v in prefs.avoid_oncall_weekdays)
 
-        p = 0
+        p_pen = 0  # >= 0
+        p_bonus = 0  # <= 0
+
         for d_raw in problem.days:
             d = int(d_raw)
             wd = _weekday(problem, d)
 
+            # Preferred weekdays -> BONUS (negative)
             if wd in pref_ons and _doctor_has(idx, doctor_id=doc_id, day=d, shift_type=ShiftType.onsite):
-                p -= preferred_w
+                p_bonus -= preferred_w
             if wd in pref_onc and _doctor_has(idx, doctor_id=doc_id, day=d, shift_type=ShiftType.oncall):
-                p -= preferred_w
+                p_bonus -= preferred_w
+
+            # Avoid weekdays -> PENALTY (positive)
             if wd in avoid_ons and _doctor_has(idx, doctor_id=doc_id, day=d, shift_type=ShiftType.onsite):
-                p += avoid_w
+                p_pen += avoid_w
             if wd in avoid_onc and _doctor_has(idx, doctor_id=doc_id, day=d, shift_type=ShiftType.oncall):
-                p += avoid_w
+                p_pen += avoid_w
 
-        penalty_by_doctor[int(doc_id)] = int(p)
-        total_penalty += int(p)
+        penalty_by_doctor[int(doc_id)] = int(p_pen)
+        bonus_by_doctor[int(doc_id)] = int(p_bonus)
 
-    return int(total_penalty), penalty_by_doctor
+        total_penalty += int(p_pen)
+        total_bonus += int(p_bonus)
+
+    return int(total_penalty), int(total_bonus), penalty_by_doctor, bonus_by_doctor
 
 
 # ----------------------------- preferred partners (per-doctor bonus) -------------
@@ -1658,12 +1675,15 @@ def _ui_quality_for_doctor(
     pref_days_pen: int,
     totals_pen: int,
     fairness_pen: int,
-    weekday_pen: int,
+    weekday_pen: int,  # >= 0 (avoid weekdays hit)
+    weekday_bonus: int,  # <= 0 (preferred weekdays matched; solver convention: negative)
     friday_pen: int,
     partners_bonus: float,  # negative means "good" (bonus)
     # applicability hints (computed in compute_quality from preferences/month calendar)
-    weekday_prefs_declared: bool = False,
+    weekday_preferred_declared: bool = False,
+    weekday_avoid_declared: bool = False,
     preferred_partners_declared: bool = False,
+    totals_prefs_declared: bool = False,
     friday_rule_applicable: bool = False,
 ) -> tuple[int, list[str], dict[str, Any]]:
     """
@@ -1674,14 +1694,12 @@ def _ui_quality_for_doctor(
     - ui_reasons_codes: list[str] max 3 (stable codes)
     - ui_components: dict with per-category applicable/badness/stars + debug inputs
     """
-    doc_id = int(doctor_id)
 
     categories: Dict[str, Dict[str, Any]] = {}
 
     # "Has any work / any signal at all?"
     assigned_any = (
-        int(double_shift_days) > 0
-        or int(rest_violations) > 0
+        int(rest_violations) > 0
         or int(rest_pen) != 0
         or int(pref_days_pen) != 0
         or int(totals_pen) != 0
@@ -1745,27 +1763,45 @@ def _ui_quality_for_doctor(
     }
 
     # -----------------------------
-    # TOTALS (penalty-based)
+    # TOTALS (only if declared in preferences)
     # -----------------------------
     tp = max(0, int(totals_pen))
-    totals_applicable = bool(assigned_any)
-    totals_badness = _clamp_float(float(tp) / 80.0, 0.0, 1.0) if totals_applicable else 0.0
+    totals_applicable = bool(totals_prefs_declared)
+
+    if not totals_applicable:
+        totals_badness = 0.0
+        totals_stars = None
+    else:
+        totals_badness = _clamp_float(float(tp) / 80.0, 0.0, 1.0)
+        totals_stars = int(_badness_to_stars_1_5(totals_badness))
+
     categories["totals"] = {
         "applicable": bool(totals_applicable),
         "badness": float(totals_badness),
-        "stars": int(_badness_to_stars_1_5(totals_badness)) if totals_applicable else None,
+        "stars": totals_stars,
     }
 
     # -----------------------------
     # WEEKDAY PATTERNS (only if declared)
+    # - avoid: penalty >= 0
+    # - preferred: bonus <= 0 (negative means "matched")
     # -----------------------------
-    wp = int(weekday_pen)  # can be negative (bonus)
-    weekday_applicable = bool(weekday_prefs_declared)
-    weekday_badness = _clamp_float(float(max(0, wp)) / 20.0, 0.0, 1.0) if weekday_applicable else 0.0
+    wp = max(0, int(weekday_pen))  # avoid penalty (>=0)
+    wb = int(weekday_bonus)  # preferred bonus (<=0)
+
+    weekday_applicable = bool(weekday_preferred_declared) or bool(weekday_avoid_declared)
+
+    # Badness is driven mainly by avoid-penalty.
+    weekday_badness = _clamp_float(float(wp) / 20.0, 0.0, 1.0) if weekday_applicable else 0.0
+
     categories["weekday_patterns"] = {
         "applicable": bool(weekday_applicable),
         "badness": float(weekday_badness),
         "stars": int(_badness_to_stars_1_5(weekday_badness)) if weekday_applicable else None,
+        "avoid_penalty": int(wp),
+        "preferred_bonus": int(wb),
+        "preferred_declared": bool(weekday_preferred_declared),
+        "avoid_declared": bool(weekday_avoid_declared),
     }
 
     # -----------------------------
@@ -1832,7 +1868,7 @@ def _ui_quality_for_doctor(
     stars = _clamp_int(int(stars), 1, 5)
 
     # -----------------------------
-    # Reasons (max 3, stable)
+    # Reasons (max 5, stable)
     # -----------------------------
     reasons: List[str] = []
 
@@ -1851,10 +1887,13 @@ def _ui_quality_for_doctor(
     if totals_applicable and tp > 0:
         soft_candidates.append((float(totals_badness) * float(weights["totals"]), REASON_OVERLOADED_TOTALS))
 
-    if weekday_applicable and max(0, wp) > 0:
-        soft_candidates.append(
-            (float(weekday_badness) * float(weights["weekday_patterns"]), REASON_WEEKDAY_PATTERN_MISMATCH)
-        )
+        # Weekday avoid hit (negative signal)
+    if weekday_avoid_declared and int(wp) > 0:
+        soft_candidates.append((float(weekday_badness) * float(weights["weekday_patterns"]), REASON_WEEKDAY_AVOID_HIT))
+
+    # Preferred weekdays declared but not matched (negative signal)
+    if weekday_preferred_declared and int(weekday_bonus) == 0:
+        soft_candidates.append((0.01, REASON_WEEKDAY_PREFERRED_NOT_MATCHED))
 
     if friday_applicable and frp > 0:
         soft_candidates.append((float(friday_badness) * float(weights["friday_free_weekend"]), REASON_FRIDAY_PENALTY))
@@ -1880,29 +1919,28 @@ def _ui_quality_for_doctor(
             continue
         seen.add(str(r))
         out.append(str(r))
-        if len(out) >= 3:
+        if len(out) >= 5:
             break
 
+        # Keep the same naming as the public API "solver_components_by_doc".
+    # This dict is still useful internally (tests/debug), even if the API now exposes it top-level.
+    solver_components_by_doc = {
+        "rest_penalty": int(rest_pen),
+        "preferred_days_penalty": int(pref_days_pen),
+        "totals_penalty": int(totals_pen),
+        "fairness_penalty": int(fairness_pen),
+        "weekday_patterns_penalty": int(weekday_pen),
+        "weekday_patterns_bonus": int(weekday_bonus),
+        "friday_free_weekend_penalty": int(friday_pen),
+        "preferred_partners_bonus": float(pb),
+    }
+
+    # Minimal internal breakdown:
+    # - we keep ONLY what compute_quality needs to lift into per_doctor top-level fields
+    # - we intentionally do NOT include duplicates like doctor_id/stars/inputs/etc.
     ui_components = {
-        "stars": int(stars),
-        "doctor_id": int(doc_id),
-        "double_shift_days": int(ds),
-        "inputs": {
-            "rest_violations": int(rv),
-            "preference_fulfillment_pct": float(preference_fulfillment_pct),
-            "preferred_days_requested": int(req),
-            "preferred_days_missed": int(miss),
-        },
         "categories": dict(categories),
-        "penalties": {
-            "rest": int(rest_pen),
-            "preferred_days": int(pref_days_pen),
-            "totals": int(totals_pen),
-            "fairness": int(fairness_pen),
-            "weekday_patterns": int(weekday_pen),
-            "friday_free_weekend": int(friday_pen),
-            "partners_bonus": float(pb),
-        },
+        "solver_components_by_doc": dict(solver_components_by_doc),
     }
 
     return int(stars), list(out), dict(ui_components)
@@ -1932,13 +1970,10 @@ def _pick_dominant_soft_reason(
     Choose at most ONE "dominant" soft reason (deterministic).
 
     Policy:
-    - We compute positive penalty sum (ignore negative bonuses like partners).
-    - We pick the biggest component as the candidate.
-    - We emit it if:
-      * it is the biggest, AND
-      * it has meaningful share (>= 40% of positive sum), OR (sum == 0 -> skip)
-    - If no dominant component exists, we allow a broad fallback:
-      preferences_not_fully_met only when pct < 100.
+    - Consider only positive penalties (bonuses are ignored here).
+    - Pick the largest component.
+    - Emit it only if it dominates enough (>= 40% of positive sum).
+    - Otherwise: allow broad fallback 'preferences_not_fully_met' only when pct < 100.
     """
     # Positive penalties only (defensive)
     pref_days = max(0, int(pref_days_pen_by_doc.get(int(doc_id), 0)))
@@ -1953,22 +1988,20 @@ def _pick_dominant_soft_reason(
         return []
 
     # Candidate mapping: component -> reason code
-    # NOTE: fairness is a real component, but we do not emit a separate fairness reason now.
-    # We use fairness indirectly for "balanced_load" on happy side.
+    # NOTE: fairness is real, but we do not emit a separate fairness reason right now.
     candidates: List[tuple[str, int]] = [
         (REASON_PREFERRED_DAYS_MISSED, pref_days),
         (REASON_OVERLOADED_TOTALS, totals),
-        (REASON_WEEKDAY_PATTERN_MISMATCH, weekday),
+        (REASON_WEEKDAY_AVOID_HIT, weekday),  # weekday_pen is "avoid hit" (>=0)
         (REASON_FRIDAY_PENALTY, friday),
     ]
 
-    # Deterministic: sort by value desc, then by code string asc
+    # Deterministic: sort by value desc, then code asc
     candidates_sorted = sorted(candidates, key=lambda x: (-int(x[1]), str(x[0])))
 
     top_code, top_value = candidates_sorted[0]
     if int(top_value) <= 0:
-        # No meaningful component among mapped ones (could be fairness-only).
-        # If preference pct < 100 and we truly have no specific code -> fallback allowed.
+        # No meaningful mapped component (could be fairness-only).
         if _safe_float(preference_fulfillment_pct) < 100.0:
             return [REASON_PREFERENCES_NOT_FULLY_MET]
         return []
@@ -1982,6 +2015,7 @@ def _pick_dominant_soft_reason(
     # Not dominant enough -> use broad fallback ONLY if pct < 100, otherwise emit nothing.
     if _safe_float(preference_fulfillment_pct) < 100.0:
         return [REASON_PREFERENCES_NOT_FULLY_MET]
+
     return []
 
 
@@ -2096,6 +2130,9 @@ def ui_reasons_codes_happy(
     return out
 
 
+RANKING_REASONS_LIMIT = 5
+
+
 def _build_rankings(
     *,
     per_doctor_rows: List[Dict[str, Any]],
@@ -2104,8 +2141,10 @@ def _build_rankings(
     totals_pen_by_doc: Dict[int, int],
     fairness_pen_by_doc: Dict[int, int],
     weekday_pen_by_doc: Dict[int, int],
+    weekday_bonus_by_doc: Dict[int, int],
+    weekday_preferred_declared_by_doc: Dict[int, bool],
+    weekday_avoid_declared_by_doc: Dict[int, bool],
     fri_pen_by_doc: Dict[int, int],
-    top_n: int | None = None,
 ) -> Dict[str, Any]:
     """
     Build rankings for UI.
@@ -2120,6 +2159,10 @@ def _build_rankings(
     - score in ranking rows is UI stars (float, backward compatible).
     - reasons_codes are short, actionable, whitelisted codes.
     - Prefer per_doctor.ui_reasons_codes when present (already curated), otherwise fallback to heuristics.
+
+    NOTE:
+    - weekday_bonus_by_doc follows solver convention: negative numbers (bonus).
+      We keep it available for future heuristics, but we do not force extra reasons from it here.
     """
 
     from backend.models.constants.diagnostics_reason_codes import (
@@ -2131,7 +2174,8 @@ def _build_rankings(
         REASON_OVERLOADED_TOTALS,
         REASON_PREFERRED_DAYS_MISSED,
         REASON_REST_VIOLATIONS,
-        REASON_WEEKDAY_PATTERN_MISMATCH,
+        REASON_WEEKDAY_AVOID_HIT,
+        REASON_WEEKDAY_PREFERRED_NOT_MATCHED,
     )
 
     HAPPY_MIN_STARS = 4
@@ -2156,7 +2200,7 @@ def _build_rankings(
             return dn.lower()
         return str(parts[-1]).lower()
 
-    def _dedup_trim(reasons: List[str], limit: int = 3) -> List[str]:
+    def _dedup_trim(reasons: List[str], limit: int = 5) -> List[str]:
         out: List[str] = []
         seen: Set[str] = set()
         for r in reasons:
@@ -2187,7 +2231,7 @@ def _build_rankings(
             if not sx:
                 continue
             out.append(sx)
-        return _dedup_trim(out, limit=3)
+        return _dedup_trim(out, limit=RANKING_REASONS_LIMIT)
 
     def _clamp_stars(v: Any) -> int:
         try:
@@ -2221,7 +2265,7 @@ def _build_rankings(
     unhappy_items = [it for it in items if int(it["ui_stars"]) < HAPPY_MIN_STARS]
 
     # ------------------------------
-    # Sort
+    # Sort (IMPORTANT: keep full lists, no top_n slicing)
     # ------------------------------
     happy_items.sort(
         key=lambda it: (
@@ -2251,6 +2295,7 @@ def _build_rankings(
             return ui
 
         doc_id = int(row.get("doctor_id", 0))
+
         reasons: List[str] = []
 
         # 1) Hard double shift
@@ -2272,9 +2317,30 @@ def _build_rankings(
         if tp > 0:
             candidates.append((tp, REASON_OVERLOADED_TOTALS))
 
+        # Weekday patterns (solver-consistent):
+        # - penalty (avoid hit) is non-negative
+        # - bonus (preferred matched) is non-positive (negative means "good")
         wp = max(0, int(weekday_pen_by_doc.get(doc_id, 0)))
-        if wp > 0:
-            candidates.append((wp, REASON_WEEKDAY_PATTERN_MISMATCH))
+        wb = int(weekday_bonus_by_doc.get(doc_id, 0))  # <= 0, negative means matched preferred weekdays
+
+        if weekday_avoid_declared_by_doc.get(doc_id, False) and wp > 0:
+            candidates.append((wp, REASON_WEEKDAY_AVOID_HIT))
+
+        # "preferred" is a bit special: we treat it as a reason even when penalty is 0
+        # because it explains WHY the doctor is happy/unhappy in terms of weekday prefs.
+        if weekday_preferred_declared_by_doc.get(doc_id, False) and wb < 0:
+            reasons.append(REASON_WEEKDAY_PREFERRED_MATCHED)
+
+        if weekday_preferred_declared_by_doc.get(doc_id, False) and wb == 0:
+            reasons.append(REASON_WEEKDAY_PREFERRED_NOT_MATCHED)
+
+        # Optional UX negative: preferred declared but no bonus matched.
+        # We can only infer this from the row (ui_reasons_codes) in normal flow.
+        # In fallback heuristics (tests), we use weekday_bonus_by_doc.
+        wb = int(weekday_bonus_by_doc.get(doc_id, 0))
+        if wb == 0:
+            # Add as a weak candidate; if something else dominates, it may be skipped.
+            candidates.append((1, REASON_WEEKDAY_PREFERRED_NOT_MATCHED))
 
         fp = max(0, int(fri_pen_by_doc.get(doc_id, 0)))
         if fp > 0:
@@ -2284,7 +2350,7 @@ def _build_rankings(
         if candidates:
             reasons.append(str(candidates[0][1]))
 
-        return _dedup_trim(reasons, limit=3)
+        return _dedup_trim(reasons, limit=RANKING_REASONS_LIMIT)
 
     def _reasons_for_happy(row: Dict[str, Any]) -> List[str]:
         ui = _take_ui_reasons_if_any(row)
@@ -2303,39 +2369,41 @@ def _build_rankings(
         if tp == 0 and fp == 0:
             reasons.append(REASON_BALANCED_LOAD)
 
-        return _dedup_trim(reasons, limit=3)
+        # Keep weekday bonus available for future (solver convention: negative)
+        _ = int(weekday_bonus_by_doc.get(doc_id, 0))
+
+        return _dedup_trim(reasons, limit=RANKING_REASONS_LIMIT)
 
     # ------------------------------
     # Emit DTO shape
     # score = ui_stars (float for schema compatibility)
+    # NOTE: output keys are stable: happy / unhappy (full lists, sorted)
     # ------------------------------
-    top_happy: List[Dict[str, Any]] = []
+    happy: List[Dict[str, Any]] = []
     for it in happy_items:
         row = dict(it["_row"])
-        top_happy.append(
+        happy.append(
             {
                 "doctor_id": int(it["doctor_id"]),
                 "display_name": _safe_str(it.get("display_name", "")),
-                "ui_stars": int(it["ui_stars"]),
                 "score": float(it["ui_stars"]),
                 "reasons_codes": _reasons_for_happy(row),
             }
         )
 
-    top_unhappy: List[Dict[str, Any]] = []
+    unhappy: List[Dict[str, Any]] = []
     for it in unhappy_items:
         row = dict(it["_row"])
-        top_unhappy.append(
+        unhappy.append(
             {
                 "doctor_id": int(it["doctor_id"]),
                 "display_name": _safe_str(it.get("display_name", "")),
-                "ui_stars": int(it["ui_stars"]),
                 "score": float(it["ui_stars"]),
                 "reasons_codes": _reasons_for_unhappy(row),
             }
         )
 
-    return {"top_happy": top_happy, "top_unhappy": top_unhappy}
+    return {"happy": happy, "unhappy": unhappy}
 
 
 # ----------------------------- helpers (UI applicability) -----------------------------
@@ -2433,7 +2501,12 @@ def compute_quality(*, problem: ProblemData, payload: Dict[str, Any]) -> Dict[st
     fairness_pen, fairness_index, fairness_pen_by_doc = _compute_fairness_stats(problem=problem, idx=idx)
 
     # Weekday patterns (global + per doctor)
-    weekday_pen, weekday_pen_by_doc = _compute_weekday_patterns_penalty_per_doctor(problem=problem, idx=idx)
+    weekday_pen, weekday_bonus, weekday_pen_by_doc, weekday_bonus_by_doc = (
+        _compute_weekday_patterns_components_per_doctor(
+            problem=problem,
+            idx=idx,
+        )
+    )
 
     # Preferred partners (global + per doctor bonus share)
     partners_pen, partners_bonus_by_doc = _compute_preferred_partners_bonus_by_doctor(problem=problem, idx=idx)
@@ -2442,7 +2515,12 @@ def compute_quality(*, problem: ProblemData, payload: Dict[str, Any]) -> Dict[st
     fri_pen, fri_pen_by_doc = _compute_friday_free_weekend_penalty_per_doctor(problem=problem, idx=idx)
 
     # Total penalty (legacy, still useful for debug)
-    penalty_total = int(rest_pen + pref_days_pen + totals_pen + fairness_pen + weekday_pen + partners_pen + fri_pen)
+    # IMPORTANT: keep solver convention:
+    # - penalties are positive
+    # - bonuses are negative (reduce the total)
+    penalty_total = int(
+        rest_pen + pref_days_pen + totals_pen + fairness_pen + weekday_pen + weekday_bonus + partners_pen + fri_pen
+    )
 
     # Findings + hard issues count
     findings, double_shift_days_by_doc = _build_findings(
@@ -2473,30 +2551,31 @@ def compute_quality(*, problem: ProblemData, payload: Dict[str, Any]) -> Dict[st
         # ------------------------------
         prefs = problem.preferences.get(doc_id_i)
 
-        weekday_prefs_declared = False
+        weekday_preferred_declared = False
+        weekday_avoid_declared = False
         preferred_partners_declared = False
+        totals_prefs_declared = False
+
         if prefs is not None:
-            weekday_prefs_declared = bool(
-                prefs.preferred_onsite_weekdays
-                or prefs.preferred_oncall_weekdays
-                or prefs.avoid_onsite_weekdays
-                or prefs.avoid_oncall_weekdays
-            )
+            # Weekday patterns: split declaration into two flags
+            weekday_preferred_declared = bool(prefs.preferred_onsite_weekdays or prefs.preferred_oncall_weekdays)
+            weekday_avoid_declared = bool(prefs.avoid_onsite_weekdays or prefs.avoid_oncall_weekdays)
+
             preferred_partners_declared = bool(prefs.preferred_partners)
 
-        # Build a per-doctor "penalty-like" score from the same components as solver objective.
-        # Then convert it to "points" where HIGHER means BETTER:
-        # points = -penalty_like
-        penalty_like = 0.0
-        penalty_like += float(rest_pen_by_doc.get(doc_id_i, 0))
-        penalty_like += float(pref_days_pen_by_doc.get(doc_id_i, 0))
-        penalty_like += float(totals_pen_by_doc.get(doc_id_i, 0))
-        penalty_like += float(fairness_pen_by_doc.get(doc_id_i, 0))
-        penalty_like += float(weekday_pen_by_doc.get(doc_id_i, 0))
-        penalty_like += float(fri_pen_by_doc.get(doc_id_i, 0))
-        penalty_like += float(partners_bonus_by_doc.get(doc_id_i, 0.0))  # bonus is negative
-
-        score_points = float(-penalty_like)
+            # NEW: totals preferences declared?
+            # We treat totals as "declared" if ANY totals-related field exists and is not None.
+            totals_fields = [
+                "target_onsite_total",
+                "target_oncall_total",
+                "min_onsite_total",
+                "min_oncall_total",
+                "max_onsite_total",
+                "max_oncall_total",
+                "desired_onsite_total",
+                "desired_oncall_total",
+            ]
+            totals_prefs_declared = any(getattr(prefs, f, None) is not None for f in totals_fields)
 
         # IMPORTANT:
         # Keep per_doctor rows aligned with the public DTO contract.
@@ -2509,12 +2588,10 @@ def compute_quality(*, problem: ProblemData, payload: Dict[str, Any]) -> Dict[st
             "rest_violations": int(rest_viol_by_doc.get(doc_id_i, 0)),
             "preference_fulfillment_pct": float(pref_pct_by_doc.get(doc_id_i, 100.0)),
             "preferred_days_missed": int(pref_missed_by_doc.get(doc_id_i, 0)),
-            # "score" is points: higher => happier/better
-            "score": float(score_points),
         }
 
         # ------------------------------
-        # UI quality (stars + reasons) for FE
+        # UI quality (stars + reasons + structured categories)
         # ------------------------------
         ui_stars, ui_reasons, ui_components = _ui_quality_for_doctor(
             doctor_id=int(doc_id_i),
@@ -2528,17 +2605,57 @@ def compute_quality(*, problem: ProblemData, payload: Dict[str, Any]) -> Dict[st
             totals_pen=int(totals_pen_by_doc.get(doc_id_i, 0)),
             fairness_pen=int(fairness_pen_by_doc.get(doc_id_i, 0)),
             weekday_pen=int(weekday_pen_by_doc.get(doc_id_i, 0)),
+            weekday_bonus=int(weekday_bonus_by_doc.get(doc_id_i, 0)),
             friday_pen=int(fri_pen_by_doc.get(doc_id_i, 0)),
             partners_bonus=float(partners_bonus_by_doc.get(doc_id_i, 0.0)),
-            weekday_prefs_declared=bool(weekday_prefs_declared),
+            weekday_preferred_declared=bool(weekday_preferred_declared),
+            weekday_avoid_declared=bool(weekday_avoid_declared),
             preferred_partners_declared=bool(preferred_partners_declared),
+            totals_prefs_declared=bool(totals_prefs_declared),
             friday_rule_applicable=bool(friday_rule_applicable),
         )
 
-        row["ui_stars"] = int(ui_stars)
-        row["ui_reasons_codes"] = list(ui_reasons)
-        row["ui_components"] = dict(ui_components)
+        # Extract the already-computed structured data from ui_components
+        categories = dict(ui_components.get("categories") or {})
+        solver_components_by_doc = dict(ui_components.get("solver_components_by_doc") or {})
+
+        # ------------------------------
+        # Build per-doctor row in EXACT requested order
+        # ------------------------------
+        row: Dict[str, Any] = {
+            "doctor_id": doc_id_i,
+            "display_name": _display_name_from_snapshot(payload, doc_id_i),
+            "assigned_onsite_total": int(onsite_total_by_doc.get(doc_id_i, 0)),
+            "assigned_oncall_total": int(oncall_total_by_doc.get(doc_id_i, 0)),
+            "rest_violations": int(rest_viol_by_doc.get(doc_id_i, 0)),
+            "preferred_days_requested": int(pref_requested_by_doc.get(doc_id_i, 0)),
+            "preferred_days_missed": int(pref_missed_by_doc.get(doc_id_i, 0)),
+            "preference_fulfillment_pct": float(pref_pct_by_doc.get(doc_id_i, 100.0)),
+            "ui_stars": int(ui_stars),
+            "ui_reasons_codes": list(ui_reasons),
+            "categories": categories,
+            "solver_components_by_doc": solver_components_by_doc,
+        }
+
         per_doctor.append(row)
+
+    # Build per-doctor weekday preference declaration maps for rankings.
+    weekday_preferred_declared_by_doc: Dict[int, bool] = {}
+    weekday_avoid_declared_by_doc: Dict[int, bool] = {}
+
+    for row in per_doctor:
+        did = int(row.get("doctor_id", 0))
+        # We recompute from snapshot-backed prefs for consistency (same logic as above).
+        prefs = problem.preferences.get(did)
+        if prefs is None:
+            weekday_preferred_declared_by_doc[did] = False
+            weekday_avoid_declared_by_doc[did] = False
+            continue
+
+        weekday_preferred_declared_by_doc[did] = bool(
+            prefs.preferred_onsite_weekdays or prefs.preferred_oncall_weekdays
+        )
+        weekday_avoid_declared_by_doc[did] = bool(prefs.avoid_onsite_weekdays or prefs.avoid_oncall_weekdays)
 
     rankings = _build_rankings(
         per_doctor_rows=per_doctor,
@@ -2547,6 +2664,9 @@ def compute_quality(*, problem: ProblemData, payload: Dict[str, Any]) -> Dict[st
         totals_pen_by_doc=totals_pen_by_doc,
         fairness_pen_by_doc=fairness_pen_by_doc,
         weekday_pen_by_doc=weekday_pen_by_doc,
+        weekday_bonus_by_doc=weekday_bonus_by_doc,
+        weekday_preferred_declared_by_doc=weekday_preferred_declared_by_doc,
+        weekday_avoid_declared_by_doc=weekday_avoid_declared_by_doc,
         fri_pen_by_doc=fri_pen_by_doc,
     )
 
@@ -2567,13 +2687,14 @@ def compute_quality(*, problem: ProblemData, payload: Dict[str, Any]) -> Dict[st
         "audit": list(audit_rows),
         "per_doctor": list(per_doctor),
         "rankings": dict(rankings),
-        "components": {
+        "solver_components_total": {
             "rest_penalty": int(rest_pen),
             "preferred_days_penalty": int(pref_days_pen),
             "totals_penalty": int(totals_pen),
             "fairness_penalty": int(fairness_pen),
             "weekday_patterns_penalty": int(weekday_pen),
-            "preferred_partners_penalty": int(partners_pen),
+            "weekday_patterns_bonus": int(weekday_bonus),
+            "preferred_partners_bonus": float(sum(partners_bonus_by_doc.values())),
             "friday_free_weekend_penalty": int(fri_pen),
         },
     }
