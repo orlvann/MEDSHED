@@ -5,71 +5,93 @@ Diagnostics (core) — compute schedule quality metrics from a snapshot payload.
 This module must stay "pure core":
 - no DB access,
 - no FastAPI/Pydantic,
-- operates only on ProblemData + snapshot payload dict.
+- operates only on ProblemData + snapshot payload dict,
+- returns only JSON-serializable Python structures (dict/list/str/int/float/bool).
 
-It produces a JSON-serializable dict for storage in ScheduleDiagnostics.quality:
+It produces a dict suitable for storage in ScheduleDiagnostics.quality:
 {
   "summary": {...},
   "details": {...}
 }
 
-Important contract notes (final contract alignment):
-- summary includes stable KPI fields expected by the API contract
-  (coverage_missing_required_slots, hard_issues_count, rest_violations,
-   fairness_index, preference_fulfillment_pct).
-- details includes findings[], per_doctor[] and rankings{}.
-- core returns only plain Python structures (dict/list/str/int/float/bool).
+OUTPUT CONTRACT (current)
+------------------------
+summary includes stable KPI fields used by the API/FE:
+- coverage_missing_required_slots (int)  # per-slot gaps (onsite/oncall)
+- hard_issues_count (int)               # number of "critical" findings
+- rest_violations (int)                 # total consecutive-rest violations
+- fairness_index (float 0..1)           # higher is better
+- preference_fulfillment_pct (float 0..100)
 
-IGNORE POLICY (final):
-- ignore_days does not exist anymore.
-- Required/ignored scheduling scope is controlled ONLY by ignore_slots:
-  set[(day, shift_type)].
+Backward-compatible summary fields (still emitted):
+- penalty_total (int)
+- understaffed_days (int)  # deprecated, day-level
 
-- Diagnostics parsing supports meta.exceptions as "audit hints" only:
-  - slot marker rows (must have day + shift_type), e.g. ignore-slot markers,
-  - action rows (must NOT have day/shift_type), e.g. force publish acceptance with justification.
-Diagnostics must never use exceptions to "improve" metrics.
-(We project meta.exceptions into details.audit[].)
+details includes:
+- findings[]    # list of {code, severity, context}
+- audit[]       # projection of meta.exceptions (human decisions history)
+- per_doctor[]  # per-participant metrics (includes ui_stars + ui_reasons_codes + ui_components)
+- rankings{}    # {top_happy: [...], top_unhappy: [...]} derived from per_doctor.ui_stars
+- components{}  # global penalties (rest/totals/fairness/...)
 
-Example (input payload shape, minimal):
+
+IGNORE POLICY (diagnostics truth vs generation helpers)
+------------------------------------------------------
+- ignore_days does not exist.
+- "Ignore" is controlled only by ignore_slots (set of (day, shift_type)).
+- IMPORTANT: ignored slots MUST NOT improve diagnostics metrics.
+  Diagnostics always reports real gaps and violations even if a slot was previously accepted.
+- The only effect of ignore_slots in diagnostics is:
+  - findings context can mark gaps as "was_ignored" for UI clarity,
+  - decision history is preserved in details.audit[].
+
+
+META.EXCEPTIONS POLICY (audit only)
+-----------------------------------
+payload.meta.exceptions is treated as "audit hints" only and is projected into details.audit[].
+
+Two shapes are supported:
+1) Slot marker rows (must have day + shift_type)
+   Examples:
+   - ignore-slot markers (generation decisions about uncovered slots)
+   - head_commitment_resolution markers (chosen head for a concrete slot)
+
+2) Action rows (must NOT have day/shift_type)
+   Examples:
+   - publish_acceptance / force publish decisions with optional justification
+
+Diagnostics must never use meta.exceptions to "fix" or "improve" computed metrics.
+
+
+RANKINGS POLICY (UI)
+-------------------
+- Every doctor must be in EXACTLY ONE list:
+    happy:   ui_stars >= 4
+    unhappy: ui_stars <= 3
+- Sorting:
+    happy:   ui_stars DESC, then surname (last token of display_name),
+             then display_name, then doctor_id
+    unhappy: ui_stars ASC,  then surname (last token of display_name),
+             then display_name, then doctor_id
+- score in ranking rows is UI stars (float, backward compatible).
+- reasons_codes are short, actionable codes (whitelisted).
+
+Minimal payload input shape (example):
 {
   "participant_doctor_ids": [101, 102],
   "assignments": [
     {"day": 1, "shift_type": "onsite", "doctor_id": 101},
-    {"day": 1, "shift_type": "oncall", "doctor_id": 102},
+    {"day": 1, "shift_type": "oncall", "doctor_id": 102}
   ],
   "meta": {"labels": [], "exceptions": [{"code":"coverage_ignored_slot","day":2,"shift_type":"onsite"}]},
   "inputs_snapshot": {
     "doctors": {
-      "101": {
-        "display_name":"Alice",
-        "role":"specialist",
-        "is_head":True,
-        "is_active_at_snapshot":True
-      }
+      "101": {"display_name":"Alice", "role":"specialist", "is_head":True, "is_active_at_snapshot":True}
     }
   }
 }
-
-Example (output shape):
-{
-  "summary": {
-    "coverage_missing_required_slots": 0,
-    "hard_issues_count": 0,
-    "rest_violations": 0,
-    "fairness_index": 1.0,
-    "preference_fulfillment_pct": 100.0,
-    "penalty_total": 0,
-    "understaffed_days": 0
-  },
-  "details": {
-    "findings": [...],
-    "per_doctor": [...],
-    "rankings": {"top_unhappy":[...],"top_happy":[...]},
-    "components": {...}
-  }
-}
 """
+
 
 from __future__ import annotations
 
@@ -631,22 +653,25 @@ def _compute_preference_stats_per_doctor(
     problem: ProblemData,
     idx: _Index,
     ignored_slots: Set[Tuple[int, ShiftType]],
-) -> tuple[Dict[int, float], Dict[int, int]]:
+) -> tuple[Dict[int, float], Dict[int, int], Dict[int, int]]:
     """
-    Compute per-doctor preference fulfillment percent and preferred_days_missed.
+    Compute per-doctor preference fulfillment percent, preferred_days_missed,
+    and preferred_days_requested (how many preferred days were declared).
 
-    Returns: (pct_by_doctor, missed_by_doctor)
+    Returns: (pct_by_doctor, missed_by_doctor, requested_by_doctor)
     """
     days_set = set(int(x) for x in problem.days)
 
     pct_by_doctor: Dict[int, float] = {}
     missed_by_doctor: Dict[int, int] = {}
+    requested_by_doctor: Dict[int, int] = {}
 
     for doc_id in sorted(problem.participant_doctor_ids):
         prefs = problem.preferences.get(doc_id)
         if prefs is None:
             pct_by_doctor[int(doc_id)] = 100.0
             missed_by_doctor[int(doc_id)] = 0
+            requested_by_doctor[int(doc_id)] = 0
             continue
 
         total = 0
@@ -680,8 +705,9 @@ def _compute_preference_stats_per_doctor(
 
         pct_by_doctor[int(doc_id)] = float(max(0.0, min(100.0, pct)))
         missed_by_doctor[int(doc_id)] = int(missed)
+        requested_by_doctor[int(doc_id)] = int(total)
 
-    return pct_by_doctor, missed_by_doctor
+    return pct_by_doctor, missed_by_doctor, requested_by_doctor
 
 
 # ----------------------------- rest rules (per-doctor stats) ---------------------
@@ -1604,14 +1630,30 @@ def _clamp_int(v: int, lo: int, hi: int) -> int:
     return max(int(lo), min(int(v), int(hi)))
 
 
+def _clamp_float(v: float, lo: float, hi: float) -> float:
+    """Clamp float into [lo..hi]."""
+    return max(float(lo), min(float(v), float(hi)))
+
+
+def _badness_to_stars_1_5(badness: float) -> int:
+    """
+    Map badness 0..1 to stars 5..1.
+    0.0 -> 5, 1.0 -> 1.
+    """
+    b = _clamp_float(float(badness), 0.0, 1.0)
+    # 5 - round(4*b) gives: 0->5, 0.25->4, 0.5->3, 0.75->2, 1->1
+    return _clamp_int(int(5 - round(4.0 * b)), 1, 5)
+
+
 def _ui_quality_for_doctor(
     *,
     doctor_id: int,
     rest_violations: int,
     preferred_days_missed: int,
+    preferred_days_requested: int,
     preference_fulfillment_pct: float,
     double_shift_days: int,
-    # per-doctor penalties/bonuses from components
+    # per-doctor penalties/bonuses from components (solver-like, but used only as signals)
     rest_pen: int,
     pref_days_pen: int,
     totals_pen: int,
@@ -1619,99 +1661,239 @@ def _ui_quality_for_doctor(
     weekday_pen: int,
     friday_pen: int,
     partners_bonus: float,  # negative means "good" (bonus)
+    # applicability hints (computed in compute_quality from preferences/month calendar)
+    weekday_prefs_declared: bool = False,
+    preferred_partners_declared: bool = False,
+    friday_rule_applicable: bool = False,
 ) -> tuple[int, list[str], dict[str, Any]]:
     """
-    Compute UI-only quality for a single doctor.
+    UI quality (human-facing), stable and deterministic.
 
-    Business meaning (simple):
-    - This is NOT solver score. It's a UI heuristic to show "how ok" the schedule feels for this doctor.
-    - Stars are 1..5 (5 = best).
-    - Reasons are short codes that FE can map to localized messages.
-
-    IMPORTANT:
-    - Deterministic and pure (no DB, no OR-Tools).
-    - Stable and conservative: we penalize clear pain points first (double shift, rest breaks, missed prefs).
+    Output:
+    - ui_stars: int 1..5
+    - ui_reasons_codes: list[str] max 3 (stable codes)
+    - ui_components: dict with per-category applicable/badness/stars + debug inputs
     """
+    doc_id = int(doctor_id)
 
-    stars = 5
-    reasons: list[str] = []
+    categories: Dict[str, Dict[str, Any]] = {}
 
-    # 1) Hard pain: double shift same day
-    if int(double_shift_days) > 0:
+    # "Has any work / any signal at all?"
+    assigned_any = (
+        int(double_shift_days) > 0
+        or int(rest_violations) > 0
+        or int(rest_pen) != 0
+        or int(pref_days_pen) != 0
+        or int(totals_pen) != 0
+        or int(fairness_pen) != 0
+        or int(weekday_pen) != 0
+        or int(friday_pen) != 0
+    )
+
+    # -----------------------------
+    # REST (discrete, strong)
+    # -----------------------------
+    rv = max(0, int(rest_violations))
+    rest_applicable = bool(assigned_any)
+    if rv <= 0:
+        rest_badness = 0.0
+    elif rv == 1:
+        rest_badness = 0.60
+    elif rv == 2:
+        rest_badness = 0.85
+    else:
+        rest_badness = 1.00
+
+    categories["rest"] = {
+        "applicable": bool(rest_applicable),
+        "badness": float(rest_badness),
+        "stars": int(_badness_to_stars_1_5(rest_badness)) if rest_applicable else None,
+    }
+
+    # -----------------------------
+    # PREFERRED DAYS (opportunities-based)
+    # -----------------------------
+    req = max(0, int(preferred_days_requested))
+    miss = max(0, int(preferred_days_missed))
+    pref_applicable = req > 0
+
+    if not pref_applicable:
+        pref_badness = 0.0
+    else:
+        miss_rate = float(miss) / float(max(1, req))
+        # T_pref = 0.20 -> 20% misses is already "very bad"
+        pref_badness = _clamp_float(miss_rate / 0.20, 0.0, 1.0)
+
+    categories["preferred_days"] = {
+        "applicable": bool(pref_applicable),
+        "badness": float(pref_badness),
+        "stars": int(_badness_to_stars_1_5(pref_badness)) if pref_applicable else None,
+        "requested": int(req),
+        "missed": int(miss),
+    }
+
+    # -----------------------------
+    # FAIRNESS (penalty-based for now)
+    # -----------------------------
+    fp = max(0, int(fairness_pen))
+    fairness_applicable = bool(assigned_any)
+    fairness_badness = _clamp_float(float(fp) / 80.0, 0.0, 1.0) if fairness_applicable else 0.0
+    categories["fairness"] = {
+        "applicable": bool(fairness_applicable),
+        "badness": float(fairness_badness),
+        "stars": int(_badness_to_stars_1_5(fairness_badness)) if fairness_applicable else None,
+    }
+
+    # -----------------------------
+    # TOTALS (penalty-based)
+    # -----------------------------
+    tp = max(0, int(totals_pen))
+    totals_applicable = bool(assigned_any)
+    totals_badness = _clamp_float(float(tp) / 80.0, 0.0, 1.0) if totals_applicable else 0.0
+    categories["totals"] = {
+        "applicable": bool(totals_applicable),
+        "badness": float(totals_badness),
+        "stars": int(_badness_to_stars_1_5(totals_badness)) if totals_applicable else None,
+    }
+
+    # -----------------------------
+    # WEEKDAY PATTERNS (only if declared)
+    # -----------------------------
+    wp = int(weekday_pen)  # can be negative (bonus)
+    weekday_applicable = bool(weekday_prefs_declared)
+    weekday_badness = _clamp_float(float(max(0, wp)) / 20.0, 0.0, 1.0) if weekday_applicable else 0.0
+    categories["weekday_patterns"] = {
+        "applicable": bool(weekday_applicable),
+        "badness": float(weekday_badness),
+        "stars": int(_badness_to_stars_1_5(weekday_badness)) if weekday_applicable else None,
+    }
+
+    # -----------------------------
+    # FRIDAY RULE (only if month pattern exists)
+    # -----------------------------
+    frp = max(0, int(friday_pen))
+    friday_applicable = bool(friday_rule_applicable)
+    friday_badness = _clamp_float(float(frp) / 20.0, 0.0, 1.0) if friday_applicable else 0.0
+    categories["friday_free_weekend"] = {
+        "applicable": bool(friday_applicable),
+        "badness": float(friday_badness),
+        "stars": int(_badness_to_stars_1_5(friday_badness)) if friday_applicable else None,
+    }
+
+    # -----------------------------
+    # PARTNERS (only if declared)
+    # -----------------------------
+    pb = float(partners_bonus) if partners_bonus is not None else 0.0
+    partners_applicable = bool(preferred_partners_declared)
+    categories["preferred_partners"] = {
+        "applicable": bool(partners_applicable),
+        "badness": 0.0,
+        "stars": (5 if partners_applicable and pb <= -1.0 else 4) if partners_applicable else None,
+    }
+
+    # -----------------------------
+    # Weighted average over ONLY applicable categories
+    # -----------------------------
+    weights = {
+        "rest": 0.35,
+        "preferred_days": 0.35,
+        "fairness": 0.10,
+        "totals": 0.10,
+        "weekday_patterns": 0.05,
+        "friday_free_weekend": 0.03,
+        "preferred_partners": 0.02,
+    }
+
+    applicable_items: List[tuple[str, float, int]] = []
+    for k, w in weights.items():
+        c = categories.get(k, {})
+        if bool(c.get("applicable")) and c.get("stars") is not None:
+            applicable_items.append((k, float(w), int(c["stars"])))
+
+    if not applicable_items:
+        base_stars = 5
+    else:
+        w_sum = sum(w for _, w, _ in applicable_items)
+        base_stars_f = 0.0
+        for _, w, s in applicable_items:
+            base_stars_f += (float(w) / float(max(1e-9, w_sum))) * float(s)
+        base_stars = int(round(base_stars_f))
+
+    # Hard pain adjustments after aggregation
+    stars = int(base_stars)
+
+    ds = max(0, int(double_shift_days))
+    if ds > 0:
         stars -= 2
-        reasons.append("hard_double_shift_same_day")
 
-    # 2) Rest violations (consecutive patterns)
-    if int(rest_violations) > 0:
-        stars -= 1
-        reasons.append("rest_violations")
-        # More than 1 -> stronger signal
-        if int(rest_violations) >= 2:
-            stars -= 1
-
-    # 3) Preferred concrete days missed
-    if int(preferred_days_missed) > 0:
-        stars -= 1
-        reasons.append("preferred_days_missed")
-        if int(preferred_days_missed) >= 3:
-            stars -= 1
-
-    # 4) Low preference fulfillment pct (broad signal)
-    try:
-        pct = float(preference_fulfillment_pct)
-    except Exception:
-        pct = 100.0
-
-    if pct < float(scoring.happy_preferences_met_threshold_pct()):
-        # Below the "happy" threshold -> mild penalty
-        stars -= 1
-        reasons.append("low_preference_fulfillment")
-    if pct < 60.0:
-        # Very low -> stronger penalty
-        stars -= 1
-
-    # 5) Workload fairness / totals (soft but important)
-    if int(fairness_pen) > 0:
-        stars -= 1
-        reasons.append("unfair_workload")
-        if int(fairness_pen) >= 200:
-            stars -= 1
-
-    if int(totals_pen) > 0:
-        stars -= 1
-        reasons.append("totals_off_target")
-        if int(totals_pen) >= 300:
-            stars -= 1
-
-    # 6) Small nudges (weekday patterns, Friday rule)
-    if int(weekday_pen) > 0:
-        stars -= 1
-        reasons.append("weekday_patterns")
-    if int(friday_pen) > 0:
-        stars -= 1
-        reasons.append("friday_with_free_weekend")
-
-    # 7) Partners bonus can slightly help (but never above 5)
-    try:
-        pb = float(partners_bonus)
-    except Exception:
-        pb = 0.0
-
-    # If bonus is strong (very negative), add +1 star back (cap by clamp below)
     if pb <= -4.0:
         stars += 1
 
     stars = _clamp_int(int(stars), 1, 5)
 
-    # Keep only a few most important reasons (stable order: by severity-like priority above).
-    reasons = reasons[:3]
+    # -----------------------------
+    # Reasons (max 3, stable)
+    # -----------------------------
+    reasons: List[str] = []
+
+    # 1) Hard signals first
+    if ds > 0:
+        reasons.append(REASON_HARD_DOUBLE_SHIFT_SAME_DAY)
+    if rv > 0:
+        reasons.append(REASON_REST_VIOLATIONS)
+
+    # 2) Dominant soft contributor (by badness * weight)
+    soft_candidates: List[tuple[float, str]] = []
+
+    if pref_applicable and miss > 0:
+        soft_candidates.append((float(pref_badness) * float(weights["preferred_days"]), REASON_PREFERRED_DAYS_MISSED))
+
+    if totals_applicable and tp > 0:
+        soft_candidates.append((float(totals_badness) * float(weights["totals"]), REASON_OVERLOADED_TOTALS))
+
+    if weekday_applicable and max(0, wp) > 0:
+        soft_candidates.append(
+            (float(weekday_badness) * float(weights["weekday_patterns"]), REASON_WEEKDAY_PATTERN_MISMATCH)
+        )
+
+    if friday_applicable and frp > 0:
+        soft_candidates.append((float(friday_badness) * float(weights["friday_free_weekend"]), REASON_FRIDAY_PENALTY))
+
+    soft_candidates.sort(key=lambda x: float(x[0]), reverse=True)
+    if soft_candidates:
+        reasons.append(str(soft_candidates[0][1]))
+
+    # 3) Positive fillers only if still empty (don’t spam)
+    if not reasons:
+        if rv == 0:
+            reasons.append(REASON_GOOD_REST)
+        if pref_applicable and miss == 0:
+            reasons.append(REASON_PREFERENCES_MET)
+        if fp == 0 and tp == 0:
+            reasons.append(REASON_BALANCED_LOAD)
+
+    # de-dup + trim
+    out: List[str] = []
+    seen: Set[str] = set()
+    for r in reasons:
+        if r in seen:
+            continue
+        seen.add(str(r))
+        out.append(str(r))
+        if len(out) >= 3:
+            break
 
     ui_components = {
         "stars": int(stars),
-        "rest_violations": int(rest_violations),
-        "preferred_days_missed": int(preferred_days_missed),
-        "preference_fulfillment_pct": float(pct),
-        "double_shift_days": int(double_shift_days),
+        "doctor_id": int(doc_id),
+        "double_shift_days": int(ds),
+        "inputs": {
+            "rest_violations": int(rv),
+            "preference_fulfillment_pct": float(preference_fulfillment_pct),
+            "preferred_days_requested": int(req),
+            "preferred_days_missed": int(miss),
+        },
+        "categories": dict(categories),
         "penalties": {
             "rest": int(rest_pen),
             "preferred_days": int(pref_days_pen),
@@ -1723,7 +1905,7 @@ def _ui_quality_for_doctor(
         },
     }
 
-    return int(stars), list(reasons), dict(ui_components)
+    return int(stars), list(out), dict(ui_components)
 
 
 # ----------------------------- rankings -----------------------------------------
@@ -1831,6 +2013,11 @@ def ui_reasons_codes_unhappy(
     if int(double_shift_days_by_doctor.get(int(doc_id), 0)) > 0:
         reasons.append(REASON_HARD_DOUBLE_SHIFT_SAME_DAY)
 
+    # If we have a concrete "missed preferred day", prefer it over any broad fallback.
+    preferred_missed = int(row.get("preferred_days_missed", 0))
+    if preferred_missed > 0:
+        reasons.append(REASON_PREFERRED_DAYS_MISSED)
+
     # Soft: pick ONE dominant reason (or fallback broad)
     pref_pct = _safe_float(row.get("preference_fulfillment_pct", 100.0))
     reasons.extend(
@@ -1845,14 +2032,19 @@ def ui_reasons_codes_unhappy(
         )
     )
 
-    # De-dup, keep order
+    # If preferred days are missed, NEVER show the generic fallback too (same meaning -> bad UX).
+    if preferred_missed > 0:
+        reasons = [r for r in reasons if r != REASON_PREFERENCES_NOT_FULLY_MET]
+
+    # De-dup, keep order, max 3
     out: List[str] = []
     seen: Set[str] = set()
     for r in reasons:
-        if r in seen:
+        rr = str(r)
+        if rr in seen:
             continue
-        seen.add(str(r))
-        out.append(str(r))
+        seen.add(rr)
+        out.append(rr)
         if len(out) >= 3:
             break
 
@@ -1913,114 +2105,266 @@ def _build_rankings(
     fairness_pen_by_doc: Dict[int, int],
     weekday_pen_by_doc: Dict[int, int],
     fri_pen_by_doc: Dict[int, int],
-    top_n: int = 5,
+    top_n: int | None = None,
 ) -> Dict[str, Any]:
     """
-    Build deterministic rankings (POINTS convention):
-    - score = points (higher => better/happier)
-    - top_happy: highest score first
-    - top_unhappy: lowest score first (often negative)
+    Build rankings for UI.
 
-    IMPORTANT (UI integration):
-    - reasons_codes should come from per-doctor UI field: row["ui_reasons_codes"]
-      computed earlier in compute_quality().
-    - We keep a small defensive fallback for legacy rows that don't have UI fields.
+    Rules:
+    - Every doctor must be in EXACTLY ONE list:
+        happy:   ui_stars >= 4
+        unhappy: ui_stars <= 3
+    - Sorting (human-friendly):
+        happy:   ui_stars DESC, then surname (last token), then display_name, then doctor_id
+        unhappy: ui_stars ASC,  then surname (last token), then display_name, then doctor_id
+    - score in ranking rows is UI stars (float, backward compatible).
+    - reasons_codes are short, actionable, whitelisted codes.
+    - Prefer per_doctor.ui_reasons_codes when present (already curated), otherwise fallback to heuristics.
     """
 
-    def _score(row: Dict[str, Any]) -> float:
-        # Defensive: if score is missing, treat it as 0.0
+    from backend.models.constants.diagnostics_reason_codes import (
+        ALL_REASON_CODES,
+        REASON_BALANCED_LOAD,
+        REASON_FRIDAY_PENALTY,
+        REASON_GOOD_REST,
+        REASON_HARD_DOUBLE_SHIFT_SAME_DAY,
+        REASON_OVERLOADED_TOTALS,
+        REASON_PREFERRED_DAYS_MISSED,
+        REASON_REST_VIOLATIONS,
+        REASON_WEEKDAY_PATTERN_MISMATCH,
+    )
+
+    HAPPY_MIN_STARS = 4
+
+    def _safe_str(v: Any) -> str:
         try:
-            v = row.get("score")
-            return float(v) if v is not None else 0.0
+            s = str(v) if v is not None else ""
         except Exception:
-            return 0.0
+            s = ""
+        return s.strip()
 
-    def _ui_reasons_codes(row: Dict[str, Any]) -> List[str]:
+    def _last_name_key(display_name: Any) -> str:
         """
-        Preferred reasons source: ui_reasons_codes computed in compute_quality() and stored
-        inside the per-doctor row as 'ui_reasons_codes'.
-
-        Rules:
-        - Must be a short list (max 3) of stable string codes for FE.
-        - If missing or malformed, return [] (do NOT invent random strings).
+        Sort key: last token as "surname" (human-ish).
+        Falls back to whole display_name.
         """
-        v = row.get("ui_reasons_codes")
+        dn = _safe_str(display_name)
+        if not dn:
+            return ""
+        parts = [p for p in dn.split(" ") if p]
+        if not parts:
+            return dn.lower()
+        return str(parts[-1]).lower()
 
+    def _dedup_trim(reasons: List[str], limit: int = 3) -> List[str]:
+        out: List[str] = []
+        seen: Set[str] = set()
+        for r in reasons:
+            rr = _safe_str(r)
+            if not rr:
+                continue
+            if rr not in ALL_REASON_CODES:
+                continue
+            if rr in seen:
+                continue
+            seen.add(rr)
+            out.append(rr)
+            if len(out) >= int(limit):
+                break
+        return out
+
+    def _take_ui_reasons_if_any(row: Dict[str, Any]) -> List[str]:
+        """
+        Prefer UI reasons computed per doctor (already curated, max 3, and usually more UX-friendly).
+        Fall back to ranking heuristics if missing/empty.
+        """
+        v = row.get("ui_reasons_codes", [])
         if not isinstance(v, list):
             return []
-
         out: List[str] = []
         for x in v:
-            if isinstance(x, str):
-                s = x.strip()
-                if s:
-                    out.append(s)
+            sx = _safe_str(x)
+            if not sx:
+                continue
+            out.append(sx)
+        return _dedup_trim(out, limit=3)
 
-        return out[:3]
-
-    # Unhappy: lowest score first, tie-break by doctor_id ascending.
-    # Defensive: normalize NaN to 0.0 so ordering is deterministic.
-    def _unhappy_sort_key(r: Dict[str, Any]) -> tuple:
-        s = _score(r)
+    def _clamp_stars(v: Any) -> int:
         try:
-            if s != s:  # NaN check
-                s = 0.0
+            s = int(v)
         except Exception:
-            s = 0.0
-        return (float(s), int(r.get("doctor_id", 0)))
+            s = 1
+        return max(1, min(5, s))
 
-    unhappy_sorted = sorted(per_doctor_rows, key=_unhappy_sort_key)
-    unhappy = unhappy_sorted[: int(top_n)]
+    # ------------------------------
+    # Normalize rows into internal items
+    # ------------------------------
+    items: List[Dict[str, Any]] = []
+    for row in per_doctor_rows:
+        doc_id = int(row.get("doctor_id", 0))
+        ui_stars = _clamp_stars(row.get("ui_stars", 0))
+        display_name = _safe_str(row.get("display_name", ""))
 
-    # Happy: highest score first, tie-break by doctor_id ascending.
-    # Defensive: normalize NaN to 0.0 so ordering is deterministic.
-    def _happy_sort_key(r: Dict[str, Any]) -> tuple:
-        s = _score(r)
-        try:
-            if s != s:  # NaN check
-                s = 0.0
-        except Exception:
-            s = 0.0
-        return (-float(s), int(r.get("doctor_id", 0)))
-
-    happy_sorted = sorted(per_doctor_rows, key=_happy_sort_key)
-    happy = happy_sorted[: int(top_n)]
-
-    # For unhappy: always show UI reasons (negative pain points), max 3.
-    top_unhappy = [
-        {
-            "doctor_id": int(r["doctor_id"]),
-            "score": float(_score(r)),
-            "reasons_codes": ui_reasons_codes_unhappy(
-                row=r,
-                double_shift_days_by_doctor=double_shift_days_by_doctor,
-                pref_days_pen_by_doc=pref_days_pen_by_doc,
-                totals_pen_by_doc=totals_pen_by_doc,
-                fairness_pen_by_doc=fairness_pen_by_doc,
-                weekday_pen_by_doc=weekday_pen_by_doc,
-                fri_pen_by_doc=fri_pen_by_doc,
-            ),
-        }
-        for r in unhappy
-    ]
-
-    # For happy: prefer UI reasons if present (often empty for "good" doctors),
-    # otherwise add positive reasons (good_rest / preferences_met).
-    top_happy = []
-    for r in happy:
-        top_happy.append(
+        items.append(
             {
-                "doctor_id": int(r["doctor_id"]),
-                "score": float(_score(r)),
-                "reasons_codes": ui_reasons_codes_happy(
-                    row=r,
-                    totals_pen_by_doc=totals_pen_by_doc,
-                    fairness_pen_by_doc=fairness_pen_by_doc,
-                ),
+                "doctor_id": doc_id,
+                "ui_stars": ui_stars,
+                "display_name": display_name,
+                "_row": row,
             }
         )
 
-    return {"top_unhappy": top_unhappy, "top_happy": top_happy}
+    # ------------------------------
+    # Partition: each doctor goes to exactly one list
+    # ------------------------------
+    happy_items = [it for it in items if int(it["ui_stars"]) >= HAPPY_MIN_STARS]
+    unhappy_items = [it for it in items if int(it["ui_stars"]) < HAPPY_MIN_STARS]
+
+    # ------------------------------
+    # Sort
+    # ------------------------------
+    happy_items.sort(
+        key=lambda it: (
+            -int(it["ui_stars"]),
+            _last_name_key(it.get("display_name", "")),
+            _safe_str(it.get("display_name", "")).lower(),
+            int(it["doctor_id"]),
+        )
+    )
+    unhappy_items.sort(
+        key=lambda it: (
+            int(it["ui_stars"]),
+            _last_name_key(it.get("display_name", "")),
+            _safe_str(it.get("display_name", "")).lower(),
+            int(it["doctor_id"]),
+        )
+    )
+
+    # ------------------------------
+    # Reasons (ranking-specific, human-friendly)
+    # - First: use per-doctor ui_reasons_codes if present.
+    # - Else: fallback heuristics (deterministic, max 3).
+    # ------------------------------
+    def _reasons_for_unhappy(row: Dict[str, Any]) -> List[str]:
+        ui = _take_ui_reasons_if_any(row)
+        if ui:
+            return ui
+
+        doc_id = int(row.get("doctor_id", 0))
+        reasons: List[str] = []
+
+        # 1) Hard double shift
+        if int(double_shift_days_by_doctor.get(doc_id, 0)) > 0:
+            reasons.append(REASON_HARD_DOUBLE_SHIFT_SAME_DAY)
+
+        # 2) Rest violations
+        if int(row.get("rest_violations", 0)) > 0:
+            reasons.append(REASON_REST_VIOLATIONS)
+
+        # 3) Preferred days missed
+        if int(row.get("preferred_days_missed", 0)) > 0:
+            reasons.append(REASON_PREFERRED_DAYS_MISSED)
+
+        # 4) Pick ONE dominant extra signal (avoid spam)
+        candidates: List[tuple[int, str]] = []
+
+        tp = max(0, int(totals_pen_by_doc.get(doc_id, 0)))
+        if tp > 0:
+            candidates.append((tp, REASON_OVERLOADED_TOTALS))
+
+        wp = max(0, int(weekday_pen_by_doc.get(doc_id, 0)))
+        if wp > 0:
+            candidates.append((wp, REASON_WEEKDAY_PATTERN_MISMATCH))
+
+        fp = max(0, int(fri_pen_by_doc.get(doc_id, 0)))
+        if fp > 0:
+            candidates.append((fp, REASON_FRIDAY_PENALTY))
+
+        candidates.sort(key=lambda x: int(x[0]), reverse=True)
+        if candidates:
+            reasons.append(str(candidates[0][1]))
+
+        return _dedup_trim(reasons, limit=3)
+
+    def _reasons_for_happy(row: Dict[str, Any]) -> List[str]:
+        ui = _take_ui_reasons_if_any(row)
+        if ui:
+            return ui
+
+        doc_id = int(row.get("doctor_id", 0))
+        reasons: List[str] = []
+
+        # "Happy" list can still include a positive explainer
+        if int(row.get("rest_violations", 0)) == 0:
+            reasons.append(REASON_GOOD_REST)
+
+        tp = max(0, int(totals_pen_by_doc.get(doc_id, 0)))
+        fp = max(0, int(fairness_pen_by_doc.get(doc_id, 0)))
+        if tp == 0 and fp == 0:
+            reasons.append(REASON_BALANCED_LOAD)
+
+        return _dedup_trim(reasons, limit=3)
+
+    # ------------------------------
+    # Emit DTO shape
+    # score = ui_stars (float for schema compatibility)
+    # ------------------------------
+    top_happy: List[Dict[str, Any]] = []
+    for it in happy_items:
+        row = dict(it["_row"])
+        top_happy.append(
+            {
+                "doctor_id": int(it["doctor_id"]),
+                "display_name": _safe_str(it.get("display_name", "")),
+                "ui_stars": int(it["ui_stars"]),
+                "score": float(it["ui_stars"]),
+                "reasons_codes": _reasons_for_happy(row),
+            }
+        )
+
+    top_unhappy: List[Dict[str, Any]] = []
+    for it in unhappy_items:
+        row = dict(it["_row"])
+        top_unhappy.append(
+            {
+                "doctor_id": int(it["doctor_id"]),
+                "display_name": _safe_str(it.get("display_name", "")),
+                "ui_stars": int(it["ui_stars"]),
+                "score": float(it["ui_stars"]),
+                "reasons_codes": _reasons_for_unhappy(row),
+            }
+        )
+
+    return {"top_happy": top_happy, "top_unhappy": top_unhappy}
+
+
+# ----------------------------- helpers (UI applicability) -----------------------------
+
+
+def _friday_rule_applicable(*, problem: ProblemData) -> bool:
+    """
+    Friday rule is applicable only if this month contains at least one Friday
+    that is immediately followed by Saturday and Sunday that also exist in the month.
+
+    This is month-level (same for all doctors).
+    """
+    days_set = set(int(d) for d in problem.days)
+
+    for d in sorted(days_set):
+        if _weekday(problem, int(d)) != 4:  # 4 = Friday
+            continue
+
+        sat = int(d) + 1
+        sun = int(d) + 2
+
+        if sat not in days_set or sun not in days_set:
+            continue
+
+        # Extra safety: ensure they are really Sat/Sun
+        if _weekday(problem, sat) == 5 and _weekday(problem, sun) == 6:
+            return True
+
+    return False
 
 
 # ----------------------------- public API ---------------------------------------
@@ -2052,6 +2396,9 @@ def compute_quality(*, problem: ProblemData, payload: Dict[str, Any]) -> Dict[st
 
     ignored_slots = _extract_ignored_slots_from_meta(meta)
     idx = _build_index(assignments)
+
+    # Month-level applicability flag for Friday rule (same for all doctors)
+    friday_rule_applicable = _friday_rule_applicable(problem=problem)
 
     # Coverage (final semantics: per slot)
     coverage_missing_required_slots, missing_slots = compute_coverage_missing_required_slots(
@@ -2111,7 +2458,7 @@ def compute_quality(*, problem: ProblemData, payload: Dict[str, Any]) -> Dict[st
     # Per-doctor blocks
     onsite_total_by_doc, oncall_total_by_doc = _assigned_totals_per_doctor(problem=problem, idx=idx)
 
-    pref_pct_by_doc, pref_missed_by_doc = _compute_preference_stats_per_doctor(
+    pref_pct_by_doc, pref_missed_by_doc, pref_requested_by_doc = _compute_preference_stats_per_doctor(
         problem=problem,
         idx=idx,
         ignored_slots=ignored_slots,
@@ -2120,6 +2467,22 @@ def compute_quality(*, problem: ProblemData, payload: Dict[str, Any]) -> Dict[st
     per_doctor: List[Dict[str, Any]] = []
     for doc_id in sorted(problem.participant_doctor_ids):
         doc_id_i = int(doc_id)
+
+        # ------------------------------
+        # UI applicability flags (based on declared preferences)
+        # ------------------------------
+        prefs = problem.preferences.get(doc_id_i)
+
+        weekday_prefs_declared = False
+        preferred_partners_declared = False
+        if prefs is not None:
+            weekday_prefs_declared = bool(
+                prefs.preferred_onsite_weekdays
+                or prefs.preferred_oncall_weekdays
+                or prefs.avoid_onsite_weekdays
+                or prefs.avoid_oncall_weekdays
+            )
+            preferred_partners_declared = bool(prefs.preferred_partners)
 
         # Build a per-doctor "penalty-like" score from the same components as solver objective.
         # Then convert it to "points" where HIGHER means BETTER:
@@ -2149,6 +2512,7 @@ def compute_quality(*, problem: ProblemData, payload: Dict[str, Any]) -> Dict[st
             # "score" is points: higher => happier/better
             "score": float(score_points),
         }
+
         # ------------------------------
         # UI quality (stars + reasons) for FE
         # ------------------------------
@@ -2156,6 +2520,7 @@ def compute_quality(*, problem: ProblemData, payload: Dict[str, Any]) -> Dict[st
             doctor_id=int(doc_id_i),
             rest_violations=int(rest_viol_by_doc.get(doc_id_i, 0)),
             preferred_days_missed=int(pref_missed_by_doc.get(doc_id_i, 0)),
+            preferred_days_requested=int(pref_requested_by_doc.get(doc_id_i, 0)),
             preference_fulfillment_pct=float(pref_pct_by_doc.get(doc_id_i, 100.0)),
             double_shift_days=int(double_shift_days_by_doc.get(doc_id_i, 0)),
             rest_pen=int(rest_pen_by_doc.get(doc_id_i, 0)),
@@ -2165,6 +2530,9 @@ def compute_quality(*, problem: ProblemData, payload: Dict[str, Any]) -> Dict[st
             weekday_pen=int(weekday_pen_by_doc.get(doc_id_i, 0)),
             friday_pen=int(fri_pen_by_doc.get(doc_id_i, 0)),
             partners_bonus=float(partners_bonus_by_doc.get(doc_id_i, 0.0)),
+            weekday_prefs_declared=bool(weekday_prefs_declared),
+            preferred_partners_declared=bool(preferred_partners_declared),
+            friday_rule_applicable=bool(friday_rule_applicable),
         )
 
         row["ui_stars"] = int(ui_stars)
@@ -2172,16 +2540,15 @@ def compute_quality(*, problem: ProblemData, payload: Dict[str, Any]) -> Dict[st
         row["ui_components"] = dict(ui_components)
         per_doctor.append(row)
 
-        rankings = _build_rankings(
-            per_doctor_rows=per_doctor,
-            double_shift_days_by_doctor=double_shift_days_by_doc,
-            pref_days_pen_by_doc=pref_days_pen_by_doc,
-            totals_pen_by_doc=totals_pen_by_doc,
-            fairness_pen_by_doc=fairness_pen_by_doc,
-            weekday_pen_by_doc=weekday_pen_by_doc,
-            fri_pen_by_doc=fri_pen_by_doc,
-            top_n=5,
-        )
+    rankings = _build_rankings(
+        per_doctor_rows=per_doctor,
+        double_shift_days_by_doctor=double_shift_days_by_doc,
+        pref_days_pen_by_doc=pref_days_pen_by_doc,
+        totals_pen_by_doc=totals_pen_by_doc,
+        fairness_pen_by_doc=fairness_pen_by_doc,
+        weekday_pen_by_doc=weekday_pen_by_doc,
+        fri_pen_by_doc=fri_pen_by_doc,
+    )
 
     summary: Dict[str, Any] = {
         # NEW (final contract KPIs)
