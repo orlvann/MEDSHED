@@ -193,7 +193,7 @@ export const ScheduleCalendar = ({
               {MONTH_NAMES[month - 1]} {year}
             </button>
             {showPicker && (
-              <div className="absolute top-full left-1/2 -translate-x-1/2 mt-1 bg-white border rounded-md shadow-lg z-10 p-2 min-w-[280px]">
+              <div className="absolute top-full left-0 sm:left-1/2 sm:-translate-x-1/2 mt-1 bg-white border rounded-md shadow-lg z-10 p-2 min-w-[280px] max-w-[calc(100vw-2rem)]">
                 {/* Month selector */}
                 <div className="grid grid-cols-3 gap-1 mb-2">
                   {MONTH_NAMES.map((m, idx) => (
@@ -349,20 +349,28 @@ export const ScheduleCalendar = ({
 
         {/* Selected date info */}
         {selectedInfo && (
-          <div className="mt-3 pt-3 border-t border-gray-100">
-            <p className="text-sm font-medium text-gray-900">
+          <div className="mt-3 pt-3 border-t border-gray-100 space-y-2">
+            <p className="text-sm font-semibold text-gray-900">
               {selectedInfo.date}
             </p>
             {selectedInfo.events.map((event, idx) => (
-              <div key={idx} className="flex items-center gap-1.5 text-sm text-gray-600">
+              <div
+                key={idx}
+                className={`flex items-center gap-2 text-sm rounded-md px-2.5 py-1.5 ${
+                  event.type === "onsite"
+                    ? "bg-teal-50 text-teal-800"
+                    : "bg-amber-50 text-amber-800"
+                }`}
+              >
                 <span
                   className={`w-2 h-2 rounded-full flex-shrink-0 ${
                     event.type === "onsite" ? "bg-teal-500" : "bg-amber-500"
                   }`}
                 />
-                <span>
-                  {event.type === "onsite" ? "On Site" : "On Call"} — {event.doctorName}
+                <span className="font-medium">
+                  {event.type === "onsite" ? "On Site" : "On Call"}
                 </span>
+                <span className="text-gray-600">{event.doctorName}</span>
               </div>
             ))}
           </div>
@@ -371,7 +379,7 @@ export const ScheduleCalendar = ({
         {/* Empty state for selected date with no events */}
         {selectedDate && !selectedInfo && (
           <div className="mt-3 pt-3 border-t border-gray-100">
-            <p className="text-sm text-gray-700">
+            <p className="text-xs text-gray-500">
               No shifts scheduled for {selectedDate} {MONTH_NAMES[month - 1]} {year}
             </p>
           </div>

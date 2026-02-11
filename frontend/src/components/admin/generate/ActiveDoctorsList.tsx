@@ -16,41 +16,42 @@ export const ActiveDoctorsList = ({
   const navigate = useNavigate();
 
   return (
-    <Card className="mb-6">
-      <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-4">
-        <CardTitle className="text-lg font-semibold">
-          Participating Doctors ({doctors.length})
+    <Card className="mb-4 sm:mb-6">
+      <CardHeader className="px-4 py-3 sm:px-6 sm:py-4 flex flex-row items-center justify-between space-y-0">
+        <CardTitle className="text-base sm:text-lg font-semibold">
+          Doctors ({doctors.length})
         </CardTitle>
         <Button
           variant="outline"
           size="sm"
           onClick={() => navigate("/admin/doctors")}
+          className="h-7 text-xs sm:h-8 sm:text-sm"
         >
-          <Pencil className="h-4 w-4 mr-2" />
+          <Pencil className="h-3.5 w-3.5 sm:h-4 sm:w-4 mr-1.5 sm:mr-2" />
           Edit
         </Button>
       </CardHeader>
-      <CardContent>
+      <CardContent className="px-4 sm:px-6 pb-4">
         {loading ? (
-          <div className="text-center py-4 text-muted-foreground">
+          <div className="text-center py-3 sm:py-4 text-xs sm:text-sm text-muted-foreground">
             Loading doctors...
           </div>
         ) : doctors.length === 0 ? (
-          <div className="text-center py-4 text-muted-foreground">
-            No active doctors found. Please add doctors to the schedule.
+          <div className="text-center py-3 sm:py-4 text-xs sm:text-sm text-muted-foreground">
+            No active doctors found.
           </div>
         ) : (
-          <div className="flex flex-wrap gap-2">
+          <div className="flex flex-wrap gap-1.5 sm:gap-2">
             {doctors.map((doctor) => (
               <div
                 key={doctor.id}
-                className="inline-flex items-center px-3 py-1.5 rounded-full bg-gray-100 text-sm"
+                className="inline-flex items-center px-2 py-1 sm:px-3 sm:py-1.5 rounded-full bg-gray-100 text-xs sm:text-sm"
               >
                 <span className="font-medium">
                   {doctor.first_name} {doctor.last_name}
                 </span>
                 <span
-                  className={`ml-2 px-1.5 py-0.5 text-xs rounded ${
+                  className={`ml-1.5 sm:ml-2 px-1 sm:px-1.5 py-0.5 text-[10px] sm:text-xs rounded ${
                     doctor.role === "specialist"
                       ? "bg-blue-100 text-blue-700"
                       : "bg-green-100 text-green-700"

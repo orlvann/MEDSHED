@@ -136,7 +136,7 @@ export const SetPassword = () => {
   if (!token) {
     return (
       <div className="flex items-center justify-center min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100">
-        <Card className="w-full max-w-md">
+        <Card className="w-full max-w-md mx-4 sm:mx-auto">
           <CardHeader>
             <CardTitle className="text-2xl font-bold text-center text-red-600">
               Invalid Link
@@ -158,7 +158,7 @@ export const SetPassword = () => {
   if (success) {
     return (
       <div className="flex items-center justify-center min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100">
-        <Card className="w-full max-w-md">
+        <Card className="w-full max-w-md mx-4 sm:mx-auto">
           <CardHeader>
             <CardTitle className="text-2xl font-bold text-center text-green-600">
               Success!
@@ -181,7 +181,7 @@ export const SetPassword = () => {
 
   return (
     <div className="flex items-center justify-center min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100">
-      <Card className="w-full max-w-md">
+      <Card className="w-full max-w-md mx-4 sm:mx-auto">
         <CardHeader className="space-y-1">
           <CardTitle className="text-2xl font-bold text-center">
             Set Your Password

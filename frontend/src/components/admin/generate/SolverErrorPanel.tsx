@@ -166,19 +166,19 @@ function PanelShell({
   children: ReactNode;
 }) {
   return (
-    <div className="mb-6 rounded-xl border border-red-200 bg-white overflow-hidden shadow-sm">
+    <div className="mb-4 sm:mb-6 rounded-xl border border-red-200 bg-white overflow-hidden shadow-sm">
       {/* Red accent bar */}
       <div className="h-1 bg-red-500" />
 
-      <div className="px-5 pt-4 pb-2 flex items-start justify-between">
-        <div className="flex items-center gap-3">
-          <AlertTriangle className="h-5 w-5 text-red-500 shrink-0" />
+      <div className="px-3 sm:px-5 pt-3 sm:pt-4 pb-2 flex items-start justify-between">
+        <div className="flex items-center gap-2.5 sm:gap-3">
+          <AlertTriangle className="h-4 w-4 sm:h-5 sm:w-5 text-red-500 shrink-0" />
           <div>
-            <h3 className="text-[15px] font-semibold text-gray-900 leading-tight">
+            <h3 className="text-[13px] sm:text-[15px] font-semibold text-gray-900 leading-tight">
               {title}
             </h3>
             {subtitle && (
-              <p className="text-sm text-gray-500 mt-0.5">{subtitle}</p>
+              <p className="text-xs sm:text-sm text-gray-500 mt-0.5">{subtitle}</p>
             )}
           </div>
         </div>
@@ -190,7 +190,7 @@ function PanelShell({
         </button>
       </div>
 
-      <div className="px-5 pb-5">{children}</div>
+      <div className="px-3 sm:px-5 pb-4 sm:pb-5">{children}</div>
     </div>
   );
 }
@@ -258,14 +258,14 @@ function IgnoreIssuesPanel({
       onDismiss={onCancel}
     >
       {/* Issues grouped by type */}
-      <div className="mt-3 space-y-px rounded-lg border border-gray-200 overflow-hidden max-h-[280px] overflow-y-auto">
+      <div className="mt-3 space-y-px rounded-lg border border-gray-200 overflow-hidden max-h-[220px] sm:max-h-[280px] overflow-y-auto">
         {issueGroups.map((group) => (
           <div
             key={group.key}
-            className="px-3.5 py-2.5 bg-gray-50/70 border-b border-gray-100 last:border-b-0"
+            className="px-3 py-2 sm:px-3.5 sm:py-2.5 bg-gray-50/70 border-b border-gray-100 last:border-b-0"
           >
-            <p className="text-[13px] text-gray-700 leading-snug">{group.message}</p>
-            <span className="text-xs text-gray-400 mt-0.5 block tabular-nums">
+            <p className="text-xs sm:text-[13px] text-gray-700 leading-snug">{group.message}</p>
+            <span className="text-[10px] sm:text-xs text-gray-400 mt-0.5 block tabular-nums">
               Day{group.days.length > 1 ? "s" : ""} {formatDayRanges(group.days)}
             </span>
           </div>
@@ -273,12 +273,12 @@ function IgnoreIssuesPanel({
         {[...gapsByType].map(([type, daySet]) => (
           <div
             key={type}
-            className="px-3.5 py-2.5 bg-red-50/50 border-b border-gray-100 last:border-b-0"
+            className="px-3 py-2 sm:px-3.5 sm:py-2.5 bg-red-50/50 border-b border-gray-100 last:border-b-0"
           >
-            <span className="text-[13px] text-red-600 font-medium">
+            <span className="text-xs sm:text-[13px] text-red-600 font-medium">
               Gap: {type}
             </span>
-            <span className="text-xs text-gray-400 mt-0.5 block tabular-nums">
+            <span className="text-[10px] sm:text-xs text-gray-400 mt-0.5 block tabular-nums">
               Day{daySet.size > 1 ? "s" : ""} {formatDayRanges([...daySet])}
             </span>
           </div>
@@ -357,7 +357,7 @@ function HeadConflictPanel({
       subtitle="Choose who gets each contested slot."
       onDismiss={onCancel}
     >
-      <div className="mt-3 space-y-3">
+      <div className="mt-3 space-y-2 sm:space-y-3">
         {conflicts.map((conflict) => {
           const key = `${conflict.day}-${conflict.shift_type}`;
           const selectedId = resolutions[key] ?? null;
@@ -367,15 +367,15 @@ function HeadConflictPanel({
               key={key}
               className="rounded-lg border border-gray-200 overflow-hidden"
             >
-              <div className="px-3.5 py-2 bg-gray-50 border-b border-gray-100 text-sm font-semibold text-gray-900">
+              <div className="px-3 py-1.5 sm:px-3.5 sm:py-2 bg-gray-50 border-b border-gray-100 text-xs sm:text-sm font-semibold text-gray-900">
                 Day {conflict.day} &mdash;{" "}
                 {conflict.shift_type === "onsite" ? "On-site" : "On-call"}
               </div>
-              <div className="p-1.5 space-y-1">
+              <div className="p-1 sm:p-1.5 space-y-0.5 sm:space-y-1">
                 {conflict.head_candidates.map((candidate) => (
                   <label
                     key={candidate.doctor_id}
-                    className={`flex items-center gap-2.5 px-3 py-2 rounded-md cursor-pointer transition-colors text-sm ${
+                    className={`flex items-center gap-2 sm:gap-2.5 px-2.5 py-1.5 sm:px-3 sm:py-2 rounded-md cursor-pointer transition-colors text-xs sm:text-sm ${
                       selectedId === candidate.doctor_id
                         ? "bg-blue-50 text-blue-900"
                         : "text-gray-700 hover:bg-gray-50"
@@ -450,14 +450,14 @@ function InfeasiblePanel({
       onDismiss={onDismiss}
     >
       {issueGroups.length > 0 && (
-        <div className="mt-3 space-y-px rounded-lg border border-gray-200 overflow-hidden max-h-[240px] overflow-y-auto">
+        <div className="mt-3 space-y-px rounded-lg border border-gray-200 overflow-hidden max-h-[200px] sm:max-h-[240px] overflow-y-auto">
           {issueGroups.map((group) => (
             <div
               key={group.key}
-              className="px-3.5 py-2.5 bg-gray-50/70 border-b border-gray-100 last:border-b-0"
+              className="px-3 py-2 sm:px-3.5 sm:py-2.5 bg-gray-50/70 border-b border-gray-100 last:border-b-0"
             >
-              <p className="text-[13px] text-gray-700 leading-snug">{group.message}</p>
-              <span className="text-xs text-gray-400 mt-0.5 block tabular-nums">
+              <p className="text-xs sm:text-[13px] text-gray-700 leading-snug">{group.message}</p>
+              <span className="text-[10px] sm:text-xs text-gray-400 mt-0.5 block tabular-nums">
                 Day{group.days.length > 1 ? "s" : ""} {formatDayRanges(group.days)}
               </span>
             </div>
@@ -538,7 +538,7 @@ export const SolverErrorPanel = ({
 
     default:
       return (
-        <div className="mb-6 p-4 bg-red-50 border border-red-200 rounded-lg text-red-800 text-sm">
+        <div className="mb-4 sm:mb-6 p-3 sm:p-4 bg-red-50 border border-red-200 rounded-lg text-red-800 text-xs sm:text-sm">
           {error.detail}
         </div>
       );

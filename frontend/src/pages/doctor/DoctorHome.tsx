@@ -12,6 +12,7 @@ import {
   Clock,
   ClipboardList,
   CloudSun,
+  ChevronRight,
 } from "lucide-react";
 import {
   preferencesApi,
@@ -281,7 +282,7 @@ export const DoctorHome = () => {
     return (
       <div className="min-h-screen bg-gray-50">
         <Header />
-        <main className="container mx-auto px-4 py-6">
+        <main className="container mx-auto px-3 sm:px-4 py-4 sm:py-6">
           <div className="animate-pulse">
             <div className="h-8 bg-gray-200 rounded w-1/4 mb-4"></div>
             <div className="h-4 bg-gray-200 rounded w-1/3 mb-8"></div>
@@ -298,7 +299,7 @@ export const DoctorHome = () => {
   return (
     <div className="min-h-screen bg-gray-50">
       <Header />
-      <main className="container mx-auto px-4 py-6">
+      <main className="container mx-auto px-3 sm:px-4 py-4 sm:py-6">
         {/* Greeting */}
         <Card className="mb-6">
           <CardContent className="py-4">
@@ -313,163 +314,339 @@ export const DoctorHome = () => {
 
         {/* Warning Banner */}
         {shouldShowWarning && (
-          <Card className="mb-6 border-orange-300 bg-orange-50">
-            <CardContent className="py-4 flex items-center gap-3">
-              <AlertCircle className="h-5 w-5 text-orange-600 flex-shrink-0" />
-              <div className="flex-1">
-                <p className="text-sm font-medium text-orange-800">
-                  Deadline approaching! Only {deadlineInfo?.days} day
-                  {deadlineInfo?.days !== 1 ? "s" : ""} left.
-                </p>
-                <p className="text-xs text-orange-600">
-                  Please submit your preferences before the deadline.
-                </p>
+          <>
+            {/* Mobile warning banner */}
+            <div
+              className="mb-4 lg:hidden rounded-xl bg-gradient-to-r from-orange-500 to-amber-500 p-4 cursor-pointer active:scale-[0.98] transition-all shadow-sm"
+              onClick={() => navigate("/doctor/preferences")}
+            >
+              <div className="flex items-start gap-3">
+                <div className="h-10 w-10 rounded-xl bg-white/20 flex items-center justify-center flex-shrink-0 mt-0.5">
+                  <AlertCircle className="h-5 w-5 text-white" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-bold text-white">
+                    Only {deadlineInfo?.days} day
+                    {deadlineInfo?.days !== 1 ? "s" : ""} left!
+                  </p>
+                  <p className="text-[12px] text-white/80 mt-0.5">
+                    Submit your preferences before the deadline
+                  </p>
+                </div>
+                <ChevronRight className="h-5 w-5 text-white/50 flex-shrink-0 mt-1" />
               </div>
-              <Button
-                size="sm"
-                variant="outline"
-                className="border-orange-300 text-orange-700 hover:bg-orange-100"
-                onClick={() => navigate("/doctor/preferences")}
-              >
-                Fill Now
-              </Button>
-            </CardContent>
-          </Card>
+            </div>
+
+            {/* Desktop warning banner */}
+            <Card className="mb-6 hidden lg:block border-orange-300 bg-orange-50">
+              <CardContent className="py-4 flex flex-col sm:flex-row items-start sm:items-center gap-2 sm:gap-3">
+                <AlertCircle className="h-5 w-5 text-orange-600 flex-shrink-0" />
+                <div className="flex-1">
+                  <p className="text-sm font-medium text-orange-800">
+                    Deadline approaching! Only {deadlineInfo?.days} day
+                    {deadlineInfo?.days !== 1 ? "s" : ""} left.
+                  </p>
+                  <p className="text-xs text-orange-600">
+                    Please submit your preferences before the deadline.
+                  </p>
+                </div>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="border-orange-300 text-orange-700 hover:bg-orange-100 w-full sm:w-auto"
+                  onClick={() => navigate("/doctor/preferences")}
+                >
+                  Fill Now
+                </Button>
+              </CardContent>
+            </Card>
+          </>
         )}
 
         {/* Main content grid */}
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-          {/* Left column - Info cards */}
-          <div className="space-y-3">
-            {/* Current Time Card */}
-            <Card className="min-h-[100px]">
-              <CardContent className="py-4">
-                <h3 className="text-lg font-semibold mb-1 flex items-center gap-2">
-                  <Clock className="h-5 w-5 text-blue-600" />
-                  Current Time
-                </h3>
-                <p className="text-2xl font-bold text-blue-600">
-                  {formatTime(currentTime)}
-                </p>
-                <p className="text-xs text-muted-foreground mt-1">
-                  {formatDate(currentTime)}
-                </p>
-              </CardContent>
-            </Card>
-
-            {/* Weather Card */}
-            <Card className="min-h-[100px]">
-              <CardContent className="py-4">
-                <h3 className="text-lg font-semibold mb-1 flex items-center gap-2">
-                  <CloudSun className="h-5 w-5 text-orange-500" />
-                  Weather in Poznan
-                </h3>
-                {weatherLoading ? (
-                  <p className="text-sm text-gray-500">Loading...</p>
-                ) : weather ? (
-                  <>
-                    <p className="text-2xl font-bold text-orange-600">
-                      {weather.temperature}°C
-                    </p>
-                    <p className="text-xs text-muted-foreground">
-                      {weather.condition}
-                    </p>
-                    <p className="text-xs text-muted-foreground">
-                      Humidity: {weather.humidity}% | Wind: {weather.windSpeed}{" "}
-                      km/h
-                    </p>
-                  </>
-                ) : (
-                  <p className="text-sm text-gray-500">
-                    Unable to load weather
-                  </p>
-                )}
-              </CardContent>
-            </Card>
-
-            {/* Deadline Card */}
-            <Card className="min-h-[100px]">
-              <CardContent className="py-4">
-                <h3 className="text-lg font-semibold mb-2 flex items-center gap-2">
-                  <Calendar className="h-5 w-5 text-purple-600" />
-                  Deadline
-                </h3>
-                {deadlineInfo ? (
-                  <>
-                    <div className="flex items-center gap-2 text-primary mb-1">
-                      <span className="font-medium">
-                        <span className="text-lg">{deadlineInfo.days}</span>{" "}
-                        <span className="text-sm">days</span>{" "}
-                        <span className="text-lg">{deadlineInfo.hours}</span>{" "}
-                        <span className="text-sm">hours</span>{" "}
-                        <span className="text-lg">{deadlineInfo.minutes}</span>{" "}
-                        <span className="text-sm">minutes</span>
-                      </span>
+          {/* Left column - Mobile: compact tiles, Desktop: original cards */}
+          <div>
+            {/* === MOBILE TILES (hidden on lg+) === */}
+            <div className="space-y-3 lg:hidden">
+              {/* Time & Weather Row */}
+              <div className="grid grid-cols-2 gap-3">
+                <div className="rounded-xl bg-gradient-to-br from-sky-50 to-blue-50 border border-sky-100/80 p-3">
+                  <div className="flex items-center gap-1.5 mb-2">
+                    <div className="h-6 w-6 rounded-md bg-sky-500 flex items-center justify-center shadow-sm">
+                      <Clock className="h-3 w-3 text-white" />
                     </div>
-                    {!deadlineInfo.isPast ? (
+                    <span className="text-[11px] font-semibold text-sky-600 uppercase tracking-wider">
+                      Time
+                    </span>
+                  </div>
+                  <p className="text-base font-bold text-slate-800 tracking-tight leading-none tabular-nums">
+                    {formatTime(currentTime)}
+                  </p>
+                  <p className="text-[11px] text-slate-500 mt-1.5 leading-tight">
+                    {formatDate(currentTime)}
+                  </p>
+                </div>
+
+                <div className="rounded-xl bg-gradient-to-br from-amber-50 to-orange-50 border border-amber-100/80 p-3">
+                  <div className="flex items-center gap-1.5 mb-2">
+                    <div className="h-6 w-6 rounded-md bg-amber-500 flex items-center justify-center shadow-sm">
+                      <CloudSun className="h-3 w-3 text-white" />
+                    </div>
+                    <span className="text-[11px] font-semibold text-amber-600 uppercase tracking-wider">
+                      Poznan
+                    </span>
+                  </div>
+                  {weatherLoading ? (
+                    <div className="h-5 w-14 bg-amber-100 animate-pulse rounded" />
+                  ) : weather ? (
+                    <>
+                      <p className="text-lg font-bold text-slate-800 tracking-tight leading-none">
+                        {weather.temperature}°C
+                      </p>
+                      <p className="text-[11px] text-slate-500 mt-1.5 truncate">
+                        {weather.condition} · {weather.windSpeed} km/h
+                      </p>
+                    </>
+                  ) : (
+                    <p className="text-xs text-slate-400">Unavailable</p>
+                  )}
+                </div>
+              </div>
+
+              {/* Deadline & Status Row */}
+              <div className="grid grid-cols-2 gap-3">
+                <div className="rounded-xl bg-gradient-to-br from-violet-50 to-purple-50 border border-violet-100/80 p-3">
+                  <div className="flex items-center gap-1.5 mb-2">
+                    <div className="h-6 w-6 rounded-md bg-violet-500 flex items-center justify-center shadow-sm">
+                      <Calendar className="h-3 w-3 text-white" />
+                    </div>
+                    <span className="text-[11px] font-semibold text-violet-600 uppercase tracking-wider">
+                      Deadline
+                    </span>
+                  </div>
+                  {deadlineInfo ? (
+                    <>
+                      <p className="text-[15px] font-bold text-slate-800 tracking-tight leading-none">
+                        {deadlineInfo.days}d {deadlineInfo.hours}h{" "}
+                        {deadlineInfo.minutes}m
+                      </p>
+                      <div
+                        className={`flex items-center gap-1 mt-1.5 ${
+                          !deadlineInfo.isPast
+                            ? "text-emerald-600"
+                            : "text-red-500"
+                        }`}
+                      >
+                        {!deadlineInfo.isPast ? (
+                          <CheckCircle className="h-3 w-3 flex-shrink-0" />
+                        ) : (
+                          <AlertCircle className="h-3 w-3 flex-shrink-0" />
+                        )}
+                        <span className="text-[11px] font-medium">
+                          {!deadlineInfo.isPast ? "time remaining" : "passed"}
+                        </span>
+                      </div>
+                    </>
+                  ) : (
+                    <p className="text-xs text-slate-400">Not set</p>
+                  )}
+                </div>
+
+                <div className="rounded-xl bg-gradient-to-br from-indigo-50 to-blue-50 border border-indigo-100/80 p-3">
+                  <div className="flex items-center gap-1.5 mb-2">
+                    <div className="h-6 w-6 rounded-md bg-indigo-500 flex items-center justify-center shadow-sm">
+                      <ClipboardList className="h-3 w-3 text-white" />
+                    </div>
+                    <span className="text-[11px] font-semibold text-indigo-600 uppercase tracking-wider">
+                      Status
+                    </span>
+                  </div>
+                  {preferences?.status === "submitted" ? (
+                    <>
+                      <p className="text-[15px] font-bold text-slate-800 leading-tight">
+                        Submitted
+                      </p>
+                      <div className="flex items-center gap-1 mt-1.5 text-emerald-600">
+                        <CheckCircle className="h-3 w-3 flex-shrink-0" />
+                        <span className="text-[11px] font-medium">
+                          all done!
+                        </span>
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <p className="text-[15px] font-bold text-slate-800 leading-tight">
+                        Pending
+                      </p>
+                      <div className="flex items-center gap-1 mt-1.5 text-red-500">
+                        <AlertCircle className="h-3 w-3 flex-shrink-0" />
+                        <span className="text-[11px] font-medium">
+                          action needed
+                        </span>
+                      </div>
+                    </>
+                  )}
+                </div>
+              </div>
+
+              {/* Preferences CTA */}
+              <div
+                className="rounded-xl bg-gradient-to-r from-emerald-500 to-teal-500 p-3.5 cursor-pointer hover:shadow-md active:scale-[0.98] transition-all"
+                onClick={() => navigate("/doctor/preferences")}
+              >
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2.5">
+                    <div className="h-8 w-8 rounded-lg bg-white/20 flex items-center justify-center">
+                      <Calendar className="h-4 w-4 text-white" />
+                    </div>
+                    <div>
+                      <p className="text-sm font-semibold text-white">
+                        Set Preferences
+                      </p>
+                      <p className="text-[11px] text-white/70">
+                        for next month's schedule
+                      </p>
+                    </div>
+                  </div>
+                  <ChevronRight className="h-5 w-5 text-white/50" />
+                </div>
+              </div>
+            </div>
+
+            {/* === DESKTOP CARDS (hidden below lg) === */}
+            <div className="hidden lg:grid grid-cols-1 gap-3">
+              <Card className="min-h-[100px]">
+                <CardContent className="py-4">
+                  <h3 className="text-lg font-semibold mb-1 flex items-center gap-2">
+                    <Clock className="h-5 w-5 text-blue-600" />
+                    Current Time
+                  </h3>
+                  <p className="text-2xl font-bold text-blue-600">
+                    {formatTime(currentTime)}
+                  </p>
+                  <p className="text-xs text-muted-foreground mt-1">
+                    {formatDate(currentTime)}
+                  </p>
+                </CardContent>
+              </Card>
+
+              <Card className="min-h-[100px]">
+                <CardContent className="py-4">
+                  <h3 className="text-lg font-semibold mb-1 flex items-center gap-2">
+                    <CloudSun className="h-5 w-5 text-orange-500" />
+                    Weather in Poznan
+                  </h3>
+                  {weatherLoading ? (
+                    <p className="text-sm text-gray-500">Loading...</p>
+                  ) : weather ? (
+                    <>
+                      <p className="text-2xl font-bold text-orange-600">
+                        {weather.temperature}°C
+                      </p>
+                      <p className="text-xs text-muted-foreground">
+                        {weather.condition}
+                      </p>
+                      <p className="text-xs text-muted-foreground">
+                        Humidity: {weather.humidity}% | Wind:{" "}
+                        {weather.windSpeed} km/h
+                      </p>
+                    </>
+                  ) : (
+                    <p className="text-sm text-gray-500">
+                      Unable to load weather
+                    </p>
+                  )}
+                </CardContent>
+              </Card>
+
+              <Card className="min-h-[100px]">
+                <CardContent className="py-4">
+                  <h3 className="text-lg font-semibold mb-2 flex items-center gap-2">
+                    <Calendar className="h-5 w-5 text-purple-600" />
+                    Deadline
+                  </h3>
+                  {deadlineInfo ? (
+                    <>
+                      <div className="flex items-center gap-2 text-primary mb-1">
+                        <span className="font-medium">
+                          <span className="text-lg">{deadlineInfo.days}</span>{" "}
+                          <span className="text-sm">days</span>{" "}
+                          <span className="text-lg">{deadlineInfo.hours}</span>{" "}
+                          <span className="text-sm">hours</span>{" "}
+                          <span className="text-lg">
+                            {deadlineInfo.minutes}
+                          </span>{" "}
+                          <span className="text-sm">minutes</span>
+                        </span>
+                      </div>
+                      {!deadlineInfo.isPast ? (
+                        <div className="flex items-center gap-1.5 text-green-600">
+                          <CheckCircle className="h-4 w-4" />
+                          <span className="text-sm">
+                            you still have time!
+                          </span>
+                        </div>
+                      ) : (
+                        <div className="flex items-center gap-1.5 text-red-600">
+                          <AlertCircle className="h-4 w-4" />
+                          <span className="text-sm">deadline has passed</span>
+                        </div>
+                      )}
+                    </>
+                  ) : (
+                    <p className="text-base text-gray-500">No deadline set</p>
+                  )}
+                </CardContent>
+              </Card>
+
+              <Card className="min-h-[100px]">
+                <CardContent className="py-4">
+                  <h3 className="text-lg font-semibold mb-2 flex items-center gap-2">
+                    <ClipboardList className="h-5 w-5 text-indigo-600" />
+                    Status
+                  </h3>
+                  {preferences?.status === "submitted" ? (
+                    <>
+                      <p className="text-base text-gray-700 mb-1">
+                        your preferences are submitted
+                      </p>
                       <div className="flex items-center gap-1.5 text-green-600">
                         <CheckCircle className="h-4 w-4" />
-                        <span className="text-sm">you still have time!</span>
+                        <span className="text-sm">all done!</span>
                       </div>
-                    ) : (
+                    </>
+                  ) : (
+                    <>
+                      <p className="text-base text-gray-700 mb-1">
+                        your preferences are not submitted
+                      </p>
                       <div className="flex items-center gap-1.5 text-red-600">
                         <AlertCircle className="h-4 w-4" />
-                        <span className="text-sm">deadline has passed</span>
+                        <span className="text-sm">
+                          prepare your schedule!
+                        </span>
                       </div>
-                    )}
-                  </>
-                ) : (
-                  <p className="text-base text-gray-500">No deadline set</p>
-                )}
-              </CardContent>
-            </Card>
+                    </>
+                  )}
+                </CardContent>
+              </Card>
 
-            {/* Status Card */}
-            <Card className="min-h-[100px]">
-              <CardContent className="py-4">
-                <h3 className="text-lg font-semibold mb-2 flex items-center gap-2">
-                  <ClipboardList className="h-5 w-5 text-indigo-600" />
-                  Status
-                </h3>
-                {preferences?.status === "submitted" ? (
-                  <>
-                    <p className="text-base text-gray-700 mb-1">
-                      your preferences are submitted
-                    </p>
-                    <div className="flex items-center gap-1.5 text-green-600">
-                      <CheckCircle className="h-4 w-4" />
-                      <span className="text-sm">all done!</span>
-                    </div>
-                  </>
-                ) : (
-                  <>
-                    <p className="text-base text-gray-700 mb-1">
-                      your preferences are not submitted
-                    </p>
-                    <div className="flex items-center gap-1.5 text-red-600">
-                      <AlertCircle className="h-4 w-4" />
-                      <span className="text-sm">prepare your schedule!</span>
-                    </div>
-                  </>
-                )}
-              </CardContent>
-            </Card>
-
-            {/* Preferences Card */}
-            <Card
-              className="min-h-[100px] cursor-pointer hover:shadow-md transition-shadow border-2 hover:border-primary"
-              onClick={() => navigate("/doctor/preferences")}
-            >
-              <CardContent className="py-4">
-                <h3 className="text-lg font-semibold mb-0.5 flex items-center gap-2">
-                  <Calendar className="h-5 w-5 text-green-600" />
-                  Preferences
-                </h3>
-                <p className="text-sm text-muted-foreground">
-                  set your preferences
-                </p>
-              </CardContent>
-            </Card>
+              <Card
+                className="min-h-[100px] cursor-pointer hover:shadow-md transition-shadow border-2 hover:border-primary"
+                onClick={() => navigate("/doctor/preferences")}
+              >
+                <CardContent className="py-4">
+                  <h3 className="text-lg font-semibold mb-0.5 flex items-center gap-2">
+                    <Calendar className="h-5 w-5 text-green-600" />
+                    Preferences
+                  </h3>
+                  <p className="text-sm text-muted-foreground">
+                    set your preferences
+                  </p>
+                </CardContent>
+              </Card>
+            </div>
           </div>
 
           {/* Right column - Calendars */}

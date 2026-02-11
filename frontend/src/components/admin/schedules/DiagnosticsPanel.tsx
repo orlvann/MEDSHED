@@ -211,17 +211,17 @@ function KpiCard({
 }) {
   return (
     <div
-      className={`bg-white border rounded-xl p-4 border-t-[3px] ${borderColor} shadow-sm`}
+      className={`bg-white border rounded-xl p-3 sm:p-4 border-t-[3px] ${borderColor} shadow-sm`}
     >
-      <div className="flex items-start gap-3">
-        <div className={`p-2 rounded-lg ${iconBg}`}>
-          <Icon className={`h-4 w-4 ${iconColor}`} />
+      <div className="flex items-start gap-2 sm:gap-3">
+        <div className={`p-1.5 sm:p-2 rounded-lg ${iconBg}`}>
+          <Icon className={`h-3.5 w-3.5 sm:h-4 sm:w-4 ${iconColor}`} />
         </div>
         <div className="flex-1 min-w-0">
-          <p className={`text-2xl font-bold tabular-nums ${valueColor}`}>
+          <p className={`text-xl sm:text-2xl font-bold tabular-nums ${valueColor}`}>
             {value}
           </p>
-          <p className="text-xs text-muted-foreground mt-0.5">{label}</p>
+          <p className="text-[10px] sm:text-xs text-muted-foreground mt-0.5">{label}</p>
           {progress && (
             <ProgressBar
               value={progress.value}
@@ -310,7 +310,7 @@ function SummaryKPIs({ diagnostics }: { diagnostics: DiagnosticsRead }) {
         : "bg-red-500";
 
   return (
-    <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3 mb-6">
+    <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2 sm:gap-3 mb-4 sm:mb-6">
       <KpiCard
         icon={ShieldAlert}
         label="Coverage Gaps"
@@ -392,20 +392,20 @@ function FindingsSeverityGroup({
       {/* Collapsible header */}
       <button
         type="button"
-        className={`w-full flex items-center gap-2.5 px-4 py-2.5 text-left ${config.headerBg} transition-colors hover:opacity-90`}
+        className={`w-full flex items-center gap-2 sm:gap-2.5 px-3 sm:px-4 py-2 sm:py-2.5 text-left ${config.headerBg} transition-colors hover:opacity-90`}
         onClick={() => setExpanded(!expanded)}
       >
         {expanded ? (
-          <ChevronDown className={`h-4 w-4 ${config.headerText}`} />
+          <ChevronDown className={`h-3.5 w-3.5 sm:h-4 sm:w-4 ${config.headerText}`} />
         ) : (
-          <ChevronRight className={`h-4 w-4 ${config.headerText}`} />
+          <ChevronRight className={`h-3.5 w-3.5 sm:h-4 sm:w-4 ${config.headerText}`} />
         )}
-        <Icon className={`h-4 w-4 ${config.text}`} />
-        <span className={`text-sm font-semibold ${config.headerText}`}>
+        <Icon className={`h-3.5 w-3.5 sm:h-4 sm:w-4 ${config.text}`} />
+        <span className={`text-xs sm:text-sm font-semibold ${config.headerText}`}>
           {config.label}
         </span>
         <span
-          className={`ml-auto inline-flex items-center justify-center min-w-[22px] h-5 px-1.5 rounded-full text-xs font-bold ${config.countBadge}`}
+          className={`ml-auto inline-flex items-center justify-center min-w-[20px] sm:min-w-[22px] h-4 sm:h-5 px-1 sm:px-1.5 rounded-full text-[10px] sm:text-xs font-bold ${config.countBadge}`}
         >
           {items.length}
         </span>
@@ -419,32 +419,32 @@ function FindingsSeverityGroup({
             return (
               <div
                 key={`${severity}-${i}`}
-                className={`px-4 py-3 ${config.bg}`}
+                className={`px-3 py-2.5 sm:px-4 sm:py-3 ${config.bg}`}
               >
                 <div className="flex items-start gap-2">
                   <div className="flex-1 min-w-0">
-                    <span className={`text-sm font-semibold ${config.text}`}>
+                    <span className={`text-xs sm:text-sm font-semibold ${config.text}`}>
                       {info.title}
                     </span>
-                    <p className="text-sm text-gray-700 mt-0.5">
+                    <p className="text-xs sm:text-sm text-gray-700 mt-0.5">
                       {info.description}
                     </p>
                     {info.tip && (
-                      <p className="text-xs text-muted-foreground mt-1 italic">
+                      <p className="text-[10px] sm:text-xs text-muted-foreground mt-1 italic hidden sm:block">
                         {info.tip}
                       </p>
                     )}
                   </div>
                   {/* Context pills for quick scanning */}
-                  <div className="flex items-center gap-1.5 flex-shrink-0 mt-0.5">
+                  <div className="flex items-center gap-1 sm:gap-1.5 flex-shrink-0 mt-0.5">
                     {finding.context?.day != null && (
-                      <span className="inline-flex items-center px-2 py-0.5 rounded-md bg-white/80 border text-xs font-medium text-gray-600 tabular-nums">
-                        Day {finding.context.day}
+                      <span className="inline-flex items-center px-1.5 sm:px-2 py-0.5 rounded-md bg-white/80 border text-[10px] sm:text-xs font-medium text-gray-600 tabular-nums">
+                        D{finding.context.day}
                       </span>
                     )}
                     {finding.context?.shift_type && (
                       <span
-                        className={`inline-flex items-center px-2 py-0.5 rounded-md text-xs font-medium ${
+                        className={`hidden sm:inline-flex items-center px-2 py-0.5 rounded-md text-xs font-medium ${
                           finding.context.shift_type === "onsite"
                             ? "bg-teal-100 text-teal-700"
                             : "bg-amber-100 text-amber-700"
@@ -475,10 +475,10 @@ function FindingsList({
 
   if (findings.length === 0) {
     return (
-      <div className="flex items-center gap-2 text-green-700 bg-green-50 border border-green-200 rounded-xl p-4 mb-6">
-        <CheckCircle className="h-5 w-5" />
-        <span className="text-sm font-medium">
-          No issues found — schedule looks good
+      <div className="flex items-center gap-2 text-green-700 bg-green-50 border border-green-200 rounded-xl p-3 sm:p-4 mb-4 sm:mb-6">
+        <CheckCircle className="h-4 w-4 sm:h-5 sm:w-5" />
+        <span className="text-xs sm:text-sm font-medium">
+          No issues — schedule looks good
         </span>
       </div>
     );
@@ -495,7 +495,7 @@ function FindingsList({
   }
 
   return (
-    <div className="space-y-3 mb-6">
+    <div className="space-y-2 sm:space-y-3 mb-4 sm:mb-6">
       {(["critical", "warning", "info"] as const).map((severity) => {
         const items = grouped[severity];
         if (items.length === 0) return null;
@@ -618,27 +618,27 @@ function DoctorBreakdownTable({
   return (
     <div>
       <button
-        className="flex items-center gap-2 text-sm font-semibold text-muted-foreground hover:text-foreground mb-3 transition-colors"
+        className="flex items-center gap-1.5 sm:gap-2 text-xs sm:text-sm font-semibold text-muted-foreground hover:text-foreground mb-2 sm:mb-3 transition-colors"
         onClick={() => setExpanded(!expanded)}
       >
         {expanded ? (
-          <ChevronDown className="h-4 w-4" />
+          <ChevronDown className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
         ) : (
-          <ChevronRight className="h-4 w-4" />
+          <ChevronRight className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
         )}
         Doctor Breakdown
-        <span className="text-xs font-normal text-muted-foreground">
-          ({perDoctor.length} doctors)
+        <span className="text-[10px] sm:text-xs font-normal text-muted-foreground">
+          ({perDoctor.length})
         </span>
       </button>
 
       {expanded && (
         <div className="overflow-x-auto rounded-lg border">
-          <table className="w-full border-collapse text-sm">
+          <table className="w-full border-collapse text-xs sm:text-sm">
             <thead>
               <tr className="bg-gray-50/80 border-b">
                 <th
-                  className="px-4 py-2.5 text-left text-xs font-semibold text-muted-foreground cursor-pointer hover:text-foreground select-none uppercase tracking-wider"
+                  className="px-2 sm:px-4 py-2 sm:py-2.5 text-left text-[10px] sm:text-xs font-semibold text-muted-foreground cursor-pointer hover:text-foreground select-none uppercase tracking-wider"
                   onClick={() => handleSort("name")}
                 >
                   <span className="inline-flex items-center">
@@ -651,7 +651,7 @@ function DoctorBreakdownTable({
                   </span>
                 </th>
                 <th
-                  className="px-3 py-2.5 text-center text-xs font-semibold text-muted-foreground cursor-pointer hover:text-foreground select-none uppercase tracking-wider"
+                  className="px-1.5 sm:px-3 py-2 sm:py-2.5 text-center text-[10px] sm:text-xs font-semibold text-muted-foreground cursor-pointer hover:text-foreground select-none uppercase tracking-wider hidden sm:table-cell"
                   onClick={() => handleSort("stars")}
                 >
                   <span className="inline-flex items-center">
@@ -664,11 +664,12 @@ function DoctorBreakdownTable({
                   </span>
                 </th>
                 <th
-                  className="px-3 py-2.5 text-center text-xs font-semibold text-muted-foreground cursor-pointer hover:text-foreground select-none uppercase tracking-wider"
+                  className="px-1.5 sm:px-3 py-2 sm:py-2.5 text-center text-[10px] sm:text-xs font-semibold text-muted-foreground cursor-pointer hover:text-foreground select-none uppercase tracking-wider"
                   onClick={() => handleSort("onsite")}
                 >
                   <span className="inline-flex items-center">
-                    Onsite
+                    <span className="sm:hidden">On</span>
+                    <span className="hidden sm:inline">Onsite</span>
                     <SortIndicator
                       field="onsite"
                       currentSort={sortBy}
@@ -677,11 +678,12 @@ function DoctorBreakdownTable({
                   </span>
                 </th>
                 <th
-                  className="px-3 py-2.5 text-center text-xs font-semibold text-muted-foreground cursor-pointer hover:text-foreground select-none uppercase tracking-wider"
+                  className="px-1.5 sm:px-3 py-2 sm:py-2.5 text-center text-[10px] sm:text-xs font-semibold text-muted-foreground cursor-pointer hover:text-foreground select-none uppercase tracking-wider"
                   onClick={() => handleSort("oncall")}
                 >
                   <span className="inline-flex items-center">
-                    Oncall
+                    <span className="sm:hidden">Oc</span>
+                    <span className="hidden sm:inline">Oncall</span>
                     <SortIndicator
                       field="oncall"
                       currentSort={sortBy}
@@ -690,11 +692,11 @@ function DoctorBreakdownTable({
                   </span>
                 </th>
                 <th
-                  className="px-3 py-2.5 text-center text-xs font-semibold text-muted-foreground cursor-pointer hover:text-foreground select-none uppercase tracking-wider"
+                  className="px-1.5 sm:px-3 py-2 sm:py-2.5 text-center text-[10px] sm:text-xs font-semibold text-muted-foreground cursor-pointer hover:text-foreground select-none uppercase tracking-wider"
                   onClick={() => handleSort("rest")}
                 >
                   <span className="inline-flex items-center">
-                    Rest Viol.
+                    Rest
                     <SortIndicator
                       field="rest"
                       currentSort={sortBy}
@@ -703,11 +705,11 @@ function DoctorBreakdownTable({
                   </span>
                 </th>
                 <th
-                  className="px-3 py-2.5 text-center text-xs font-semibold text-muted-foreground cursor-pointer hover:text-foreground select-none uppercase tracking-wider"
+                  className="px-1.5 sm:px-3 py-2 sm:py-2.5 text-center text-[10px] sm:text-xs font-semibold text-muted-foreground cursor-pointer hover:text-foreground select-none uppercase tracking-wider"
                   onClick={() => handleSort("pref")}
                 >
                   <span className="inline-flex items-center">
-                    Pref. %
+                    Pref
                     <SortIndicator
                       field="pref"
                       currentSort={sortBy}
@@ -738,21 +740,21 @@ function DoctorBreakdownTable({
                     key={doc.doctor_id}
                     className="hover:bg-gray-50/80 transition-colors"
                   >
-                    <td className="px-4 py-2.5 font-medium text-gray-800">
+                    <td className="px-2 sm:px-4 py-2 sm:py-2.5 font-medium text-gray-800 truncate max-w-[100px] sm:max-w-none">
                       {doc.display_name}
                     </td>
-                    <td className="px-3 py-2.5 text-center">
+                    <td className="px-1.5 sm:px-3 py-2 sm:py-2.5 text-center hidden sm:table-cell">
                       <StarRating stars={doc.ui_stars} />
                     </td>
-                    <td className="px-3 py-2.5 text-center tabular-nums font-medium">
+                    <td className="px-1.5 sm:px-3 py-2 sm:py-2.5 text-center tabular-nums font-medium">
                       {doc.assigned_onsite_total}
                     </td>
-                    <td className="px-3 py-2.5 text-center tabular-nums font-medium">
+                    <td className="px-1.5 sm:px-3 py-2 sm:py-2.5 text-center tabular-nums font-medium">
                       {doc.assigned_oncall_total}
                     </td>
-                    <td className="px-3 py-2.5 text-center">
+                    <td className="px-1.5 sm:px-3 py-2 sm:py-2.5 text-center">
                       <span
-                        className={`inline-flex items-center justify-center min-w-[24px] h-6 px-2 rounded-full text-xs font-bold ${
+                        className={`inline-flex items-center justify-center min-w-[20px] sm:min-w-[24px] h-5 sm:h-6 px-1 sm:px-2 rounded-full text-[10px] sm:text-xs font-bold ${
                           doc.rest_violations > 0
                             ? "bg-red-100 text-red-700"
                             : "bg-green-100 text-green-700"
@@ -761,14 +763,16 @@ function DoctorBreakdownTable({
                         {doc.rest_violations}
                       </span>
                     </td>
-                    <td className="px-3 py-2.5 text-center">
-                      <span className={`text-sm font-semibold ${prefColor}`}>
+                    <td className="px-1.5 sm:px-3 py-2 sm:py-2.5 text-center">
+                      <span className={`text-xs sm:text-sm font-semibold ${prefColor}`}>
                         {prefPct}%
                       </span>
-                      <MiniProgressBar
-                        value={prefPct}
-                        colorClass={prefBarColor}
-                      />
+                      <span className="hidden sm:inline">
+                        <MiniProgressBar
+                          value={prefPct}
+                          colorClass={prefBarColor}
+                        />
+                      </span>
                     </td>
                   </tr>
                 );
@@ -788,11 +792,11 @@ export const DiagnosticsPanel = ({ diagnostics }: DiagnosticsPanelProps) => {
   const perDoctor = diagnostics.details?.per_doctor || [];
 
   return (
-    <Card className="mb-6">
-      <CardHeader>
-        <CardTitle className="text-lg">Diagnostics</CardTitle>
+    <Card className="mb-4 sm:mb-6">
+      <CardHeader className="px-4 py-3 sm:px-6 sm:py-6">
+        <CardTitle className="text-base sm:text-lg">Diagnostics</CardTitle>
       </CardHeader>
-      <CardContent>
+      <CardContent className="px-3 sm:px-6">
         <SummaryKPIs diagnostics={diagnostics} />
         <FindingsList findings={findings} perDoctor={perDoctor} />
         <DoctorBreakdownTable perDoctor={perDoctor} />

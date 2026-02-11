@@ -109,9 +109,6 @@ export const DoctorSchedules = () => {
 
   // Get user's display name for greeting
   const getUserDisplayName = () => {
-    if (user?.first_name && user?.last_name) {
-      return `${user.first_name} ${user.last_name}`;
-    }
     if (user?.first_name) {
       return user.first_name;
     }
@@ -124,19 +121,11 @@ export const DoctorSchedules = () => {
     setMonth(newMonth);
   };
 
-  // Get title based on view mode
-  const getTitle = () => {
-    if (viewMode === "my-schedule") {
-      return `Your Schedule, ${getUserDisplayName()}!`;
-    }
-    return "Hello, Team!";
-  };
-
   if (loading) {
     return (
       <div className="min-h-screen bg-gray-50">
         <Header />
-        <main className="container mx-auto px-4 py-6">
+        <main className="mx-auto px-3 sm:px-4 py-4 sm:py-6 max-w-4xl">
           <div className="animate-pulse">
             <div className="h-8 bg-gray-200 rounded w-1/4 mb-4"></div>
             <div className="h-96 bg-gray-200 rounded"></div>
@@ -149,28 +138,29 @@ export const DoctorSchedules = () => {
   return (
     <div className="min-h-screen bg-gray-50">
       <Header />
-      <main className="container mx-auto px-4 py-6">
+      <main className="mx-auto px-3 sm:px-4 py-4 sm:py-6 max-w-4xl">
         <Card>
-          <CardContent className="p-6">
+          <CardContent className="p-3 sm:p-6">
             {/* Back Button */}
             <Button
               variant="ghost"
               size="sm"
               onClick={() => navigate("/doctor")}
-              className="mb-4 -ml-2 text-gray-600 hover:text-gray-900"
+              className="mb-3 sm:mb-4 -ml-2 text-gray-600 hover:text-gray-900 h-8"
             >
-              <ArrowLeft className="h-4 w-4 mr-2" />
+              <ArrowLeft className="h-4 w-4 mr-1.5" />
               Back
             </Button>
 
             {/* Header Row */}
-            <div className="flex items-center justify-between mb-6">
-              <div className="flex items-center gap-3">
-                <h1 className="text-2xl font-bold">{getTitle()}</h1>
-                <span className="flex items-center gap-1 text-sm text-gray-500">
-                  <Lock className="h-4 w-4" />
-                  Read-only
-                </span>
+            <div className="flex items-center justify-between mb-4 sm:mb-6">
+              <div className="flex items-center gap-2 min-w-0">
+                <h1 className="text-lg sm:text-2xl font-bold truncate">
+                  {viewMode === "my-schedule"
+                    ? `Hi, ${getUserDisplayName()}!`
+                    : "Team Schedule"}
+                </h1>
+                <Lock className="h-3.5 w-3.5 sm:h-4 sm:w-4 text-gray-400 flex-shrink-0" />
               </div>
 
               {/* View Mode Dropdown */}
@@ -180,7 +170,7 @@ export const DoctorSchedules = () => {
                   setViewMode(value as ScheduleViewMode)
                 }
               >
-                <SelectTrigger className="w-[160px] h-9">
+                <SelectTrigger className="w-[120px] sm:w-[160px] h-8 sm:h-9 text-xs sm:text-sm flex-shrink-0">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -209,7 +199,7 @@ export const DoctorSchedules = () => {
             />
 
             {/* Export Panel */}
-            <div className="mt-6 flex justify-end">
+            <div className="mt-4 sm:mt-6 flex justify-end">
               <ExportPanel />
             </div>
           </CardContent>

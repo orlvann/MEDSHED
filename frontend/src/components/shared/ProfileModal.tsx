@@ -111,23 +111,23 @@ export const ProfileModal = ({ open, onOpenChange }: ProfileModalProps) => {
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-[425px]">
-        <DialogHeader>
+      <DialogContent className="sm:max-w-[425px] p-0 gap-0">
+        <DialogHeader className="sticky top-0 bg-background z-10 px-4 sm:px-6 pt-4 sm:pt-6 pb-3 border-b">
           <DialogTitle>Profile Settings</DialogTitle>
         </DialogHeader>
 
-        <div className="space-y-6 py-4">
+        <div className="space-y-6 p-4 sm:p-6 pt-4">
           {/* Profile Section */}
           <div className="space-y-4">
             <h3 className="text-sm font-medium text-gray-900">Personal Information</h3>
-            <div className="grid gap-3">
+            <div className="grid grid-cols-2 gap-3">
               <div className="space-y-1.5">
                 <Label htmlFor="firstName">First Name</Label>
                 <Input
                   id="firstName"
                   value={firstName}
                   onChange={(e) => setFirstName(e.target.value)}
-                  placeholder="Enter first name"
+                  placeholder="First name"
                 />
               </div>
               <div className="space-y-1.5">
@@ -136,7 +136,7 @@ export const ProfileModal = ({ open, onOpenChange }: ProfileModalProps) => {
                   id="lastName"
                   value={lastName}
                   onChange={(e) => setLastName(e.target.value)}
-                  placeholder="Enter last name"
+                  placeholder="Last name"
                 />
               </div>
             </div>
@@ -146,29 +146,27 @@ export const ProfileModal = ({ open, onOpenChange }: ProfileModalProps) => {
             {profileSuccess && (
               <p className="text-sm text-green-600">Profile updated successfully!</p>
             )}
-            <Button
-              onClick={handleSaveProfile}
-              disabled={profileLoading}
-              className="w-full"
-            >
-              <Save className="h-4 w-4 mr-2" />
-              {profileLoading ? "Saving..." : "Save Profile"}
-            </Button>
-          </div>
-
-          {/* Admin Link */}
-          {canAccessAdmin && (
-            <div className="pt-2 border-t">
+            <div className="flex gap-2">
               <Button
-                variant="outline"
-                onClick={handleGoToAdmin}
-                className="w-full"
+                onClick={handleSaveProfile}
+                disabled={profileLoading}
+                className={canAccessAdmin ? "flex-1" : "w-full"}
               >
-                <Shield className="h-4 w-4 mr-2" />
-                Go to Admin Panel
+                <Save className="h-4 w-4 mr-2" />
+                {profileLoading ? "Saving..." : "Save Profile"}
               </Button>
+              {canAccessAdmin && (
+                <Button
+                  variant="outline"
+                  onClick={handleGoToAdmin}
+                  className="flex-1"
+                >
+                  <Shield className="h-4 w-4 mr-2" />
+                  Admin Panel
+                </Button>
+              )}
             </div>
-          )}
+          </div>
 
           {/* Change Password Section */}
           <div className="space-y-4 pt-2 border-t">

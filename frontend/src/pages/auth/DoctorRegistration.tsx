@@ -64,7 +64,7 @@ export const DoctorRegistration = () => {
   if (success) {
     return (
       <div className="flex items-center justify-center min-h-screen bg-gradient-to-br from-green-50 to-teal-100">
-        <Card className="w-full max-w-md">
+        <Card className="w-full max-w-md mx-4 sm:mx-auto">
           <CardHeader className="text-center">
             <div className="flex justify-center mb-4">
               <CheckCircle className="h-16 w-16 text-green-600" />
@@ -109,7 +109,7 @@ export const DoctorRegistration = () => {
 
   return (
     <div className="flex items-center justify-center min-h-screen bg-gradient-to-br from-green-50 to-teal-100">
-      <Card className="w-full max-w-md">
+      <Card className="w-full max-w-md mx-4 sm:mx-auto">
         <CardHeader className="space-y-1">
           <CardTitle className="text-2xl font-bold text-center">
             Doctor Registration

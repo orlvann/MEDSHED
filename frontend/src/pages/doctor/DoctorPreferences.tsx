@@ -351,18 +351,19 @@ export const DoctorPreferences = () => {
   return (
     <div className="min-h-screen bg-gray-50">
       <Header />
-      <main className="container mx-auto px-4 py-8">
+      <main className="container mx-auto px-3 py-4 sm:px-4 sm:py-8">
         {/* Header */}
-        <div className="mb-6 flex items-center space-x-4">
+        <div className="mb-6 flex items-center space-x-3 sm:space-x-4">
           <Button
             variant="outline"
             size="sm"
             onClick={() => navigate("/doctor")}
+            title="Back"
           >
-            <ArrowLeft className="h-4 w-4 mr-2" />
-            Back
+            <ArrowLeft className="h-4 w-4 sm:mr-2" />
+            <span className="hidden sm:inline">Back</span>
           </Button>
-          <h2 className="text-3xl font-bold">My Preferences</h2>
+          <h2 className="text-2xl sm:text-3xl font-bold">My Preferences</h2>
         </div>
 
         {/* Month Picker */}
@@ -372,7 +373,7 @@ export const DoctorPreferences = () => {
               <Button variant="outline" size="sm" onClick={goToPrevMonth}>
                 <ChevronLeft className="h-4 w-4" />
               </Button>
-              <span className="text-xl font-semibold min-w-[200px] text-center">
+              <span className="text-lg sm:text-xl font-semibold min-w-[150px] sm:min-w-[200px] text-center">
                 {MONTH_NAMES[month - 1]} {year}
               </span>
               <Button variant="outline" size="sm" onClick={goToNextMonth}>
@@ -390,14 +391,14 @@ export const DoctorPreferences = () => {
             }`}
           >
             <CardContent className="py-4">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center space-x-3">
+              <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 sm:gap-0">
+                <div className="flex items-start sm:items-center gap-2 sm:space-x-3">
                   <Clock
-                    className={`h-5 w-5 ${
+                    className={`h-5 w-5 flex-shrink-0 mt-0.5 sm:mt-0 ${
                       isPast ? "text-red-600" : "text-blue-600"
                     }`}
                   />
-                  <div>
+                  <div className="min-w-0">
                     <span
                       className={`font-semibold ${
                         isPast ? "text-red-700" : "text-blue-700"
@@ -406,10 +407,10 @@ export const DoctorPreferences = () => {
                       Status: {deadline.status === "locked" ? "Locked" : "Open"}
                     </span>
                     {deadline.deadline && (
-                      <span className="ml-4 text-gray-600">
+                      <span className="block sm:inline sm:ml-4 text-sm text-gray-600">
                         Deadline: {formatDate(deadline.deadline)}
                         {timeRemaining && !timeRemaining.isPast && (
-                          <span className="ml-2 text-sm">
+                          <span className="sm:ml-2 block sm:inline text-sm">
                             ({timeRemaining.days} day
                             {timeRemaining.days !== 1 ? "s" : ""} remaining)
                           </span>
@@ -417,7 +418,7 @@ export const DoctorPreferences = () => {
                       </span>
                     )}
                     {!deadline.deadline && (
-                      <span className="ml-4 text-gray-500 italic">
+                      <span className="block sm:inline sm:ml-4 text-gray-500 italic text-sm">
                         No deadline set
                       </span>
                     )}
@@ -425,7 +426,7 @@ export const DoctorPreferences = () => {
                 </div>
                 {preferenceData && (
                   <div
-                    className={`px-3 py-1 rounded-full text-sm font-medium ${
+                    className={`self-start sm:self-auto px-3 py-1 rounded-full text-sm font-medium flex-shrink-0 ${
                       preferenceData.status === "submitted"
                         ? "bg-green-100 text-green-700"
                         : "bg-yellow-100 text-yellow-700"

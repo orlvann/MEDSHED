@@ -69,9 +69,9 @@ export const PublishModal = ({
         </DialogHeader>
 
         {summary && (
-          <div className="space-y-3">
-            <div className="grid grid-cols-2 gap-2 text-sm">
-              <div className="flex justify-between bg-gray-50 rounded p-2">
+          <div className="space-y-2 sm:space-y-3">
+            <div className="grid grid-cols-2 gap-1.5 sm:gap-2 text-xs sm:text-sm">
+              <div className="flex justify-between bg-gray-50 rounded p-1.5 sm:p-2">
                 <span className="text-muted-foreground">Coverage Gaps</span>
                 <span
                   className={
@@ -83,7 +83,7 @@ export const PublishModal = ({
                   {summary.coverage_missing_required_slots}
                 </span>
               </div>
-              <div className="flex justify-between bg-gray-50 rounded p-2">
+              <div className="flex justify-between bg-gray-50 rounded p-1.5 sm:p-2">
                 <span className="text-muted-foreground">Hard Issues</span>
                 <span
                   className={
@@ -95,7 +95,7 @@ export const PublishModal = ({
                   {summary.hard_issues_count}
                 </span>
               </div>
-              <div className="flex justify-between bg-gray-50 rounded p-2">
+              <div className="flex justify-between bg-gray-50 rounded p-1.5 sm:p-2">
                 <span className="text-muted-foreground">Rest Violations</span>
                 <span
                   className={
@@ -107,16 +107,16 @@ export const PublishModal = ({
                   {summary.rest_violations}
                 </span>
               </div>
-              <div className="flex justify-between bg-gray-50 rounded p-2">
+              <div className="flex justify-between bg-gray-50 rounded p-1.5 sm:p-2">
                 <span className="text-muted-foreground">Pref. Fulfillment</span>
                 <span>{Math.round(summary.preference_fulfillment_pct)}%</span>
               </div>
             </div>
 
             {hasHardIssues && (
-              <div className="flex items-start gap-2 bg-red-50 border border-red-200 rounded-lg p-3">
-                <AlertTriangle className="h-4 w-4 mt-0.5 text-red-600 flex-shrink-0" />
-                <div className="text-sm text-red-800">
+              <div className="flex items-start gap-2 bg-red-50 border border-red-200 rounded-lg p-2.5 sm:p-3">
+                <AlertTriangle className="h-3.5 w-3.5 sm:h-4 sm:w-4 mt-0.5 text-red-600 flex-shrink-0" />
+                <div className="text-xs sm:text-sm text-red-800">
                   <strong>Hard issues detected.</strong> Publishing will require
                   force mode. All critical findings will be accepted as
                   exceptions.
@@ -127,12 +127,12 @@ export const PublishModal = ({
         )}
 
         <div>
-          <label className="text-sm font-medium" htmlFor="publish-note">
+          <label className="text-xs sm:text-sm font-medium" htmlFor="publish-note">
             Note (optional)
           </label>
           <textarea
             id="publish-note"
-            className="mt-1 w-full rounded-md border border-input bg-background px-3 py-2 text-sm resize-none"
+            className="mt-1 w-full rounded-md border border-input bg-background px-2.5 py-1.5 sm:px-3 sm:py-2 text-xs sm:text-sm resize-none"
             rows={2}
             placeholder="Add a note about this publication..."
             value={note}
@@ -141,15 +141,16 @@ export const PublishModal = ({
         </div>
 
         <DialogFooter>
-          <Button variant="outline" onClick={onClose} disabled={publishing}>
+          <Button variant="outline" onClick={onClose} disabled={publishing} className="h-8 text-xs sm:h-9 sm:text-sm">
             Cancel
           </Button>
           <Button
             onClick={handlePublish}
             disabled={publishing}
             variant={hasHardIssues ? "destructive" : "default"}
+            className="h-8 text-xs sm:h-9 sm:text-sm"
           >
-            <Send className="h-4 w-4 mr-2" />
+            <Send className="h-3.5 w-3.5 sm:h-4 sm:w-4 mr-1.5 sm:mr-2" />
             {publishing
               ? "Publishing..."
               : hasHardIssues

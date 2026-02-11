@@ -1,6 +1,5 @@
 import { useState, useRef, useEffect } from "react";
 import { ChevronDown, X, Check } from "lucide-react";
-import { Card, CardContent } from "../ui/card";
 import { InfoTooltip } from "./InfoTooltip";
 import type { Doctor } from "../../types";
 
@@ -34,12 +33,17 @@ export const ColleagueSelector = ({
           .includes(searchQuery.toLowerCase()))
   );
 
-  const selectedColleagues = colleagues.filter((c) => selectedIds.includes(c.id));
+  const selectedColleagues = colleagues.filter((c) =>
+    selectedIds.includes(c.id)
+  );
 
   // Close dropdown when clicking outside
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
-      if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
+      if (
+        dropdownRef.current &&
+        !dropdownRef.current.contains(event.target as Node)
+      ) {
         setIsOpen(false);
         setSearchQuery("");
       }
@@ -70,97 +74,99 @@ export const ColleagueSelector = ({
   };
 
   return (
-    <Card>
-      <CardContent className="pt-4">
-        <div className="space-y-3">
-          <div className="flex items-center gap-2">
-            <h3 className="text-base font-semibold">Preferred colleagues on the same days</h3>
-            <InfoTooltip
-              content="Please select people you would like to work with"
+    <div className="rounded-lg border border-gray-200 p-3 sm:p-4 space-y-2 sm:space-y-3 bg-white">
+      <div className="flex items-center gap-2">
+        <h3 className="text-sm sm:text-base font-semibold">
+          Preferred colleagues
+        </h3>
+        <InfoTooltip content="Please select people you would like to work with" />
+      </div>
+
+      <div ref={dropdownRef} className="relative">
+        {/* Dropdown trigger / selected items display */}
+        <div
+          onClick={handleInputClick}
+          className={`min-h-[36px] sm:min-h-[42px] w-full rounded-md border border-input bg-background px-2.5 sm:px-3 py-1.5 sm:py-2 text-sm ring-offset-background focus-within:ring-2 focus-within:ring-ring focus-within:ring-offset-2 ${
+            disabled ? "cursor-not-allowed opacity-50" : "cursor-pointer"
+          }`}
+        >
+          <div className="flex flex-wrap gap-1 sm:gap-1.5 items-center">
+            {/* Selected colleague tags */}
+            {selectedColleagues.map((colleague) => (
+              <span
+                key={colleague.id}
+                className="inline-flex items-center gap-1 px-1.5 sm:px-2 py-0.5 rounded-md bg-primary/10 text-primary text-xs sm:text-sm"
+              >
+                {colleague.first_name} {colleague.last_name}
+                {!disabled && (
+                  <button
+                    type="button"
+                    onClick={(e) => removeColleague(colleague.id, e)}
+                    className="hover:bg-primary/20 rounded-full p-0.5"
+                  >
+                    <X className="h-3 w-3" />
+                  </button>
+                )}
+              </span>
+            ))}
+
+            {/* Search input */}
+            {!disabled && (
+              <input
+                ref={inputRef}
+                type="text"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                onFocus={() => setIsOpen(true)}
+                placeholder={
+                  selectedIds.length === 0 ? "Select colleagues..." : ""
+                }
+                className="flex-1 min-w-[100px] bg-transparent outline-none placeholder:text-muted-foreground text-sm"
+              />
+            )}
+
+            {/* Dropdown arrow */}
+            <ChevronDown
+              className={`h-4 w-4 ml-auto text-muted-foreground transition-transform flex-shrink-0 ${
+                isOpen ? "rotate-180" : ""
+              }`}
             />
           </div>
+        </div>
 
-          <div ref={dropdownRef} className="relative">
-            {/* Dropdown trigger / selected items display */}
-            <div
-              onClick={handleInputClick}
-              className={`min-h-[42px] w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-within:ring-2 focus-within:ring-ring focus-within:ring-offset-2 ${
-                disabled ? "cursor-not-allowed opacity-50" : "cursor-pointer"
-              }`}
-            >
-              <div className="flex flex-wrap gap-1.5 items-center">
-                {/* Selected colleague tags */}
-                {selectedColleagues.map((colleague) => (
-                  <span
+        {/* Dropdown menu */}
+        {isOpen && !disabled && (
+          <div className="absolute z-50 w-full mt-1 rounded-md border border-input bg-background shadow-lg max-h-48 sm:max-h-60 overflow-auto">
+            {availableColleagues.length === 0 ? (
+              <div className="px-3 py-2 text-sm text-muted-foreground">
+                {searchQuery
+                  ? "No colleagues found"
+                  : "No colleagues available"}
+              </div>
+            ) : (
+              availableColleagues.map((colleague) => {
+                const isSelected = selectedIds.includes(colleague.id);
+                return (
+                  <div
                     key={colleague.id}
-                    className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-primary/10 text-primary text-sm"
+                    onClick={() => toggleColleague(colleague.id)}
+                    className={`flex items-center justify-between px-3 py-2 text-sm cursor-pointer hover:bg-muted ${
+                      isSelected ? "bg-primary/5" : ""
+                    }`}
                   >
-                    {colleague.first_name} {colleague.last_name}
-                    {!disabled && (
-                      <button
-                        type="button"
-                        onClick={(e) => removeColleague(colleague.id, e)}
-                        className="hover:bg-primary/20 rounded-full p-0.5"
-                      >
-                        <X className="h-3 w-3" />
-                      </button>
+                    <span>
+                      {colleague.first_name} {colleague.last_name}
+                    </span>
+                    {isSelected && (
+                      <Check className="h-4 w-4 text-primary" />
                     )}
-                  </span>
-                ))}
-
-                {/* Search input */}
-                {!disabled && (
-                  <input
-                    ref={inputRef}
-                    type="text"
-                    value={searchQuery}
-                    onChange={(e) => setSearchQuery(e.target.value)}
-                    onFocus={() => setIsOpen(true)}
-                    placeholder={selectedIds.length === 0 ? "Select colleagues..." : ""}
-                    className="flex-1 min-w-[120px] bg-transparent outline-none placeholder:text-muted-foreground"
-                  />
-                )}
-
-                {/* Dropdown arrow */}
-                <ChevronDown
-                  className={`h-4 w-4 ml-auto text-muted-foreground transition-transform ${
-                    isOpen ? "rotate-180" : ""
-                  }`}
-                />
-              </div>
-            </div>
-
-            {/* Dropdown menu */}
-            {isOpen && !disabled && (
-              <div className="absolute z-50 w-full mt-1 rounded-md border border-input bg-background shadow-lg max-h-60 overflow-auto">
-                {availableColleagues.length === 0 ? (
-                  <div className="px-3 py-2 text-sm text-muted-foreground">
-                    {searchQuery ? "No colleagues found" : "No colleagues available"}
                   </div>
-                ) : (
-                  availableColleagues.map((colleague) => {
-                    const isSelected = selectedIds.includes(colleague.id);
-                    return (
-                      <div
-                        key={colleague.id}
-                        onClick={() => toggleColleague(colleague.id)}
-                        className={`flex items-center justify-between px-3 py-2 text-sm cursor-pointer hover:bg-muted ${
-                          isSelected ? "bg-primary/5" : ""
-                        }`}
-                      >
-                        <span>
-                          {colleague.first_name} {colleague.last_name}
-                        </span>
-                        {isSelected && <Check className="h-4 w-4 text-primary" />}
-                      </div>
-                    );
-                  })
-                )}
-              </div>
+                );
+              })
             )}
           </div>
-        </div>
-      </CardContent>
-    </Card>
+        )}
+      </div>
+    </div>
   );
 };

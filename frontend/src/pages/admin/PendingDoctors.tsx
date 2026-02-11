@@ -22,6 +22,21 @@ import {
 } from "../../components/ui/alert-dialog";
 import axios from "axios";
 import { ArrowLeft, CheckCircle, XCircle, AlertTriangle } from "lucide-react";
+import { useIsMobile } from "../../hooks/useMediaQuery";
+import {
+  Sheet,
+  SheetContent,
+  SheetHeader,
+  SheetTitle,
+  SheetDescription,
+} from "../../components/ui/sheet";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+} from "../../components/ui/dialog";
 
 const API_BASE_URL =
   import.meta.env.VITE_API_BASE_URL || "http://127.0.0.1:8000";
@@ -36,6 +51,7 @@ interface PendingDoctor {
 
 export const PendingDoctors = () => {
   const navigate = useNavigate();
+  const isMobile = useIsMobile();
   const [pendingDoctors, setPendingDoctors] = useState<PendingDoctor[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -169,25 +185,26 @@ export const PendingDoctors = () => {
   return (
     <div className="min-h-screen bg-gray-50">
       <AdminHeader />
-      <main className="container mx-auto px-4 py-8">
-        <div className="mb-6 flex items-center justify-between">
-          <div className="flex items-center space-x-4">
+      <main className="container mx-auto px-3 sm:px-4 py-4 sm:py-8">
+        <div className="mb-4 sm:mb-6 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex items-center space-x-3 sm:space-x-4">
             <Button
               variant="outline"
               size="sm"
               onClick={() => navigate("/admin/doctors")}
+              title="Back"
             >
-              <ArrowLeft className="h-4 w-4 mr-2" />
-              Back
+              <ArrowLeft className="h-4 w-4 sm:mr-2" />
+              <span className="hidden sm:inline">Back</span>
             </Button>
-            <h2 className="text-3xl font-bold">Pending Doctor Registrations</h2>
+            <h2 className="text-xl sm:text-3xl font-bold">Pending Registrations</h2>
           </div>
         </div>
 
         <Card>
-          <CardHeader>
-            <CardTitle>Pending Approvals ({pendingDoctors.length})</CardTitle>
-            <CardDescription>
+          <CardHeader className="px-4 py-3 sm:px-6 sm:py-6">
+            <CardTitle className="text-base sm:text-xl">Pending Approvals ({pendingDoctors.length})</CardTitle>
+            <CardDescription className="text-xs sm:text-sm">
               Review and approve or reject doctor registration requests
             </CardDescription>
           </CardHeader>
@@ -200,169 +217,199 @@ export const PendingDoctors = () => {
               <div className="text-center py-8 text-muted-foreground">
                 No pending registrations
               </div>
-            ) : (
-              <div className="overflow-x-auto">
-                <table className="w-full">
-                  <thead>
-                    <tr className="border-b">
-                      <th className="text-left py-3 px-4">First Name</th>
-                      <th className="text-left py-3 px-4">Last Name</th>
-                      <th className="text-left py-3 px-4">Email</th>
-                      <th className="text-left py-3 px-4">Date Submitted</th>
-                      <th className="text-right py-3 px-4">Actions</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {pendingDoctors.map((doctor) => (
-                      <tr
-                        key={doctor.id}
-                        className="border-b hover:bg-muted/50"
-                      >
-                        <td className="py-3 px-4">{doctor.first_name}</td>
-                        <td className="py-3 px-4">{doctor.last_name}</td>
-                        <td className="py-3 px-4 text-sm">{doctor.email}</td>
-                        <td className="py-3 px-4 text-sm text-muted-foreground">
-                          {new Date(doctor.created_at).toLocaleDateString()}
-                        </td>
-                        <td className="py-3 px-4 text-right">
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => openApprovalModal(doctor)}
-                            className="text-green-600 hover:text-green-700 hover:bg-green-50"
-                          >
-                            <CheckCircle className="h-4 w-4 mr-1" />
-                            Approve
-                          </Button>
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => openRejectDialog(doctor)}
-                            className="text-red-600 hover:text-red-700 hover:bg-red-50"
-                          >
-                            <XCircle className="h-4 w-4 mr-1" />
-                            Reject
-                          </Button>
-                        </td>
+            ) : isMobile ? (
+                /* Mobile card view */
+                <div className="space-y-2">
+                  {pendingDoctors.map((doctor) => (
+                    <div key={doctor.id} className="border rounded-lg p-2.5">
+                      <div className="flex items-start justify-between mb-1.5">
+                        <div className="min-w-0 flex-1">
+                          <p className="text-sm font-medium truncate">
+                            {doctor.first_name} {doctor.last_name}
+                          </p>
+                          <p className="text-xs text-muted-foreground truncate">{doctor.email}</p>
+                          <p className="text-[11px] text-muted-foreground mt-0.5">
+                            {new Date(doctor.created_at).toLocaleDateString()}
+                          </p>
+                        </div>
+                      </div>
+                      <div className="flex gap-2 mt-1.5">
+                        <Button
+                          size="sm"
+                          onClick={() => openApprovalModal(doctor)}
+                          className="flex-1 h-8 text-xs bg-green-600 hover:bg-green-700 text-white"
+                        >
+                          <CheckCircle className="h-3.5 w-3.5 mr-1" />
+                          Approve
+                        </Button>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => openRejectDialog(doctor)}
+                          className="flex-1 h-8 text-xs text-red-600 hover:text-red-700 hover:bg-red-50"
+                        >
+                          <XCircle className="h-3.5 w-3.5 mr-1" />
+                          Reject
+                        </Button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                /* Desktop table view */
+                <div className="overflow-x-auto">
+                  <table className="w-full">
+                    <thead>
+                      <tr className="border-b">
+                        <th className="text-left py-3 px-4">First Name</th>
+                        <th className="text-left py-3 px-4">Last Name</th>
+                        <th className="text-left py-3 px-4">Email</th>
+                        <th className="text-left py-3 px-4">Date Submitted</th>
+                        <th className="text-right py-3 px-4">Actions</th>
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
+                    </thead>
+                    <tbody>
+                      {pendingDoctors.map((doctor) => (
+                        <tr
+                          key={doctor.id}
+                          className="border-b hover:bg-muted/50"
+                        >
+                          <td className="py-3 px-4">{doctor.first_name}</td>
+                          <td className="py-3 px-4">{doctor.last_name}</td>
+                          <td className="py-3 px-4 text-sm">{doctor.email}</td>
+                          <td className="py-3 px-4 text-sm text-muted-foreground">
+                            {new Date(doctor.created_at).toLocaleDateString()}
+                          </td>
+                          <td className="py-3 px-4 text-right">
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => openApprovalModal(doctor)}
+                              className="text-green-600 hover:text-green-700 hover:bg-green-50"
+                            >
+                              <CheckCircle className="h-4 w-4 mr-1" />
+                              Approve
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => openRejectDialog(doctor)}
+                              className="text-red-600 hover:text-red-700 hover:bg-red-50"
+                            >
+                              <XCircle className="h-4 w-4 mr-1" />
+                              Reject
+                            </Button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )
+            }
           </CardContent>
         </Card>
 
-        {/* Approval Modal */}
-        {isApprovalModalOpen && selectedDoctor && (
-          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-            <Card className="w-full max-w-md">
-              <CardHeader>
-                <CardTitle>Approve Registration</CardTitle>
-                <CardDescription>
-                  Set role and permissions for {selectedDoctor.first_name}{" "}
-                  {selectedDoctor.last_name}
-                </CardDescription>
-              </CardHeader>
-              <CardContent>
-                <form className="space-y-4">
+        {/* Approval Modal — Sheet on mobile, Dialog on desktop */}
+        {isMobile ? (
+          <Sheet open={isApprovalModalOpen && !!selectedDoctor} onOpenChange={(open) => {
+            if (!open) { setIsApprovalModalOpen(false); setSelectedDoctor(null); }
+          }}>
+            <SheetContent side="bottom" className="rounded-t-xl max-h-[85vh] overflow-y-auto px-4 pb-6">
+              <SheetHeader className="mb-3">
+                <SheetTitle>Approve Registration</SheetTitle>
+                <SheetDescription>
+                  {selectedDoctor && `Set role for ${selectedDoctor.first_name} ${selectedDoctor.last_name}`}
+                </SheetDescription>
+              </SheetHeader>
+              <div className="space-y-3">
+                <div className="grid grid-cols-2 gap-3">
                   <div>
-                    <Label htmlFor="role">Doctor Role *</Label>
-                    <select
-                      id="role"
-                      value={approvalData.role}
-                      onChange={(e) =>
-                        setApprovalData({
-                          ...approvalData,
-                          role: e.target.value as any,
-                        })
-                      }
-                      className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
-                    >
+                    <Label htmlFor="m-a-role" className="text-xs">Doctor Role *</Label>
+                    <select id="m-a-role" value={approvalData.role} onChange={(e) => setApprovalData({ ...approvalData, role: e.target.value as any })} className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1.5 text-sm">
                       <option value="resident">Resident</option>
                       <option value="specialist">Specialist</option>
                     </select>
                   </div>
-
                   <div>
-                    <Label htmlFor="user_role">User Role *</Label>
-                    <select
-                      id="user_role"
-                      value={approvalData.user_role}
-                      onChange={(e) =>
-                        setApprovalData({
-                          ...approvalData,
-                          user_role: e.target.value as any,
-                        })
-                      }
-                      className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
-                    >
+                    <Label htmlFor="m-a-user_role" className="text-xs">User Role *</Label>
+                    <select id="m-a-user_role" value={approvalData.user_role} onChange={(e) => setApprovalData({ ...approvalData, user_role: e.target.value as any })} className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1.5 text-sm">
                       <option value="doctor">Doctor</option>
                       <option value="doctor_admin">Doctor Admin</option>
                     </select>
-                    <p className="text-xs text-muted-foreground mt-1">
-                      Doctor: view only. Doctor Admin: can manage preferences.
-                    </p>
                   </div>
-
-                  <div className="space-y-2">
-                    <div className="flex items-center space-x-2">
-                      <input
-                        type="checkbox"
-                        id="is_active"
-                        checked={approvalData.is_active}
-                        onChange={(e) =>
-                          setApprovalData({
-                            ...approvalData,
-                            is_active: e.target.checked,
-                          })
-                        }
-                        className="h-4 w-4"
-                      />
-                      <Label htmlFor="is_active">Active in Scheduling</Label>
-                    </div>
-
-                    <div className="flex items-center space-x-2">
-                      <input
-                        type="checkbox"
-                        id="is_head"
-                        checked={approvalData.is_head}
-                        onChange={(e) =>
-                          setApprovalData({
-                            ...approvalData,
-                            is_head: e.target.checked,
-                          })
-                        }
-                        className="h-4 w-4"
-                      />
-                      <Label htmlFor="is_head">Head of Department</Label>
-                    </div>
+                </div>
+                <div className="space-y-2 border-t pt-2.5">
+                  <label className="flex items-center gap-2">
+                    <input type="checkbox" checked={approvalData.is_active} onChange={(e) => setApprovalData({ ...approvalData, is_active: e.target.checked })} className="h-4 w-4 rounded" />
+                    <span className="text-sm">Active in Scheduling</span>
+                  </label>
+                  <label className="flex items-center gap-2">
+                    <input type="checkbox" checked={approvalData.is_head} onChange={(e) => setApprovalData({ ...approvalData, is_head: e.target.checked })} className="h-4 w-4 rounded" />
+                    <span className="text-sm">Head of Department</span>
+                  </label>
+                </div>
+                <div className="flex gap-2 pt-3">
+                  <Button type="button" size="sm" onClick={handleApprove} className="flex-1 bg-green-600 hover:bg-green-700">
+                    Approve & Send Email
+                  </Button>
+                  <Button type="button" variant="outline" size="sm" className="flex-1" onClick={() => { setIsApprovalModalOpen(false); setSelectedDoctor(null); }}>
+                    Cancel
+                  </Button>
+                </div>
+              </div>
+            </SheetContent>
+          </Sheet>
+        ) : (
+          <Dialog open={isApprovalModalOpen && !!selectedDoctor} onOpenChange={(open) => {
+            if (!open) { setIsApprovalModalOpen(false); setSelectedDoctor(null); }
+          }}>
+            <DialogContent className="sm:max-w-md">
+              <DialogHeader>
+                <DialogTitle>Approve Registration</DialogTitle>
+                <DialogDescription>
+                  {selectedDoctor && `Set role and permissions for ${selectedDoctor.first_name} ${selectedDoctor.last_name}`}
+                </DialogDescription>
+              </DialogHeader>
+              <form className="space-y-4">
+                <div>
+                  <Label htmlFor="role">Doctor Role *</Label>
+                  <select id="role" value={approvalData.role} onChange={(e) => setApprovalData({ ...approvalData, role: e.target.value as any })} className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm">
+                    <option value="resident">Resident</option>
+                    <option value="specialist">Specialist</option>
+                  </select>
+                </div>
+                <div>
+                  <Label htmlFor="user_role">User Role *</Label>
+                  <select id="user_role" value={approvalData.user_role} onChange={(e) => setApprovalData({ ...approvalData, user_role: e.target.value as any })} className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm">
+                    <option value="doctor">Doctor</option>
+                    <option value="doctor_admin">Doctor Admin</option>
+                  </select>
+                  <p className="text-xs text-muted-foreground mt-1">
+                    Doctor: view only. Doctor Admin: can manage preferences.
+                  </p>
+                </div>
+                <div className="space-y-2">
+                  <div className="flex items-center space-x-2">
+                    <input type="checkbox" id="is_active" checked={approvalData.is_active} onChange={(e) => setApprovalData({ ...approvalData, is_active: e.target.checked })} className="h-4 w-4" />
+                    <Label htmlFor="is_active">Active in Scheduling</Label>
                   </div>
-
-                  <div className="flex space-x-2 pt-4">
-                    <Button
-                      type="button"
-                      onClick={handleApprove}
-                      className="flex-1 bg-green-600 hover:bg-green-700"
-                    >
-                      Approve & Send Email
-                    </Button>
-                    <Button
-                      type="button"
-                      variant="outline"
-                      className="flex-1"
-                      onClick={() => {
-                        setIsApprovalModalOpen(false);
-                        setSelectedDoctor(null);
-                      }}
-                    >
-                      Cancel
-                    </Button>
+                  <div className="flex items-center space-x-2">
+                    <input type="checkbox" id="is_head" checked={approvalData.is_head} onChange={(e) => setApprovalData({ ...approvalData, is_head: e.target.checked })} className="h-4 w-4" />
+                    <Label htmlFor="is_head">Head of Department</Label>
                   </div>
-                </form>
-              </CardContent>
-            </Card>
-          </div>
+                </div>
+                <div className="flex space-x-2 pt-4">
+                  <Button type="button" onClick={handleApprove} className="flex-1 bg-green-600 hover:bg-green-700">
+                    Approve & Send Email
+                  </Button>
+                  <Button type="button" variant="outline" className="flex-1" onClick={() => { setIsApprovalModalOpen(false); setSelectedDoctor(null); }}>
+                    Cancel
+                  </Button>
+                </div>
+              </form>
+            </DialogContent>
+          </Dialog>
         )}
 
         {/* Reject Dialog */}

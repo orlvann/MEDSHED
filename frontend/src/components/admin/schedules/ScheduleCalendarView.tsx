@@ -1,6 +1,8 @@
 import { useState, useCallback } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "../../ui/card";
 import { DoctorSelectDropdown } from "./DoctorSelectDropdown";
+import { DayEditSheet } from "./DayEditSheet";
+import { useIsMobile } from "../../../hooks/useMediaQuery";
 import type {
   Assignment,
   InputsSnapshotRead,
@@ -114,10 +116,12 @@ export const ScheduleCalendarView = ({
   readOnly,
   onAssignmentChange,
 }: ScheduleCalendarViewProps) => {
+  const isMobile = useIsMobile();
   const [editingCell, setEditingCell] = useState<{
     day: number;
     shiftType: ShiftType;
   } | null>(null);
+  const [sheetDay, setSheetDay] = useState<number | null>(null);
 
   const daysInMonth = getDaysInMonth(year, month);
   const doctors = inputsSnapshot?.doctors || {};
@@ -138,7 +142,11 @@ export const ScheduleCalendarView = ({
 
   const handleChipClick = (day: number, shiftType: ShiftType) => {
     if (readOnly) return;
-    setEditingCell({ day, shiftType });
+    if (isMobile) {
+      setSheetDay(day);
+    } else {
+      setEditingCell({ day, shiftType });
+    }
   };
 
   const handleSelect = (
@@ -174,24 +182,25 @@ export const ScheduleCalendarView = ({
   }
 
   return (
-    <Card className="mb-6">
-      <CardHeader className="pb-3">
-        <CardTitle className="text-lg">Schedule</CardTitle>
+    <Card className="mb-4 sm:mb-6">
+      <CardHeader className="px-3 py-3 sm:px-6 sm:pb-3">
+        <CardTitle className="text-base sm:text-lg">Schedule</CardTitle>
       </CardHeader>
-      <CardContent>
-        <div className="border rounded-xl bg-white">
+      <CardContent className="px-2 sm:px-6 pb-4 sm:pb-6">
+        <div className="border rounded-xl bg-white overflow-hidden">
           {/* Weekday headers */}
           <div className="grid grid-cols-7 border-b">
             {WEEKDAY_LABELS.map((label, idx) => (
               <div
                 key={label}
-                className={`py-2.5 text-center text-xs font-semibold uppercase tracking-wider ${
+                className={`py-1.5 sm:py-2.5 text-center text-[10px] sm:text-xs font-semibold uppercase tracking-wider ${
                   idx >= 5
                     ? "bg-amber-50/60 text-amber-700"
                     : "bg-gray-50 text-gray-500"
                 }`}
               >
-                {label}
+                <span className="sm:hidden">{label.charAt(0)}</span>
+                <span className="hidden sm:inline">{label}</span>
               </div>
             ))}
           </div>
@@ -207,7 +216,7 @@ export const ScheduleCalendarView = ({
                   return (
                     <div
                       key={`empty-${weekIdx}-${dayIdx}`}
-                      className={`min-h-[110px] border-r last:border-r-0 ${
+                      className={`min-h-[70px] sm:min-h-[110px] border-r last:border-r-0 ${
                         dayIdx >= 5 ? "bg-amber-50/30" : "bg-gray-50/50"
                       }`}
                     />
@@ -224,14 +233,14 @@ export const ScheduleCalendarView = ({
                 return (
                   <div
                     key={day}
-                    className={`min-h-[110px] border-r last:border-r-0 p-1.5 relative transition-colors ${
+                    className={`min-h-[70px] sm:min-h-[110px] border-r last:border-r-0 p-0.5 sm:p-1.5 relative transition-colors overflow-hidden ${
                       isWeekend ? "bg-amber-50/30" : "bg-white"
-                    } ${today ? "ring-2 ring-inset ring-blue-400 bg-blue-50/30" : ""}`}
+                    }`}
                   >
                     {/* Day number */}
-                    <div className="flex items-center justify-between mb-1.5">
+                    <div className="flex items-center justify-between mb-0.5 sm:mb-1.5">
                       <span
-                        className={`inline-flex items-center justify-center w-6 h-6 rounded-full text-xs font-bold ${
+                        className={`inline-flex items-center justify-center w-5 h-5 sm:w-6 sm:h-6 rounded-full text-[10px] sm:text-xs font-bold ${
                           today
                             ? "bg-blue-600 text-white"
                             : isWeekend
@@ -244,7 +253,7 @@ export const ScheduleCalendarView = ({
                     </div>
 
                     {/* Assignment chips */}
-                    <div className="space-y-0.5">
+                    <div className="space-y-0 sm:space-y-0.5">
                       <div className="relative">
                         <AssignmentChip
                           shiftType="onsite"
@@ -252,7 +261,8 @@ export const ScheduleCalendarView = ({
                           isEditable={!readOnly}
                           onClick={() => handleChipClick(day, "onsite")}
                         />
-                        {editingCell?.day === day &&
+                        {!isMobile &&
+                          editingCell?.day === day &&
                           editingCell?.shiftType === "onsite" &&
                           inputsSnapshot && (
                             <DoctorSelectDropdown
@@ -273,7 +283,8 @@ export const ScheduleCalendarView = ({
                           isEditable={!readOnly}
                           onClick={() => handleChipClick(day, "oncall")}
                         />
-                        {editingCell?.day === day &&
+                        {!isMobile &&
+                          editingCell?.day === day &&
                           editingCell?.shiftType === "oncall" &&
                           inputsSnapshot && (
                             <DoctorSelectDropdown
@@ -296,24 +307,40 @@ export const ScheduleCalendarView = ({
         </div>
 
         {/* Legend */}
-        <div className="flex items-center gap-4 mt-3 text-xs text-gray-500">
-          <div className="flex items-center gap-1.5">
+        <div className="flex items-center gap-3 sm:gap-4 mt-2 sm:mt-3 text-[10px] sm:text-xs text-gray-500 px-1 sm:px-0">
+          <div className="flex items-center gap-1">
             <span className="inline-block w-1.5 h-1.5 rounded-full bg-teal-500" />
             <span>Onsite</span>
           </div>
-          <div className="flex items-center gap-1.5">
+          <div className="flex items-center gap-1">
             <span className="inline-block w-1.5 h-1.5 rounded-full bg-amber-500" />
             <span>Oncall</span>
           </div>
-          <div className="flex items-center gap-1.5">
-            <span className="inline-block w-3 h-3 rounded bg-amber-50 border border-amber-200" />
+          <div className="flex items-center gap-1">
+            <span className="inline-block w-2.5 h-2.5 sm:w-3 sm:h-3 rounded bg-amber-50 border border-amber-200" />
             <span>Weekend</span>
           </div>
-          <div className="flex items-center gap-1.5">
-            <span className="inline-block w-3 h-3 rounded bg-blue-50 border-2 border-blue-400" />
+          <div className="flex items-center gap-1">
+            <span className="inline-block w-2.5 h-2.5 sm:w-3 sm:h-3 rounded-full bg-blue-600" />
             <span>Today</span>
           </div>
         </div>
+
+        {sheetDay !== null && (
+          <DayEditSheet
+            open
+            onOpenChange={(open) => { if (!open) setSheetDay(null); }}
+            year={year}
+            month={month}
+            day={sheetDay}
+            doctors={doctors}
+            participantDoctorIds={participantDoctorIds}
+            onsiteDoctorId={assignmentMap.get(`${sheetDay}-onsite`)}
+            oncallDoctorId={assignmentMap.get(`${sheetDay}-oncall`)}
+            readOnly={readOnly}
+            onAssignmentChange={onAssignmentChange}
+          />
+        )}
       </CardContent>
     </Card>
   );

@@ -82,7 +82,8 @@ export const IntegratedCalendar = ({
   };
 
   return (
-    <div className="border border-gray-200 rounded-lg overflow-hidden">
+    <div className="border border-gray-200 rounded-lg overflow-x-auto">
+      <div className="min-w-0">
       {/* Month navigation header */}
       {showNavigation && (
         <div className="flex items-center justify-center py-3 border-b border-gray-200 bg-white gap-2">
@@ -115,11 +116,11 @@ export const IntegratedCalendar = ({
       <div className="bg-white">
         {/* Header row with weekday names */}
         <div className="grid grid-cols-8 border-b border-gray-200">
-          <div className="p-2 text-center text-xs font-medium text-gray-500 border-r border-gray-200"></div>
+          <div className="p-1 sm:p-2 text-center text-[10px] sm:text-xs font-medium text-gray-500 border-r border-gray-200"></div>
           {WEEKDAY_NAMES_SHORT.map((day) => (
             <div
               key={day}
-              className="p-2 text-center text-xs font-medium text-gray-500 uppercase"
+              className="p-1 sm:p-2 text-center text-[10px] sm:text-xs font-medium text-gray-500 uppercase"
             >
               {day}
             </div>
@@ -134,11 +135,11 @@ export const IntegratedCalendar = ({
           >
             {/* Day numbers row */}
             <div className="grid grid-cols-8 border-b border-gray-100">
-              <div className="p-2 text-xs font-medium text-gray-400 border-r border-gray-200"></div>
+              <div className="p-1 sm:p-2 text-xs font-medium text-gray-400 border-r border-gray-200"></div>
               {week.days.map((day, dayIdx) => (
                 <div
                   key={`day-${dayIdx}`}
-                  className="p-1 text-center text-sm font-semibold text-gray-600 border-r border-gray-100 last:border-r-0"
+                  className="p-0.5 sm:p-1 text-center text-xs sm:text-sm font-semibold text-gray-600 border-r border-gray-100 last:border-r-0"
                 >
                   {day ?? ""}
                 </div>
@@ -147,8 +148,9 @@ export const IntegratedCalendar = ({
 
             {/* On-site row */}
             <div className="grid grid-cols-8">
-              <div className="p-2 text-xs font-medium text-gray-600 border-r border-gray-200 flex items-center">
-                on-site
+              <div className="p-1 sm:p-2 text-[10px] sm:text-xs font-medium text-gray-600 border-r border-gray-200 flex items-center">
+                <span className="sm:hidden">OS</span>
+                <span className="hidden sm:inline">on-site</span>
               </div>
               {week.days.map((day, dayIdx) => {
                 if (day === null) {
@@ -188,8 +190,9 @@ export const IntegratedCalendar = ({
 
             {/* On-call row */}
             <div className="grid grid-cols-8 border-t border-gray-100">
-              <div className="p-2 text-xs font-medium text-gray-600 border-r border-gray-200 flex items-center">
-                on-call
+              <div className="p-1 sm:p-2 text-[10px] sm:text-xs font-medium text-gray-600 border-r border-gray-200 flex items-center">
+                <span className="sm:hidden">OC</span>
+                <span className="hidden sm:inline">on-call</span>
               </div>
               {week.days.map((day, dayIdx) => {
                 if (day === null) {
@@ -228,6 +231,7 @@ export const IntegratedCalendar = ({
             </div>
           </div>
         ))}
+      </div>
       </div>
     </div>
   );

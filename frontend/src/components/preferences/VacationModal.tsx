@@ -102,8 +102,8 @@ export const VacationModal = ({
   };
 
   return (
-    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[60]">
-      <Card className="w-full max-w-md mx-4">
+    <div className="fixed inset-0 bg-black/50 flex items-end sm:items-center justify-center z-[60]">
+      <Card className="w-full max-w-md mx-0 sm:mx-4 rounded-t-lg sm:rounded-lg max-h-[90vh] overflow-y-auto">
         <CardHeader className="flex flex-row items-center justify-between pb-2">
           <CardTitle className="text-lg">Mark Vacation Periods</CardTitle>
           <Button variant="ghost" size="sm" onClick={onClose}>

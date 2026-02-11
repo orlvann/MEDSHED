@@ -53,10 +53,20 @@ import {
   Search,
   RotateCcw,
   CalendarIcon,
+  SlidersHorizontal,
 } from "lucide-react";
+import { useIsMobile } from "../../hooks/useMediaQuery";
+import {
+  Sheet,
+  SheetContent,
+  SheetHeader,
+  SheetTitle,
+  SheetDescription,
+} from "../../components/ui/sheet";
 
 export const PreferencesManagement = () => {
   const navigate = useNavigate();
+  const isMobile = useIsMobile();
   const [searchParams, setSearchParams] = useSearchParams();
 
   // Period state (initialize from URL params if present, default to next month)
@@ -84,6 +94,13 @@ export const PreferencesManagement = () => {
   const [statusFilter, setStatusFilter] = useState<"all" | "submitted" | "missing">("all");
   const [roleFilter, setRoleFilter] = useState<"all" | "specialist" | "resident">("all");
   const [searchQuery, setSearchQuery] = useState("");
+
+  // Mobile filter sheet
+  const [filtersOpen, setFiltersOpen] = useState(false);
+  const activeFilterCount = [
+    statusFilter !== "all",
+    roleFilter !== "all",
+  ].filter(Boolean).length;
 
   // Deadline dialog state
   const [showDeadlineConfirm, setShowDeadlineConfirm] = useState(false);
@@ -451,34 +468,39 @@ export const PreferencesManagement = () => {
   return (
     <div className="min-h-screen bg-gray-50">
       <AdminHeader />
-      <main className="container mx-auto px-4 py-8">
+      <main className="container mx-auto px-3 sm:px-4 py-4 sm:py-8">
         {/* Header */}
-        <div className="mb-6 flex items-center justify-between">
-          <div className="flex items-center space-x-4">
+        <div className="mb-4 sm:mb-6 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex items-center space-x-3 sm:space-x-4">
             <Button
               variant="outline"
               size="sm"
               onClick={() => navigate("/admin")}
+              title="Back"
             >
-              <ArrowLeft className="h-4 w-4 mr-2" />
-              Back
+              <ArrowLeft className="h-4 w-4 sm:mr-2" />
+              <span className="hidden sm:inline">Back</span>
             </Button>
-            <h2 className="text-3xl font-bold">Manage Preferences</h2>
+            <h2 className="text-xl sm:text-3xl font-bold">
+              <span className="sm:hidden">Preferences</span>
+              <span className="hidden sm:inline">Manage Preferences</span>
+            </h2>
           </div>
-          <Button onClick={handleDeadlineChangeClick}>
-            <Calendar className="h-4 w-4 mr-2" />
-            Change Deadline
+          <Button size={isMobile ? "sm" : "default"} onClick={handleDeadlineChangeClick}>
+            <Calendar className="h-4 w-4 sm:mr-2" />
+            <span className="hidden sm:inline">Change Deadline</span>
+            <span className="sm:hidden">Deadline</span>
           </Button>
         </div>
 
         {/* Month Picker */}
-        <Card className="mb-6">
-          <CardContent className="py-4">
-            <div className="flex items-center justify-center space-x-4">
+        <Card className="mb-4 sm:mb-6">
+          <CardContent className="py-3 sm:py-4">
+            <div className="flex items-center justify-center space-x-3 sm:space-x-4">
               <Button variant="outline" size="sm" onClick={goToPrevMonth}>
                 <ChevronLeft className="h-4 w-4" />
               </Button>
-              <span className="text-xl font-semibold min-w-[200px] text-center">
+              <span className="text-base sm:text-xl font-semibold min-w-[160px] sm:min-w-[200px] text-center">
                 {MONTH_NAMES[month - 1]} {year}
               </span>
               <Button variant="outline" size="sm" onClick={goToNextMonth}>
@@ -490,106 +512,179 @@ export const PreferencesManagement = () => {
 
         {/* Deadline Banner */}
         {deadline && (
-          <Card className={`mb-6 ${isPast ? "bg-red-50 border-red-200" : "bg-blue-50 border-blue-200"}`}>
-            <CardContent className="py-4">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center space-x-3">
-                  <Clock className={`h-5 w-5 ${isPast ? "text-red-600" : "text-blue-600"}`} />
-                  <div>
+          <Card className={`mb-4 sm:mb-6 ${isPast ? "bg-red-50 border-red-200" : "bg-blue-50 border-blue-200"}`}>
+            <CardContent className="py-2.5 sm:py-4">
+              <div className="flex flex-col gap-1.5 sm:gap-2 sm:flex-row sm:items-center sm:justify-between">
+                <div className="flex items-start sm:items-center gap-2 sm:gap-3">
+                  <Clock className={`h-4 w-4 sm:h-5 sm:w-5 flex-shrink-0 mt-0.5 sm:mt-0 ${isPast ? "text-red-600" : "text-blue-600"}`} />
+                  <div className="text-sm sm:text-base">
                     <span className={`font-semibold ${isPast ? "text-red-700" : "text-blue-700"}`}>
-                      Status: {deadline.status === "locked" ? "Locked" : "Open"}
+                      {deadline.status === "locked" ? "Locked" : "Open"}
                     </span>
                     {deadline.deadline && (
-                      <span className="ml-4 text-gray-600">
-                        Deadline: {formatDate(deadline.deadline)}
+                      <span className="block sm:inline sm:ml-3 text-gray-600 text-xs sm:text-sm">
+                        {formatDate(deadline.deadline)}
                         {timeRemaining && !timeRemaining.isPast && (
-                          <span className="ml-2 text-sm">
-                            ({timeRemaining.days} day{timeRemaining.days !== 1 ? "s" : ""} remaining)
+                          <span className="ml-1.5 sm:ml-2">
+                            ({timeRemaining.days}d left)
                           </span>
                         )}
                       </span>
                     )}
                     {!deadline.deadline && (
-                      <span className="ml-4 text-gray-500 italic">No deadline set</span>
+                      <span className="block sm:inline sm:ml-3 text-gray-500 italic text-xs sm:text-sm">No deadline set</span>
                     )}
                   </div>
                 </div>
-                <div className="text-sm text-gray-500">
-                  Timezone: {deadline.org_timezone}
+                <div className="text-[11px] sm:text-sm text-gray-500 ml-6 sm:ml-0">
+                  {deadline.org_timezone}
                 </div>
               </div>
             </CardContent>
           </Card>
         )}
 
-        {/* Filters */}
-        <Card className="mb-6">
-          <CardContent className="pt-6">
-            <div className="flex flex-wrap items-center gap-4">
-              {/* Search */}
-              <div className="flex items-center space-x-2">
-                <Search className="h-4 w-4 text-muted-foreground" />
+        {/* Filters — mobile: search + sheet toggle; desktop: inline */}
+        {isMobile ? (
+          <>
+            <div className="flex gap-2 mb-4">
+              <div className="relative flex-1">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
                 <Input
-                  placeholder="Search by name..."
+                  placeholder="Search..."
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
-                  className="w-48"
+                  className="pl-9 h-9 text-sm"
                 />
               </div>
-
-              {/* Status filter */}
-              <div className="flex items-center space-x-2">
-                <Label>Status:</Label>
-                <select
-                  value={statusFilter}
-                  onChange={(e) => setStatusFilter(e.target.value as any)}
-                  className="flex h-10 rounded-md border border-input bg-background px-3 py-2 text-sm"
-                >
-                  <option value="all">All</option>
-                  <option value="submitted">Submitted</option>
-                  <option value="missing">Missing</option>
-                </select>
-              </div>
-
-              {/* Role filter */}
-              <div className="flex items-center space-x-2">
-                <Label>Role:</Label>
-                <select
-                  value={roleFilter}
-                  onChange={(e) => setRoleFilter(e.target.value as any)}
-                  className="flex h-10 rounded-md border border-input bg-background px-3 py-2 text-sm"
-                >
-                  <option value="all">All</option>
-                  <option value="specialist">Specialist</option>
-                  <option value="resident">Resident</option>
-                </select>
-              </div>
-
-              {/* Clear filters */}
-              {(searchQuery || statusFilter !== "all" || roleFilter !== "all") && (
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => {
-                    setSearchQuery("");
-                    setStatusFilter("all");
-                    setRoleFilter("all");
-                  }}
-                >
-                  <RotateCcw className="h-4 w-4 mr-1" />
-                  Clear
-                </Button>
-              )}
+              <Button
+                variant="outline"
+                size="sm"
+                className="relative shrink-0"
+                onClick={() => setFiltersOpen(true)}
+              >
+                <SlidersHorizontal className="h-4 w-4 mr-1.5" />
+                Filters
+                {activeFilterCount > 0 && (
+                  <span className="absolute -top-1.5 -right-1.5 bg-primary text-primary-foreground text-[10px] font-bold rounded-full h-4 w-4 flex items-center justify-center">
+                    {activeFilterCount}
+                  </span>
+                )}
+              </Button>
             </div>
-          </CardContent>
-        </Card>
+
+            <Sheet open={filtersOpen} onOpenChange={setFiltersOpen}>
+              <SheetContent side="bottom" className="rounded-t-xl max-h-[60vh] overflow-y-auto">
+                <SheetHeader className="mb-4">
+                  <SheetTitle>Filters</SheetTitle>
+                  <SheetDescription>Filter doctor preferences</SheetDescription>
+                </SheetHeader>
+                <div className="space-y-4">
+                  <div>
+                    <Label htmlFor="m-status">Status</Label>
+                    <select
+                      id="m-status"
+                      value={statusFilter}
+                      onChange={(e) => setStatusFilter(e.target.value as any)}
+                      className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                    >
+                      <option value="all">All</option>
+                      <option value="submitted">Submitted</option>
+                      <option value="missing">Missing</option>
+                    </select>
+                  </div>
+                  <div>
+                    <Label htmlFor="m-role">Role</Label>
+                    <select
+                      id="m-role"
+                      value={roleFilter}
+                      onChange={(e) => setRoleFilter(e.target.value as any)}
+                      className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                    >
+                      <option value="all">All</option>
+                      <option value="specialist">Specialist</option>
+                      <option value="resident">Resident</option>
+                    </select>
+                  </div>
+                  {activeFilterCount > 0 && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="w-full"
+                      onClick={() => {
+                        setStatusFilter("all");
+                        setRoleFilter("all");
+                      }}
+                    >
+                      Clear All Filters
+                    </Button>
+                  )}
+                </div>
+              </SheetContent>
+            </Sheet>
+          </>
+        ) : (
+          <Card className="mb-6">
+            <CardContent className="pt-6">
+              <div className="flex flex-wrap items-center gap-4">
+                <div className="flex items-center space-x-2">
+                  <Search className="h-4 w-4 text-muted-foreground" />
+                  <Input
+                    placeholder="Search by name..."
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    className="w-48"
+                  />
+                </div>
+                <div className="flex items-center space-x-2">
+                  <Label>Status:</Label>
+                  <select
+                    value={statusFilter}
+                    onChange={(e) => setStatusFilter(e.target.value as any)}
+                    className="flex h-10 rounded-md border border-input bg-background px-3 py-2 text-sm"
+                  >
+                    <option value="all">All</option>
+                    <option value="submitted">Submitted</option>
+                    <option value="missing">Missing</option>
+                  </select>
+                </div>
+                <div className="flex items-center space-x-2">
+                  <Label>Role:</Label>
+                  <select
+                    value={roleFilter}
+                    onChange={(e) => setRoleFilter(e.target.value as any)}
+                    className="flex h-10 rounded-md border border-input bg-background px-3 py-2 text-sm"
+                  >
+                    <option value="all">All</option>
+                    <option value="specialist">Specialist</option>
+                    <option value="resident">Resident</option>
+                  </select>
+                </div>
+                {(searchQuery || statusFilter !== "all" || roleFilter !== "all") && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => {
+                      setSearchQuery("");
+                      setStatusFilter("all");
+                      setRoleFilter("all");
+                    }}
+                  >
+                    <RotateCcw className="h-4 w-4 mr-1" />
+                    Clear
+                  </Button>
+                )}
+              </div>
+            </CardContent>
+          </Card>
+        )}
 
         {/* Doctors Table */}
         <Card>
-          <CardHeader>
-            <CardTitle>Doctor Preferences ({filteredDoctors.length})</CardTitle>
-            <CardDescription>
-              View and manage preference submissions for {MONTH_NAMES[month - 1]} {year}
+          <CardHeader className="px-4 py-3 sm:px-6 sm:py-6">
+            <CardTitle className="text-base sm:text-xl">Doctor Preferences ({filteredDoctors.length})</CardTitle>
+            <CardDescription className="text-xs sm:text-sm">
+              Submissions for {MONTH_NAMES[month - 1]} {year}
             </CardDescription>
           </CardHeader>
           <CardContent>
@@ -601,75 +696,129 @@ export const PreferencesManagement = () => {
               <div className="text-center py-8 text-muted-foreground">
                 No doctors found
               </div>
-            ) : (
-              <div className="overflow-x-auto">
-                <table className="w-full">
-                  <thead>
-                    <tr className="border-b">
-                      <th className="text-left py-3 px-4">#</th>
-                      <th className="text-left py-3 px-4">Doctor Name</th>
-                      <th className="text-left py-3 px-4">Role</th>
-                      <th className="text-left py-3 px-4">Status</th>
-                      <th className="text-right py-3 px-4">Actions</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {filteredDoctors.map((doctor, idx) => (
-                      <tr
-                        key={doctor.id}
-                        className="border-b hover:bg-muted/50 cursor-pointer"
-                        onClick={() => openEditModal(doctor)}
-                      >
-                        <td className="py-3 px-4">{idx + 1}</td>
-                        <td className="py-3 px-4 font-medium">
+            ) : isMobile ? (
+                <div className="space-y-2">
+                  {filteredDoctors.map((doctor) => (
+                    <div
+                      key={doctor.id}
+                      className="border rounded-lg p-2.5 hover:bg-muted/50 cursor-pointer active:bg-muted/70"
+                      onClick={() => openEditModal(doctor)}
+                    >
+                      <div className="flex items-center justify-between mb-1">
+                        <span className="text-sm font-medium truncate mr-2">
                           {doctor.first_name} {doctor.last_name}
-                        </td>
-                        <td className="py-3 px-4">
-                          <span
-                            className={`px-2 py-1 text-xs rounded ${
-                              doctor.role === "specialist"
-                                ? "bg-blue-100 text-blue-700"
-                                : "bg-green-100 text-green-700"
-                            }`}
-                          >
-                            {doctor.role}
-                          </span>
-                        </td>
-                        <td className="py-3 px-4">
+                        </span>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-7 w-7 p-0 shrink-0"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            openEditModal(doctor);
+                          }}
+                        >
                           {doctor.preferenceStatus === "submitted" ? (
-                            <span className="flex items-center text-green-600">
-                              <CheckCircle className="h-4 w-4 mr-1" />
-                              Submitted
-                            </span>
+                            <Eye className="h-3.5 w-3.5" />
                           ) : (
-                            <span className="flex items-center text-red-600">
-                              <XCircle className="h-4 w-4 mr-1" />
-                              Missing
-                            </span>
+                            <Pencil className="h-3.5 w-3.5" />
                           )}
-                        </td>
-                        <td className="py-3 px-4 text-right">
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              openEditModal(doctor);
-                            }}
-                          >
-                            {doctor.preferenceStatus === "submitted" ? (
-                              <Eye className="h-4 w-4" />
-                            ) : (
-                              <Pencil className="h-4 w-4" />
-                            )}
-                          </Button>
-                        </td>
+                        </Button>
+                      </div>
+                      <div className="flex items-center gap-1.5">
+                        <span
+                          className={`px-1.5 py-0.5 text-[11px] rounded ${
+                            doctor.role === "specialist"
+                              ? "bg-blue-100 text-blue-700"
+                              : "bg-green-100 text-green-700"
+                          }`}
+                        >
+                          {doctor.role}
+                        </span>
+                        {doctor.preferenceStatus === "submitted" ? (
+                          <span className="flex items-center text-[11px] text-green-600">
+                            <CheckCircle className="h-3 w-3 mr-0.5" />
+                            Submitted
+                          </span>
+                        ) : (
+                          <span className="flex items-center text-[11px] text-red-600">
+                            <XCircle className="h-3 w-3 mr-0.5" />
+                            Missing
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full">
+                    <thead>
+                      <tr className="border-b">
+                        <th className="text-left py-3 px-4">#</th>
+                        <th className="text-left py-3 px-4">Doctor Name</th>
+                        <th className="text-left py-3 px-4">Role</th>
+                        <th className="text-left py-3 px-4">Status</th>
+                        <th className="text-right py-3 px-4">Actions</th>
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
+                    </thead>
+                    <tbody>
+                      {filteredDoctors.map((doctor, idx) => (
+                        <tr
+                          key={doctor.id}
+                          className="border-b hover:bg-muted/50 cursor-pointer"
+                          onClick={() => openEditModal(doctor)}
+                        >
+                          <td className="py-3 px-4">{idx + 1}</td>
+                          <td className="py-3 px-4 font-medium">
+                            {doctor.first_name} {doctor.last_name}
+                          </td>
+                          <td className="py-3 px-4">
+                            <span
+                              className={`px-2 py-1 text-xs rounded ${
+                                doctor.role === "specialist"
+                                  ? "bg-blue-100 text-blue-700"
+                                  : "bg-green-100 text-green-700"
+                              }`}
+                            >
+                              {doctor.role}
+                            </span>
+                          </td>
+                          <td className="py-3 px-4">
+                            {doctor.preferenceStatus === "submitted" ? (
+                              <span className="flex items-center text-green-600">
+                                <CheckCircle className="h-4 w-4 mr-1" />
+                                Submitted
+                              </span>
+                            ) : (
+                              <span className="flex items-center text-red-600">
+                                <XCircle className="h-4 w-4 mr-1" />
+                                Missing
+                              </span>
+                            )}
+                          </td>
+                          <td className="py-3 px-4 text-right">
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                openEditModal(doctor);
+                              }}
+                            >
+                              {doctor.preferenceStatus === "submitted" ? (
+                                <Eye className="h-4 w-4" />
+                              ) : (
+                                <Pencil className="h-4 w-4" />
+                              )}
+                            </Button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )
+            }
           </CardContent>
         </Card>
 
@@ -784,29 +933,33 @@ export const PreferencesManagement = () => {
 
         {/* Edit Modal with PreferencesEditor */}
         {editModalOpen && selectedDoctor && (
-          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 overflow-y-auto py-8">
-            <Card className="w-full max-w-5xl mx-4 max-h-[90vh] overflow-y-auto">
-              <CardHeader className="sticky top-0 bg-white z-10 border-b">
+          <div className={`fixed inset-0 bg-black/50 z-50 ${isMobile ? "" : "flex items-center justify-center overflow-y-auto py-8"}`}>
+            <Card className={`${isMobile ? "w-full h-full rounded-none overflow-y-auto" : "w-full max-w-5xl mx-4 max-h-[90vh] overflow-y-auto"}`}>
+              <CardHeader className={`sticky top-0 bg-white z-10 border-b ${isMobile ? "px-3 py-2.5" : ""}`}>
                 <div className="flex items-center justify-between">
-                  <div>
-                    <CardTitle>
-                      Edit Preferences: {selectedDoctor.first_name} {selectedDoctor.last_name}
+                  <div className="min-w-0 flex-1 mr-2">
+                    <CardTitle className={isMobile ? "text-sm truncate" : ""}>
+                      {isMobile ? (
+                        <>{selectedDoctor.first_name} {selectedDoctor.last_name}</>
+                      ) : (
+                        <>Edit Preferences: {selectedDoctor.first_name} {selectedDoctor.last_name}</>
+                      )}
                     </CardTitle>
-                    <CardDescription>
+                    <CardDescription className={isMobile ? "text-[11px]" : ""}>
                       {MONTH_NAMES[month - 1]} {year}
                       {draft.isRestoredFromDraft && (
                         <span className="ml-2 text-amber-600 font-medium">
-                          (Restored from draft)
+                          (Draft)
                         </span>
                       )}
                     </CardDescription>
                   </div>
-                  <Button variant="ghost" size="sm" onClick={closeEditModal}>
+                  <Button variant="ghost" size={isMobile ? "icon" : "sm"} className={isMobile ? "h-8 w-8 p-0 shrink-0" : ""} onClick={closeEditModal}>
                     <X className="h-4 w-4" />
                   </Button>
                 </div>
               </CardHeader>
-              <CardContent className="pt-6">
+              <CardContent className={isMobile ? "px-3 pt-3 pb-6" : "pt-6"}>
                 {formLoading ? (
                   <div className="text-center py-8">Loading preferences...</div>
                 ) : (

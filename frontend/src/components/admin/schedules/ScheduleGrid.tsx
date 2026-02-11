@@ -1,7 +1,9 @@
 import { useState, useCallback } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "../../ui/card";
 import { DoctorSelectDropdown } from "./DoctorSelectDropdown";
+import { DayEditSheet } from "./DayEditSheet";
 import { Star } from "lucide-react";
+import { useIsMobile } from "../../../hooks/useMediaQuery";
 import type {
   Assignment,
   InputsSnapshotRead,
@@ -80,10 +82,12 @@ export const ScheduleGrid = ({
   readOnly,
   onAssignmentChange,
 }: ScheduleGridProps) => {
+  const isMobile = useIsMobile();
   const [editingCell, setEditingCell] = useState<{
     day: number;
     shiftType: ShiftType;
   } | null>(null);
+  const [sheetDay, setSheetDay] = useState<number | null>(null);
 
   const daysInMonth = getDaysInMonth(year, month);
   const doctors = inputsSnapshot?.doctors || {};
@@ -214,12 +218,84 @@ export const ScheduleGrid = ({
     );
   }
 
+  if (isMobile) {
+    // Mobile card view
+    const mobileCards = [];
+    for (let day = 1; day <= daysInMonth; day++) {
+      const weekday = getWeekday(year, month, day);
+      const weekend = isWeekend(weekday);
+      const today = isToday(year, month, day);
+      const onsiteDoctorId = assignmentMap.get(`${day}-onsite`);
+      const oncallDoctorId = assignmentMap.get(`${day}-oncall`);
+      const onsiteSnap = onsiteDoctorId ? doctors[onsiteDoctorId] : undefined;
+      const oncallSnap = oncallDoctorId ? doctors[oncallDoctorId] : undefined;
+
+      mobileCards.push(
+        <div
+          key={day}
+          className={`border rounded-lg p-2.5 ${weekend ? "bg-amber-50/40" : ""} ${today ? "border-blue-500 border-l-[3px]" : ""} ${!readOnly ? "cursor-pointer active:bg-gray-100" : ""}`}
+          onClick={() => { if (!readOnly) setSheetDay(day); }}
+        >
+          <div className="flex items-center gap-1.5 mb-1.5">
+            <span className={`inline-flex items-center justify-center w-6 h-6 rounded-full text-xs font-bold ${today ? "bg-blue-600 text-white" : weekend ? "text-amber-700" : "text-gray-700"}`}>
+              {day}
+            </span>
+            <span className={`text-xs ${weekend ? "text-amber-600 font-semibold" : "text-muted-foreground"}`}>
+              {WEEKDAY_NAMES[weekday]}
+            </span>
+          </div>
+          <div className="space-y-1">
+            <div className="flex items-center gap-1.5 text-xs">
+              <span className="inline-block w-1.5 h-1.5 rounded-full bg-teal-500 flex-shrink-0" />
+              <span className="text-[10px] text-muted-foreground w-10">Onsite</span>
+              <span className="font-medium text-gray-800 truncate">{getDoctorName(onsiteDoctorId)}</span>
+              {onsiteSnap && <RoleBadge role={onsiteSnap.role} />}
+            </div>
+            <div className="flex items-center gap-1.5 text-xs">
+              <span className="inline-block w-1.5 h-1.5 rounded-full bg-amber-500 flex-shrink-0" />
+              <span className="text-[10px] text-muted-foreground w-10">Oncall</span>
+              <span className="font-medium text-gray-800 truncate">{getDoctorName(oncallDoctorId)}</span>
+              {oncallSnap && <RoleBadge role={oncallSnap.role} />}
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    return (
+      <Card className="mb-4 sm:mb-6">
+        <CardHeader className="px-4 py-3">
+          <CardTitle className="text-base">Schedule</CardTitle>
+        </CardHeader>
+        <CardContent className="px-3 pb-4">
+          <div className="space-y-1.5">{mobileCards}</div>
+
+          {sheetDay !== null && (
+            <DayEditSheet
+              open
+              onOpenChange={(open) => { if (!open) setSheetDay(null); }}
+              year={year}
+              month={month}
+              day={sheetDay}
+              doctors={doctors}
+              participantDoctorIds={participantDoctorIds}
+              onsiteDoctorId={assignmentMap.get(`${sheetDay}-onsite`)}
+              oncallDoctorId={assignmentMap.get(`${sheetDay}-oncall`)}
+              readOnly={readOnly}
+              onAssignmentChange={onAssignmentChange}
+            />
+          )}
+        </CardContent>
+      </Card>
+    );
+  }
+
   return (
-    <Card className="mb-6">
-      <CardHeader>
-        <CardTitle className="text-lg">Schedule</CardTitle>
+    <Card className="mb-4 sm:mb-6">
+      <CardHeader className="px-4 py-3 sm:px-6 sm:py-6">
+        <CardTitle className="text-base sm:text-lg">Schedule</CardTitle>
       </CardHeader>
-      <CardContent>
+      <CardContent className="px-4 sm:px-6">
         <div className="overflow-x-auto rounded-lg border">
           <table className="w-full border-collapse">
             <thead>

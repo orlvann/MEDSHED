@@ -376,13 +376,14 @@ export const PreferencesEditor = ({
     <div className="space-y-6">
       {/* Control buttons (top) */}
       <div className="flex items-center justify-between">
-        <div className="flex items-center space-x-2">
+        <div className="flex items-center gap-1 sm:gap-2">
           <Button
             variant="outline"
             size="sm"
             onClick={onUndo}
             disabled={!canUndo || isSaving || isReadOnly}
             title="Undo"
+            className="h-8 w-8 sm:h-9 sm:w-auto sm:px-3 p-0"
           >
             <Undo2 className="h-4 w-4" />
           </Button>
@@ -392,54 +393,55 @@ export const PreferencesEditor = ({
             onClick={onRedo}
             disabled={!canRedo || isSaving || isReadOnly}
             title="Redo"
+            className="h-8 w-8 sm:h-9 sm:w-auto sm:px-3 p-0"
           >
             <Redo2 className="h-4 w-4" />
           </Button>
-        </div>
-        <div className="flex items-center space-x-4">
-          <div className="flex items-center space-x-2">
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={onPreviousVersion}
-              disabled={!canPreviousVersion || isSaving || !onPreviousVersion}
-              title="Previous version"
-            >
-              <ChevronLeft className="h-4 w-4 mr-1" />
-              Previous
-            </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={onNextVersion}
-              disabled={!canNextVersion || isSaving || !onNextVersion}
-              title="Next version"
-            >
-              Next
-              <ChevronRight className="h-4 w-4 ml-1" />
-            </Button>
-          </div>
+          <div className="w-px h-5 bg-gray-200 mx-0.5 sm:mx-1 hidden sm:block" />
           <Button
+            variant="outline"
             size="sm"
-            onClick={handleSave}
-            disabled={
-              isSubmitting ||
-              isSaving ||
-              isReadOnly ||
-              validationErrors.length > 0
-            }
-            title="Save"
+            onClick={onPreviousVersion}
+            disabled={!canPreviousVersion || isSaving || !onPreviousVersion}
+            title="Previous version"
+            className="h-8 w-8 sm:h-9 sm:w-auto sm:px-3 p-0 hidden sm:inline-flex"
           >
-            <Save className="h-4 w-4 mr-1" />
-            Save
+            <ChevronLeft className="h-4 w-4 sm:mr-1" />
+            <span className="hidden sm:inline">Previous</span>
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={onNextVersion}
+            disabled={!canNextVersion || isSaving || !onNextVersion}
+            title="Next version"
+            className="h-8 w-8 sm:h-9 sm:w-auto sm:px-3 p-0 hidden sm:inline-flex"
+          >
+            <span className="hidden sm:inline">Next</span>
+            <ChevronRight className="h-4 w-4 sm:ml-1" />
           </Button>
         </div>
+        <Button
+          size="sm"
+          onClick={handleSave}
+          disabled={
+            isSubmitting ||
+            isSaving ||
+            isReadOnly ||
+            validationErrors.length > 0
+          }
+          title="Save"
+          className="h-9 px-4"
+        >
+          <Save className="h-4 w-4 mr-1.5" />
+          Save
+        </Button>
       </div>
 
       {/* Top section: Calendar + Status panel */}
-      <div className="flex gap-6">
+      <div className="flex flex-col lg:flex-row gap-4 lg:gap-6">
         {/* Calendar (left side) */}
-        <div className="flex-1">
+        <div className="flex-1 min-w-0">
           <IntegratedCalendar
             year={year}
             month={month}
@@ -457,7 +459,7 @@ export const PreferencesEditor = ({
         </div>
 
         {/* Status panel (right side) */}
-        <div className="w-64 flex-shrink-0">
+        <div className="w-full lg:w-64 lg:flex-shrink-0">
           <StatusCountdown
             status={status}
             deadline={deadline?.deadline ?? null}
@@ -472,9 +474,9 @@ export const PreferencesEditor = ({
       </div>
 
       {/* Bottom sections in 2-column grid */}
-      <div className="grid grid-cols-2 gap-6">
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-3 sm:gap-4 lg:gap-6">
         {/* Left column */}
-        <div className="space-y-6">
+        <div className="space-y-3 sm:space-y-6">
           <ShiftCountsGrid
             maxOnsiteTotal={formData.max_onsite_total}
             targetOnsiteTotal={formData.target_onsite_total}
@@ -497,7 +499,7 @@ export const PreferencesEditor = ({
         </div>
 
         {/* Right column */}
-        <div className="space-y-6">
+        <div className="space-y-3 sm:space-y-6">
           <WeekdayPatterns
             preferredOnsiteWeekdays={formData.preferred_onsite_weekdays}
             avoidOnsiteWeekdays={formData.avoid_onsite_weekdays}
@@ -528,13 +530,14 @@ export const PreferencesEditor = ({
 
       {/* Control buttons (bottom) */}
       <div className="flex items-center justify-between pt-4 border-t">
-        <div className="flex items-center space-x-2">
+        <div className="flex items-center gap-1 sm:gap-2">
           <Button
             variant="outline"
             size="sm"
             onClick={onUndo}
             disabled={!canUndo || isSaving || isReadOnly}
             title="Undo"
+            className="h-8 w-8 sm:h-9 sm:w-auto sm:px-3 p-0"
           >
             <Undo2 className="h-4 w-4" />
           </Button>
@@ -544,48 +547,49 @@ export const PreferencesEditor = ({
             onClick={onRedo}
             disabled={!canRedo || isSaving || isReadOnly}
             title="Redo"
+            className="h-8 w-8 sm:h-9 sm:w-auto sm:px-3 p-0"
           >
             <Redo2 className="h-4 w-4" />
           </Button>
-        </div>
-        <div className="flex items-center space-x-4">
-          <div className="flex items-center space-x-2">
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={onPreviousVersion}
-              disabled={!canPreviousVersion || isSaving || !onPreviousVersion}
-              title="Previous version"
-            >
-              <ChevronLeft className="h-4 w-4 mr-1" />
-              Previous
-            </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={onNextVersion}
-              disabled={!canNextVersion || isSaving || !onNextVersion}
-              title="Next version"
-            >
-              Next
-              <ChevronRight className="h-4 w-4 ml-1" />
-            </Button>
-          </div>
+          <div className="w-px h-5 bg-gray-200 mx-0.5 sm:mx-1 hidden sm:block" />
           <Button
+            variant="outline"
             size="sm"
-            onClick={handleSave}
-            disabled={
-              isSubmitting ||
-              isSaving ||
-              isReadOnly ||
-              validationErrors.length > 0
-            }
-            title="Save"
+            onClick={onPreviousVersion}
+            disabled={!canPreviousVersion || isSaving || !onPreviousVersion}
+            title="Previous version"
+            className="h-8 w-8 sm:h-9 sm:w-auto sm:px-3 p-0 hidden sm:inline-flex"
           >
-            <Save className="h-4 w-4 mr-1" />
-            {isSubmitting ? "Saving..." : "Save"}
+            <ChevronLeft className="h-4 w-4 sm:mr-1" />
+            <span className="hidden sm:inline">Previous</span>
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={onNextVersion}
+            disabled={!canNextVersion || isSaving || !onNextVersion}
+            title="Next version"
+            className="h-8 w-8 sm:h-9 sm:w-auto sm:px-3 p-0 hidden sm:inline-flex"
+          >
+            <span className="hidden sm:inline">Next</span>
+            <ChevronRight className="h-4 w-4 sm:ml-1" />
           </Button>
         </div>
+        <Button
+          size="sm"
+          onClick={handleSave}
+          disabled={
+            isSubmitting ||
+            isSaving ||
+            isReadOnly ||
+            validationErrors.length > 0
+          }
+          title="Save"
+          className="h-9 px-4"
+        >
+          <Save className="h-4 w-4 mr-1.5" />
+          {isSubmitting ? "Saving..." : "Save"}
+        </Button>
       </div>
 
       {/* Vacation Modal */}

@@ -82,35 +82,35 @@ export const AvailabilityHeatmap = ({
   });
 
   return (
-    <Card className="mb-6">
-      <CardHeader>
-        <CardTitle className="text-lg font-semibold">
-          Availability Overview - {monthName} {year}
+    <Card className="mb-4 sm:mb-6">
+      <CardHeader className="px-4 py-3 sm:px-6 sm:py-6">
+        <CardTitle className="text-base sm:text-lg font-semibold">
+          Availability - {monthName} {year}
         </CardTitle>
       </CardHeader>
-      <CardContent>
+      <CardContent className="px-2 sm:px-6 pb-4 sm:pb-6">
         {loading ? (
-          <div className="text-center py-8 text-muted-foreground">
+          <div className="text-center py-6 sm:py-8 text-xs sm:text-sm text-muted-foreground">
             Loading availability data...
           </div>
         ) : days.length === 0 ? (
-          <div className="text-center py-8 text-muted-foreground">
+          <div className="text-center py-6 sm:py-8 text-xs sm:text-sm text-muted-foreground">
             No availability data for this month.
           </div>
         ) : (
           <>
             {/* Legend */}
-            <div className="flex gap-4 mb-4 text-sm">
-              <div className="flex items-center gap-1.5">
-                <div className="w-4 h-4 rounded bg-green-50/70 border border-green-200" />
+            <div className="flex gap-3 sm:gap-4 mb-3 sm:mb-4 text-xs sm:text-sm px-2 sm:px-0">
+              <div className="flex items-center gap-1">
+                <div className="w-3 h-3 sm:w-4 sm:h-4 rounded bg-green-50/70 border border-green-200" />
                 <span>OK</span>
               </div>
-              <div className="flex items-center gap-1.5">
-                <div className="w-4 h-4 rounded bg-yellow-50 border border-yellow-200" />
+              <div className="flex items-center gap-1">
+                <div className="w-3 h-3 sm:w-4 sm:h-4 rounded bg-yellow-50 border border-yellow-200" />
                 <span>Alert</span>
               </div>
-              <div className="flex items-center gap-1.5">
-                <div className="w-4 h-4 rounded bg-red-50 border border-red-200" />
+              <div className="flex items-center gap-1">
+                <div className="w-3 h-3 sm:w-4 sm:h-4 rounded bg-red-50 border border-red-200" />
                 <span>Critical</span>
               </div>
             </div>
@@ -122,11 +122,12 @@ export const AvailabilityHeatmap = ({
                 {WEEKDAY_LABELS.map((label, idx) => (
                   <div
                     key={label}
-                    className={`py-2 text-center text-sm font-medium text-gray-600 ${
+                    className={`py-1.5 sm:py-2 text-center text-[10px] sm:text-sm font-medium text-gray-600 ${
                       idx >= 5 ? "bg-gray-100" : ""
                     }`}
                   >
-                    {label}
+                    <span className="sm:hidden">{label.charAt(0)}</span>
+                    <span className="hidden sm:inline">{label}</span>
                   </div>
                 ))}
               </div>
@@ -142,7 +143,7 @@ export const AvailabilityHeatmap = ({
                       return (
                         <div
                           key={`empty-${weekIdx}-${dayIdx}`}
-                          className="min-h-[100px] bg-gray-50 border-r last:border-r-0"
+                          className="min-h-[60px] sm:min-h-[100px] bg-gray-50 border-r last:border-r-0"
                         />
                       );
                     }
@@ -159,41 +160,47 @@ export const AvailabilityHeatmap = ({
                       <button
                         key={day}
                         onClick={() => onDayClick(day)}
-                        className={`min-h-[100px] p-2.5 text-left border-r last:border-r-0 transition-colors cursor-pointer ${getRiskColor(
+                        className={`min-h-[60px] sm:min-h-[100px] p-1 sm:p-2.5 text-left border-r last:border-r-0 transition-colors cursor-pointer active:opacity-70 ${getRiskColor(
                           effectiveRisk,
                         )} ${isWeekend ? "bg-opacity-70" : ""} ${hasSolverError ? "ring-2 ring-inset ring-red-400" : ""}`}
                       >
-                        <div className="flex items-center gap-1">
+                        <div className="flex items-center gap-0.5 sm:gap-1">
                           <span
-                            className={`text-lg font-bold ${getRiskTextColor(effectiveRisk)}`}
+                            className={`text-xs sm:text-lg font-bold ${getRiskTextColor(effectiveRisk)}`}
                           >
                             {day}
                           </span>
                           {hasSolverError && (
-                            <span className="px-1 py-0.5 text-[10px] font-bold bg-red-200 text-red-800 rounded" title="Solver found issues on this day">
+                            <span className="px-0.5 sm:px-1 py-0.5 text-[8px] sm:text-[10px] font-bold bg-red-200 text-red-800 rounded" title="Solver found issues on this day">
                               !
                             </span>
                           )}
                         </div>
                         {dayData && (
-                          <div className="mt-2 space-y-1.5">
+                          <div className="mt-0.5 sm:mt-2 space-y-0.5 sm:space-y-1.5">
                             <div className="flex items-center justify-between">
-                              <span className="px-1.5 py-0.5 text-xs font-medium bg-teal-100 text-teal-700 rounded">
+                              <span className="hidden sm:inline px-1.5 py-0.5 text-xs font-medium bg-teal-100 text-teal-700 rounded">
                                 On-site
                               </span>
                               <span
-                                className={`text-sm font-semibold ${getRiskTextColor(risk)}`}
+                                className={`text-[10px] sm:text-sm font-semibold ${getRiskTextColor(risk)}`}
                               >
-                                {dayData.available_specialists_onsite +
-                                  dayData.available_residents_onsite}
+                                <span className="sm:hidden">
+                                  {dayData.available_specialists_onsite +
+                                    dayData.available_residents_onsite}
+                                </span>
+                                <span className="hidden sm:inline">
+                                  {dayData.available_specialists_onsite +
+                                    dayData.available_residents_onsite}
+                                </span>
                               </span>
                             </div>
                             <div className="flex items-center justify-between">
-                              <span className="px-1.5 py-0.5 text-xs font-medium bg-amber-100 text-amber-700 rounded">
+                              <span className="hidden sm:inline px-1.5 py-0.5 text-xs font-medium bg-amber-100 text-amber-700 rounded">
                                 On-call
                               </span>
                               <span
-                                className={`text-sm font-semibold ${getRiskTextColor(risk)}`}
+                                className={`text-[10px] sm:text-sm font-semibold ${getRiskTextColor(risk)}`}
                               >
                                 {dayData.available_specialists_oncall +
                                   dayData.available_residents_oncall}

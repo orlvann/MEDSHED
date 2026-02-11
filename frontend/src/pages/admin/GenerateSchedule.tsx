@@ -304,26 +304,27 @@ export const GenerateSchedule = () => {
   return (
     <div className="min-h-screen bg-gray-50">
       <AdminHeader />
-      <main className="container mx-auto px-4 py-8">
+      <main className="container mx-auto px-3 sm:px-4 py-4 sm:py-8">
         {/* Header */}
-        <div className="mb-6 flex items-center justify-between">
-          <div className="flex items-center space-x-4">
+        <div className="mb-4 sm:mb-6 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex items-center space-x-3 sm:space-x-4">
             <Button
               variant="outline"
               size="sm"
               onClick={() => navigate("/admin")}
+              title="Back"
             >
-              <ArrowLeft className="h-4 w-4 mr-2" />
-              Back
+              <ArrowLeft className="h-4 w-4 sm:mr-2" />
+              <span className="hidden sm:inline">Back</span>
             </Button>
-            <h2 className="text-3xl font-bold">Generate New Schedule</h2>
+            <h2 className="text-xl sm:text-3xl font-bold">Generate Schedule</h2>
           </div>
         </div>
 
         {/* Month/Year Selector */}
-        <Card className="mb-6">
-          <CardContent className="pt-6">
-            <div className="flex items-center justify-center gap-4">
+        <Card className="mb-4 sm:mb-6">
+          <CardContent className="py-3 sm:pt-6">
+            <div className="flex items-center justify-center gap-3 sm:gap-4">
               <Button
                 variant="outline"
                 size="sm"
@@ -332,7 +333,7 @@ export const GenerateSchedule = () => {
               >
                 <ChevronLeft className="h-4 w-4" />
               </Button>
-              <div className="text-xl font-semibold min-w-[180px] text-center">
+              <div className="text-base sm:text-xl font-semibold min-w-[150px] sm:min-w-[180px] text-center">
                 {monthName} {year}
               </div>
               <Button variant="outline" size="sm" onClick={handleNextMonth}>
@@ -347,18 +348,19 @@ export const GenerateSchedule = () => {
 
         {/* Preferences Warnings */}
         {!isLoading && prefSummary && prefSummary.submitted.length === 0 && activeDoctors.length > 0 && (
-          <div className="mb-6 p-4 bg-amber-50 border border-amber-300 rounded-lg flex items-start gap-3">
-            <AlertTriangle className="h-5 w-5 text-amber-600 mt-0.5 flex-shrink-0" />
+          <div className="mb-4 sm:mb-6 p-3 sm:p-4 bg-amber-50 border border-amber-300 rounded-lg flex items-start gap-2.5 sm:gap-3">
+            <AlertTriangle className="h-4 w-4 sm:h-5 sm:w-5 text-amber-600 mt-0.5 flex-shrink-0" />
             <div>
-              <p className="text-amber-800">
+              <p className="text-xs sm:text-sm text-amber-800">
                 <strong>No doctor has submitted preferences for {monthName} {year}.</strong>{" "}
-                All doctors will be treated as fully available. Consider collecting preferences first.
+                All doctors will be treated as fully available.
               </p>
               <div className="mt-2">
                 <Button
                   variant="outline"
                   size="sm"
                   onClick={() => navigate(`/admin/preferences?year=${year}&month=${month}`)}
+                  className="h-7 text-xs sm:h-8 sm:text-sm"
                 >
                   Go to Preferences
                 </Button>
@@ -368,19 +370,20 @@ export const GenerateSchedule = () => {
         )}
 
         {!isLoading && prefSummary && prefSummary.submitted.length > 0 && prefSummary.missing.length > 0 && (
-          <div className="mb-6 p-4 bg-blue-50 border border-blue-200 rounded-lg flex items-start gap-3">
-            <Info className="h-5 w-5 text-blue-600 mt-0.5 flex-shrink-0" />
+          <div className="mb-4 sm:mb-6 p-3 sm:p-4 bg-blue-50 border border-blue-200 rounded-lg flex items-start gap-2.5 sm:gap-3">
+            <Info className="h-4 w-4 sm:h-5 sm:w-5 text-blue-600 mt-0.5 flex-shrink-0" />
             <div>
-              <p className="text-blue-800">
+              <p className="text-xs sm:text-sm text-blue-800">
                 <strong>{prefSummary.missing.length}</strong> of{" "}
                 {prefSummary.submitted.length + prefSummary.missing.length} doctors
-                haven't submitted preferences yet and will be treated as fully available.
+                haven't submitted preferences yet.
               </p>
               <div className="mt-2">
                 <Button
                   variant="outline"
                   size="sm"
                   onClick={() => navigate(`/admin/preferences?year=${year}&month=${month}`)}
+                  className="h-7 text-xs sm:h-8 sm:text-sm"
                 >
                   View Preferences
                 </Button>
@@ -391,21 +394,20 @@ export const GenerateSchedule = () => {
 
         {/* Warning Info Boxes */}
         {!isLoading && hasAlertDays && !hasCriticalDays && (
-          <div className="mb-6 p-4 bg-yellow-50 border border-yellow-200 rounded-lg flex items-start gap-3">
-            <Info className="h-5 w-5 text-yellow-600 mt-0.5 flex-shrink-0" />
+          <div className="mb-4 sm:mb-6 p-3 sm:p-4 bg-yellow-50 border border-yellow-200 rounded-lg flex items-start gap-2.5 sm:gap-3">
+            <Info className="h-4 w-4 sm:h-5 sm:w-5 text-yellow-600 mt-0.5 flex-shrink-0" />
             <div>
-              <p className="text-yellow-800">
-                <strong>Coverage looks risky for some days.</strong> Before
-                generating, you can update the active doctor list or edit
-                doctors' monthly preferences.
+              <p className="text-xs sm:text-sm text-yellow-800">
+                <strong>Coverage looks risky for some days.</strong> Update the active doctor list or edit preferences.
               </p>
-              <div className="mt-2 flex gap-3">
+              <div className="mt-2 flex flex-wrap gap-2">
                 <Button
                   variant="outline"
                   size="sm"
                   onClick={() => navigate("/admin/doctors")}
+                  className="h-7 text-xs sm:h-8 sm:text-sm"
                 >
-                  Edit Active Doctors
+                  Edit Doctors
                 </Button>
                 <Button
                   variant="outline"
@@ -413,8 +415,9 @@ export const GenerateSchedule = () => {
                   onClick={() =>
                     navigate(`/admin/preferences?year=${year}&month=${month}`)
                   }
+                  className="h-7 text-xs sm:h-8 sm:text-sm"
                 >
-                  Edit Monthly Preferences
+                  Edit Preferences
                 </Button>
               </div>
             </div>
@@ -422,24 +425,23 @@ export const GenerateSchedule = () => {
         )}
 
         {!isLoading && hasCriticalDays && (
-          <div className="mb-6 p-4 bg-red-50 border border-red-200 rounded-lg flex items-start gap-3">
-            <AlertTriangle className="h-5 w-5 text-red-600 mt-0.5 flex-shrink-0" />
+          <div className="mb-4 sm:mb-6 p-3 sm:p-4 bg-red-50 border border-red-200 rounded-lg flex items-start gap-2.5 sm:gap-3">
+            <AlertTriangle className="h-4 w-4 sm:h-5 sm:w-5 text-red-600 mt-0.5 flex-shrink-0" />
             <div>
-              <p className="text-red-800">
+              <p className="text-xs sm:text-sm text-red-800">
                 <strong>
-                  Some days are impossible to cover with the current inputs.
+                  Some days are impossible to cover.
                 </strong>{" "}
-                Before generating, update the active doctor list or edit
-                doctors' monthly preferences. If you still want to generate, you
-                can generate with ignored days/slots.
+                Update inputs or generate with ignored days/slots.
               </p>
-              <div className="mt-2 flex gap-3">
+              <div className="mt-2 flex flex-wrap gap-2">
                 <Button
                   variant="outline"
                   size="sm"
                   onClick={() => navigate("/admin/doctors")}
+                  className="h-7 text-xs sm:h-8 sm:text-sm"
                 >
-                  Edit Active Doctors
+                  Edit Doctors
                 </Button>
                 <Button
                   variant="outline"
@@ -447,8 +449,9 @@ export const GenerateSchedule = () => {
                   onClick={() =>
                     navigate(`/admin/preferences?year=${year}&month=${month}`)
                   }
+                  className="h-7 text-xs sm:h-8 sm:text-sm"
                 >
-                  Edit Monthly Preferences
+                  Edit Preferences
                 </Button>
               </div>
             </div>
@@ -469,7 +472,7 @@ export const GenerateSchedule = () => {
 
         {/* Plain error display */}
         {error && (
-          <div className="mb-6 p-4 bg-red-50 border border-red-200 rounded-lg text-red-800">
+          <div className="mb-4 sm:mb-6 p-3 sm:p-4 bg-red-50 border border-red-200 rounded-lg text-xs sm:text-sm text-red-800">
             {error}
           </div>
         )}
@@ -490,16 +493,16 @@ export const GenerateSchedule = () => {
             size="lg"
             onClick={handleGenerateClick}
             disabled={isLoading || generating || activeDoctors.length === 0}
-            className="px-8"
+            className="px-6 sm:px-8 h-10 sm:h-11 text-sm sm:text-base"
           >
-            <Sparkles className="h-5 w-5 mr-2" />
+            <Sparkles className="h-4 w-4 sm:h-5 sm:w-5 mr-2" />
             {generating ? "Generating..." : "Generate Schedule"}
           </Button>
         </div>
 
         {activeDoctors.length === 0 && !loadingDoctors && (
-          <p className="text-center text-muted-foreground mt-2">
-            Please add active doctors before generating a schedule.
+          <p className="text-center text-xs sm:text-sm text-muted-foreground mt-2">
+            Add active doctors before generating.
           </p>
         )}
       </main>
