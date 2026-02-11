@@ -27,6 +27,17 @@ import type {
   AvailabilityDayRead,
   ScheduleGenerateRequest,
   ScheduleGenerateCreated,
+  SchedulesPeriodViewRead,
+  ScheduleWorkingRead,
+  ScheduleWorkingPut,
+  ScheduleWorkingAck,
+  ScheduleCheckpointRequest,
+  ScheduleCheckpointCreated,
+  ScheduleRevertRead,
+  SchedulePublishRequest,
+  SchedulePublishCreated,
+  SchedulePublishedRevertRead,
+  DiagnosticsRead,
 } from "../types";
 
 // Base API URL - can be overridden by environment variable
@@ -341,8 +352,9 @@ export const doctorPreferencesApi = {
   },
 };
 
-// Schedules API (Doctor)
+// Schedules API
 export const schedulesApi = {
+  // Doctor endpoints
   getPublished: async (
     year: number,
     month: number,
@@ -369,6 +381,121 @@ export const schedulesApi = {
     const response = await api.post<ScheduleGenerateCreated>(
       "/api/v1/schedules/generate",
       data,
+    );
+    return response.data;
+  },
+
+  // Admin endpoints — Period View
+  getPeriodView: async (
+    year: number,
+    month: number,
+  ): Promise<SchedulesPeriodViewRead> => {
+    const response = await api.get<SchedulesPeriodViewRead>(
+      `/api/v1/schedules/${year}/${month}`,
+    );
+    return response.data;
+  },
+
+  // Working buffer
+  getWorking: async (
+    year: number,
+    month: number,
+  ): Promise<ScheduleWorkingRead> => {
+    const response = await api.get<ScheduleWorkingRead>(
+      `/api/v1/schedules/${year}/${month}/working`,
+    );
+    return response.data;
+  },
+
+  saveWorking: async (
+    year: number,
+    month: number,
+    data: ScheduleWorkingPut,
+  ): Promise<ScheduleWorkingAck> => {
+    const response = await api.put<ScheduleWorkingAck>(
+      `/api/v1/schedules/${year}/${month}/working`,
+      data,
+    );
+    return response.data;
+  },
+
+  // Checkpoint
+  checkpoint: async (
+    year: number,
+    month: number,
+    data?: ScheduleCheckpointRequest,
+  ): Promise<ScheduleCheckpointCreated> => {
+    const response = await api.post<ScheduleCheckpointCreated>(
+      `/api/v1/schedules/${year}/${month}/checkpoint`,
+      data || {},
+    );
+    return response.data;
+  },
+
+  // Draft undo/redo
+  revertDraft: async (
+    year: number,
+    month: number,
+  ): Promise<ScheduleRevertRead> => {
+    const response = await api.post<ScheduleRevertRead>(
+      `/api/v1/schedules/${year}/${month}/revert-last`,
+    );
+    return response.data;
+  },
+
+  redoDraft: async (
+    year: number,
+    month: number,
+  ): Promise<ScheduleRevertRead> => {
+    const response = await api.post<ScheduleRevertRead>(
+      `/api/v1/schedules/${year}/${month}/revert-next`,
+    );
+    return response.data;
+  },
+
+  // Publish
+  publish: async (
+    year: number,
+    month: number,
+    data: SchedulePublishRequest,
+  ): Promise<SchedulePublishCreated> => {
+    const response = await api.post<SchedulePublishCreated>(
+      `/api/v1/schedules/${year}/${month}/publish`,
+      data,
+    );
+    return response.data;
+  },
+
+  // Published undo/redo
+  revertPublished: async (
+    year: number,
+    month: number,
+  ): Promise<SchedulePublishedRevertRead> => {
+    const response = await api.post<SchedulePublishedRevertRead>(
+      `/api/v1/schedules/${year}/${month}/revert-last-published`,
+    );
+    return response.data;
+  },
+
+  redoPublished: async (
+    year: number,
+    month: number,
+  ): Promise<SchedulePublishedRevertRead> => {
+    const response = await api.post<SchedulePublishedRevertRead>(
+      `/api/v1/schedules/${year}/${month}/revert-next-published`,
+    );
+    return response.data;
+  },
+
+  // Diagnostics
+  getDiagnostics: async (
+    year: number,
+    month: number,
+    target: "working" | "draft" | "published",
+  ): Promise<DiagnosticsRead> => {
+    const response = await api.get<DiagnosticsRead>(
+      `/api/v1/schedules/${year}/${month}/diagnostics`,
+      { params: { target } },
     );
     return response.data;
   },

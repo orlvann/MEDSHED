@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { AdminHeader } from "../../components/shared/AdminHeader";
 import { Button } from "../../components/ui/button";
 import { Input } from "../../components/ui/input";
@@ -21,11 +21,15 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "../../components/ui/alert-dialog";
+import { Calendar as CalendarWidget } from "../../components/ui/calendar";
+import { Popover, PopoverContent, PopoverTrigger } from "../../components/ui/popover";
 import { PreferencesEditor, getDefaultPreferences, MONTH_NAMES, formatDate, getTimeRemaining } from "../../components/preferences";
 import { validatePreferences, type ValidationError } from "../../components/preferences/validation";
 import { useUndoRedo } from "../../hooks/useUndoRedo";
 import { useLocalStorageDraft } from "../../hooks/useLocalStorageDraft";
 import { preferencesApi, doctorsApi } from "../../services/api";
+import { enUS } from "date-fns/locale";
+import { format } from "date-fns";
 import type {
   Doctor,
   PreferencesSummaryRead,
@@ -48,15 +52,26 @@ import {
   AlertTriangle,
   Search,
   RotateCcw,
+  CalendarIcon,
 } from "lucide-react";
 
 export const PreferencesManagement = () => {
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
 
-  // Period state
+  // Period state (initialize from URL params if present, default to next month)
   const now = new Date();
-  const [year, setYear] = useState(now.getFullYear());
-  const [month, setMonth] = useState(now.getMonth() + 1);
+  const _nextMonth = now.getMonth() + 2; // getMonth() is 0-based, +2 = next month
+  const _nextMonthYear = _nextMonth > 12 ? now.getFullYear() + 1 : now.getFullYear();
+  const _nextMonthNormalized = _nextMonth > 12 ? 1 : _nextMonth;
+  const [year, setYear] = useState(() => {
+    const p = searchParams.get("year");
+    return p ? parseInt(p, 10) : _nextMonthYear;
+  });
+  const [month, setMonth] = useState(() => {
+    const p = searchParams.get("month");
+    return p ? parseInt(p, 10) : _nextMonthNormalized;
+  });
 
   // Data state
   const [summary, setSummary] = useState<PreferencesSummaryRead | null>(null);
@@ -73,7 +88,9 @@ export const PreferencesManagement = () => {
   // Deadline dialog state
   const [showDeadlineConfirm, setShowDeadlineConfirm] = useState(false);
   const [showDeadlinePicker, setShowDeadlinePicker] = useState(false);
-  const [newDeadline, setNewDeadline] = useState("");
+  const [newDeadlineDate, setNewDeadlineDate] = useState<Date | undefined>(undefined);
+  const [newDeadlineHour, setNewDeadlineHour] = useState("23");
+  const [newDeadlineMinute, setNewDeadlineMinute] = useState("59");
   const [deadlineLoading, setDeadlineLoading] = useState(false);
 
   // Edit modal state
@@ -123,6 +140,21 @@ export const PreferencesManagement = () => {
   useEffect(() => {
     fetchData();
   }, [year, month]);
+
+  // Auto-open edit modal if doctor_id is in URL params
+  const doctorIdParam = searchParams.get("doctor_id");
+  useEffect(() => {
+    if (!doctorIdParam || loading || doctors.length === 0) return;
+    const doctorId = parseInt(doctorIdParam, 10);
+    const doctor = doctors.find((d) => d.id === doctorId);
+    if (doctor && !editModalOpen) {
+      openEditModal(doctor);
+      // Clear the param so it doesn't re-trigger
+      const next = new URLSearchParams(searchParams);
+      next.delete("doctor_id");
+      setSearchParams(next, { replace: true });
+    }
+  }, [doctorIdParam, loading, doctors]);
 
   // Filtered doctors with status
   const doctorsWithStatus = useMemo(() => {
@@ -200,18 +232,22 @@ export const PreferencesManagement = () => {
 
   const handleDeadlineConfirm = () => {
     setShowDeadlineConfirm(false);
-    // Set default deadline to end of month
-    const defaultDate = new Date(year, month - 1, 20, 23, 59);
-    setNewDeadline(defaultDate.toISOString().slice(0, 16));
+    // Set default deadline to 15th of the current month at 23:59
+    const now = new Date();
+    setNewDeadlineDate(new Date(now.getFullYear(), now.getMonth(), 15));
+    setNewDeadlineHour("23");
+    setNewDeadlineMinute("59");
     setShowDeadlinePicker(true);
   };
 
   const handleDeadlineSave = async () => {
-    if (!newDeadline) return;
+    if (!newDeadlineDate) return;
 
     try {
       setDeadlineLoading(true);
-      const deadlineISO = new Date(newDeadline).toISOString();
+      const combined = new Date(newDeadlineDate);
+      combined.setHours(parseInt(newDeadlineHour, 10), parseInt(newDeadlineMinute, 10), 0, 0);
+      const deadlineISO = combined.toISOString();
       const result = await preferencesApi.updateDeadline(year, month, deadlineISO);
       setDeadline(result);
       setShowDeadlinePicker(false);
@@ -668,19 +704,78 @@ export const PreferencesManagement = () => {
                 Choose the deadline for preference submissions for {MONTH_NAMES[month - 1]} {year}.
               </AlertDialogDescription>
             </AlertDialogHeader>
-            <div className="py-4">
-              <Label htmlFor="deadline">Deadline Date & Time</Label>
-              <Input
-                id="deadline"
-                type="datetime-local"
-                value={newDeadline}
-                onChange={(e) => setNewDeadline(e.target.value)}
-                className="mt-2"
-              />
+            <div className="py-4 space-y-4">
+              <div>
+                <Label>Date</Label>
+                <Popover>
+                  <PopoverTrigger asChild>
+                    <Button
+                      variant="outline"
+                      className="w-full justify-start text-left font-normal mt-2"
+                    >
+                      <CalendarIcon className="mr-2 h-4 w-4" />
+                      {newDeadlineDate
+                        ? format(newDeadlineDate, "MMMM d, yyyy", { locale: enUS })
+                        : "Pick a date"}
+                    </Button>
+                  </PopoverTrigger>
+                  <PopoverContent className="w-auto p-0" align="start">
+                    <CalendarWidget
+                      mode="single"
+                      selected={newDeadlineDate}
+                      onSelect={setNewDeadlineDate}
+                      locale={enUS}
+                      initialFocus
+                    />
+                  </PopoverContent>
+                </Popover>
+              </div>
+              <div>
+                <Label>Time</Label>
+                <div className="flex items-center gap-2 mt-2">
+                  <Input
+                    type="text"
+                    inputMode="numeric"
+                    maxLength={2}
+                    placeholder="HH"
+                    value={newDeadlineHour}
+                    onChange={(e) => {
+                      const raw = e.target.value.replace(/\D/g, "");
+                      if (raw === "") { setNewDeadlineHour(""); return; }
+                      const n = Math.min(23, Math.max(0, parseInt(raw, 10)));
+                      setNewDeadlineHour(String(n));
+                    }}
+                    onBlur={() => {
+                      if (newDeadlineHour === "") setNewDeadlineHour("0");
+                      else setNewDeadlineHour(newDeadlineHour.padStart(2, "0"));
+                    }}
+                    className="w-16 text-center"
+                  />
+                  <span className="text-lg font-medium">:</span>
+                  <Input
+                    type="text"
+                    inputMode="numeric"
+                    maxLength={2}
+                    placeholder="MM"
+                    value={newDeadlineMinute}
+                    onChange={(e) => {
+                      const raw = e.target.value.replace(/\D/g, "");
+                      if (raw === "") { setNewDeadlineMinute(""); return; }
+                      const n = Math.min(59, Math.max(0, parseInt(raw, 10)));
+                      setNewDeadlineMinute(String(n));
+                    }}
+                    onBlur={() => {
+                      if (newDeadlineMinute === "") setNewDeadlineMinute("0");
+                      else setNewDeadlineMinute(newDeadlineMinute.padStart(2, "0"));
+                    }}
+                    className="w-16 text-center"
+                  />
+                </div>
+              </div>
             </div>
             <AlertDialogFooter>
               <AlertDialogCancel disabled={deadlineLoading}>Cancel</AlertDialogCancel>
-              <AlertDialogAction onClick={handleDeadlineSave} disabled={deadlineLoading || !newDeadline}>
+              <AlertDialogAction onClick={handleDeadlineSave} disabled={deadlineLoading || !newDeadlineDate}>
                 {deadlineLoading ? "Saving..." : "Save Deadline"}
               </AlertDialogAction>
             </AlertDialogFooter>

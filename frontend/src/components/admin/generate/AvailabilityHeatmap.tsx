@@ -7,6 +7,8 @@ interface AvailabilityHeatmapProps {
   days: AvailabilityDayOverview[];
   onDayClick: (day: number) => void;
   loading?: boolean;
+  /** Days that had solver errors (shown as warning overlay even when availability is OK) */
+  solverErrorDays?: Set<number>;
 }
 
 const WEEKDAY_LABELS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
@@ -14,11 +16,11 @@ const WEEKDAY_LABELS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 const getRiskColor = (risk: RiskLevel): string => {
   switch (risk) {
     case "ok":
-      return "bg-green-100/70 hover:bg-green-100 border-green-200";
+      return "bg-green-50/70 hover:bg-green-100/70 border-green-200";
     case "alert":
-      return "bg-yellow-100 hover:bg-yellow-200 border-yellow-300";
+      return "bg-yellow-50 hover:bg-yellow-100 border-yellow-200";
     case "critical":
-      return "bg-red-100 hover:bg-red-200 border-red-300";
+      return "bg-red-50 hover:bg-red-100 border-red-200";
     default:
       return "bg-gray-50 hover:bg-gray-100 border-gray-200";
   }
@@ -43,6 +45,7 @@ export const AvailabilityHeatmap = ({
   days,
   onDayClick,
   loading = false,
+  solverErrorDays,
 }: AvailabilityHeatmapProps) => {
   // Get number of days in month and first day of week (0 = Sunday, 1 = Monday, etc.)
   const daysInMonth = new Date(year, month, 0).getDate();
@@ -90,20 +93,24 @@ export const AvailabilityHeatmap = ({
           <div className="text-center py-8 text-muted-foreground">
             Loading availability data...
           </div>
+        ) : days.length === 0 ? (
+          <div className="text-center py-8 text-muted-foreground">
+            No availability data for this month.
+          </div>
         ) : (
           <>
             {/* Legend */}
             <div className="flex gap-4 mb-4 text-sm">
               <div className="flex items-center gap-1.5">
-                <div className="w-4 h-4 rounded bg-green-100/70 border border-green-200" />
+                <div className="w-4 h-4 rounded bg-green-50/70 border border-green-200" />
                 <span>OK</span>
               </div>
               <div className="flex items-center gap-1.5">
-                <div className="w-4 h-4 rounded bg-yellow-100 border border-yellow-300" />
+                <div className="w-4 h-4 rounded bg-yellow-50 border border-yellow-200" />
                 <span>Alert</span>
               </div>
               <div className="flex items-center gap-1.5">
-                <div className="w-4 h-4 rounded bg-red-100 border border-red-300" />
+                <div className="w-4 h-4 rounded bg-red-50 border border-red-200" />
                 <span>Critical</span>
               </div>
             </div>
@@ -143,24 +150,35 @@ export const AvailabilityHeatmap = ({
                     const dayData = dayMap.get(day);
                     const risk = dayData?.risk || "ok";
                     const isWeekend = dayIdx >= 5;
+                    const hasSolverError = solverErrorDays?.has(day) ?? false;
+
+                    // If solver found an error on this day, override the color
+                    const effectiveRisk = hasSolverError && risk === "ok" ? "critical" as const : risk;
 
                     return (
                       <button
                         key={day}
                         onClick={() => onDayClick(day)}
                         className={`min-h-[100px] p-2.5 text-left border-r last:border-r-0 transition-colors cursor-pointer ${getRiskColor(
-                          risk,
-                        )} ${isWeekend ? "bg-opacity-70" : ""}`}
+                          effectiveRisk,
+                        )} ${isWeekend ? "bg-opacity-70" : ""} ${hasSolverError ? "ring-2 ring-inset ring-red-400" : ""}`}
                       >
-                        <div
-                          className={`text-lg font-bold ${getRiskTextColor(risk)}`}
-                        >
-                          {day}
+                        <div className="flex items-center gap-1">
+                          <span
+                            className={`text-lg font-bold ${getRiskTextColor(effectiveRisk)}`}
+                          >
+                            {day}
+                          </span>
+                          {hasSolverError && (
+                            <span className="px-1 py-0.5 text-[10px] font-bold bg-red-200 text-red-800 rounded" title="Solver found issues on this day">
+                              !
+                            </span>
+                          )}
                         </div>
                         {dayData && (
                           <div className="mt-2 space-y-1.5">
                             <div className="flex items-center justify-between">
-                              <span className="px-1.5 py-0.5 text-xs font-medium bg-blue-100 text-blue-700 rounded">
+                              <span className="px-1.5 py-0.5 text-xs font-medium bg-teal-100 text-teal-700 rounded">
                                 On-site
                               </span>
                               <span
@@ -171,7 +189,7 @@ export const AvailabilityHeatmap = ({
                               </span>
                             </div>
                             <div className="flex items-center justify-between">
-                              <span className="px-1.5 py-0.5 text-xs font-medium bg-red-100 text-red-700 rounded">
+                              <span className="px-1.5 py-0.5 text-xs font-medium bg-amber-100 text-amber-700 rounded">
                                 On-call
                               </span>
                               <span

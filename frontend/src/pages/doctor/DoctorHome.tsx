@@ -30,18 +30,20 @@ import type {
 // Get time remaining until deadline
 const getTimeRemaining = (
   deadline: string | null
-): { days: number; isPast: boolean } | null => {
+): { days: number; hours: number; minutes: number; isPast: boolean } | null => {
   if (!deadline) return null;
   const now = new Date();
   const deadlineDate = new Date(deadline);
   const total = deadlineDate.getTime() - now.getTime();
 
   if (total <= 0) {
-    return { days: 0, isPast: true };
+    return { days: 0, hours: 0, minutes: 0, isPast: true };
   }
 
-  const days = Math.ceil(total / (1000 * 60 * 60 * 24));
-  return { days, isPast: false };
+  const days = Math.floor(total / (1000 * 60 * 60 * 24));
+  const hours = Math.floor((total % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
+  const minutes = Math.floor((total % (1000 * 60 * 60)) / (1000 * 60));
+  return { days, hours, minutes, isPast: false };
 };
 
 interface WeatherData {
@@ -342,8 +344,8 @@ export const DoctorHome = () => {
             {/* Current Time Card */}
             <Card className="min-h-[100px]">
               <CardContent className="py-4">
-                <h3 className="text-base font-semibold mb-1 flex items-center gap-2">
-                  <Clock className="h-4 w-4 text-blue-600" />
+                <h3 className="text-lg font-semibold mb-1 flex items-center gap-2">
+                  <Clock className="h-5 w-5 text-blue-600" />
                   Current Time
                 </h3>
                 <p className="text-2xl font-bold text-blue-600">
@@ -358,8 +360,8 @@ export const DoctorHome = () => {
             {/* Weather Card */}
             <Card className="min-h-[100px]">
               <CardContent className="py-4">
-                <h3 className="text-base font-semibold mb-1 flex items-center gap-2">
-                  <CloudSun className="h-4 w-4 text-orange-500" />
+                <h3 className="text-lg font-semibold mb-1 flex items-center gap-2">
+                  <CloudSun className="h-5 w-5 text-orange-500" />
                   Weather in Poznan
                 </h3>
                 {weatherLoading ? (
@@ -388,30 +390,36 @@ export const DoctorHome = () => {
             {/* Deadline Card */}
             <Card className="min-h-[100px]">
               <CardContent className="py-4">
-                <h3 className="text-base font-semibold mb-2 flex items-center gap-2">
-                  <Calendar className="h-4 w-4 text-purple-600" />
+                <h3 className="text-lg font-semibold mb-2 flex items-center gap-2">
+                  <Calendar className="h-5 w-5 text-purple-600" />
                   Deadline
                 </h3>
                 {deadlineInfo ? (
                   <>
-                    <p className="text-sm text-gray-700 mb-1">
-                      {deadlineInfo.days} day
-                      {deadlineInfo.days !== 1 ? "s" : ""} remaining
-                    </p>
+                    <div className="flex items-center gap-2 text-primary mb-1">
+                      <span className="font-medium">
+                        <span className="text-lg">{deadlineInfo.days}</span>{" "}
+                        <span className="text-sm">days</span>{" "}
+                        <span className="text-lg">{deadlineInfo.hours}</span>{" "}
+                        <span className="text-sm">hours</span>{" "}
+                        <span className="text-lg">{deadlineInfo.minutes}</span>{" "}
+                        <span className="text-sm">minutes</span>
+                      </span>
+                    </div>
                     {!deadlineInfo.isPast ? (
                       <div className="flex items-center gap-1.5 text-green-600">
-                        <CheckCircle className="h-3.5 w-3.5" />
-                        <span className="text-xs">you still have time!</span>
+                        <CheckCircle className="h-4 w-4" />
+                        <span className="text-sm">you still have time!</span>
                       </div>
                     ) : (
                       <div className="flex items-center gap-1.5 text-red-600">
-                        <AlertCircle className="h-3.5 w-3.5" />
-                        <span className="text-xs">deadline has passed</span>
+                        <AlertCircle className="h-4 w-4" />
+                        <span className="text-sm">deadline has passed</span>
                       </div>
                     )}
                   </>
                 ) : (
-                  <p className="text-sm text-gray-500">No deadline set</p>
+                  <p className="text-base text-gray-500">No deadline set</p>
                 )}
               </CardContent>
             </Card>
@@ -419,28 +427,28 @@ export const DoctorHome = () => {
             {/* Status Card */}
             <Card className="min-h-[100px]">
               <CardContent className="py-4">
-                <h3 className="text-base font-semibold mb-2 flex items-center gap-2">
-                  <ClipboardList className="h-4 w-4 text-indigo-600" />
+                <h3 className="text-lg font-semibold mb-2 flex items-center gap-2">
+                  <ClipboardList className="h-5 w-5 text-indigo-600" />
                   Status
                 </h3>
                 {preferences?.status === "submitted" ? (
                   <>
-                    <p className="text-sm text-gray-700 mb-1">
+                    <p className="text-base text-gray-700 mb-1">
                       your preferences are submitted
                     </p>
                     <div className="flex items-center gap-1.5 text-green-600">
-                      <CheckCircle className="h-3.5 w-3.5" />
-                      <span className="text-xs">all done!</span>
+                      <CheckCircle className="h-4 w-4" />
+                      <span className="text-sm">all done!</span>
                     </div>
                   </>
                 ) : (
                   <>
-                    <p className="text-sm text-gray-700 mb-1">
+                    <p className="text-base text-gray-700 mb-1">
                       your preferences are not submitted
                     </p>
                     <div className="flex items-center gap-1.5 text-red-600">
-                      <AlertCircle className="h-3.5 w-3.5" />
-                      <span className="text-xs">prepare your schedule!</span>
+                      <AlertCircle className="h-4 w-4" />
+                      <span className="text-sm">prepare your schedule!</span>
                     </div>
                   </>
                 )}
@@ -453,11 +461,11 @@ export const DoctorHome = () => {
               onClick={() => navigate("/doctor/preferences")}
             >
               <CardContent className="py-4">
-                <h3 className="text-base font-semibold mb-0.5 flex items-center gap-2">
-                  <Calendar className="h-4 w-4 text-green-600" />
+                <h3 className="text-lg font-semibold mb-0.5 flex items-center gap-2">
+                  <Calendar className="h-5 w-5 text-green-600" />
                   Preferences
                 </h3>
-                <p className="text-xs text-muted-foreground">
+                <p className="text-sm text-muted-foreground">
                   set your preferences
                 </p>
               </CardContent>
@@ -483,6 +491,7 @@ export const DoctorHome = () => {
               title="My schedule"
               onViewAll={() => navigate("/doctor/schedules")}
               doctorNames={doctorNamesMap}
+              variant="personal"
             />
 
             {/* Team Schedule Calendar */}
@@ -499,6 +508,7 @@ export const DoctorHome = () => {
               title="Team schedule"
               onViewAll={() => navigate("/doctor/schedules")}
               doctorNames={doctorNamesMap}
+              variant="team"
             />
           </div>
         </div>

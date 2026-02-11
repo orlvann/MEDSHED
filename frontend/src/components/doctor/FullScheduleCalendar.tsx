@@ -1,6 +1,13 @@
 import { useState } from "react";
 import { ChevronLeft, ChevronRight, ChevronDown } from "lucide-react";
 import { Button } from "../ui/button";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "../ui/select";
 import type { Assignment, Doctor } from "../../types";
 import {
   MONTH_NAMES,
@@ -242,38 +249,26 @@ export const FullScheduleCalendar = ({
         <div className="flex items-center gap-4">
           {/* Doctor Filter (Team view only) */}
           {viewMode === "team-schedule" && (
-            <div className="relative">
-              <select
-                value={highlightedDoctorId ?? ""}
-                onChange={(e) =>
-                  onHighlightChange(e.target.value ? Number(e.target.value) : null)
-                }
-                className="appearance-none border rounded-lg px-3 py-1.5 pr-8 text-sm bg-white cursor-pointer hover:border-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500"
-              >
-                <option value="">Highlight doctor</option>
+            <Select
+              value={highlightedDoctorId?.toString() ?? "all"}
+              onValueChange={(value) =>
+                onHighlightChange(value === "all" ? null : Number(value))
+              }
+            >
+              <SelectTrigger className="w-[200px] h-9">
+                <SelectValue placeholder="Highlight doctor" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">Highlight doctor</SelectItem>
                 {doctors.map((d) => (
-                  <option key={d.id} value={d.id}>
-                    Dr. {d.first_name} {d.last_name}
-                  </option>
+                  <SelectItem key={d.id} value={d.id.toString()}>
+                    {d.first_name} {d.last_name}
+                  </SelectItem>
                 ))}
-              </select>
-              <ChevronDown className="absolute right-2 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-500 pointer-events-none" />
-            </div>
+              </SelectContent>
+            </Select>
           )}
 
-          {/* Legend */}
-          <div className="flex items-center gap-3">
-            <div className="flex items-center gap-1.5">
-              <span className="px-2 py-0.5 text-xs font-medium bg-gray-200 rounded">
-                onDuty
-              </span>
-            </div>
-            <div className="flex items-center gap-1.5">
-              <span className="px-2 py-0.5 text-xs font-medium border border-gray-400 rounded bg-white">
-                onCall
-              </span>
-            </div>
-          </div>
         </div>
       </div>
 
@@ -354,7 +349,7 @@ export const FullScheduleCalendar = ({
                         !isCurrentMonth ? "text-gray-400" : "text-gray-900"
                       } ${
                         todayClass
-                          ? "w-7 h-7 flex items-center justify-center rounded-full bg-blue-500 text-white"
+                          ? "w-7 h-7 flex items-center justify-center rounded-full bg-primary/15 text-primary font-bold"
                           : ""
                       }`}
                     >
@@ -369,16 +364,16 @@ export const FullScheduleCalendar = ({
                           <div
                             className={`text-xs rounded p-1.5 ${
                               myInfo.shiftType === "onsite"
-                                ? "bg-gray-200"
-                                : "border border-gray-400 bg-white"
+                                ? "bg-teal-50 text-teal-800"
+                                : "bg-amber-50 text-amber-800 border border-amber-200"
                             }`}
                           >
                             <div className="font-medium">
-                              {myInfo.shiftType === "onsite" ? "onDuty" : "onCall"}
+                              {myInfo.shiftType === "onsite" ? "On Site" : "On Call"}
                             </div>
                             {myInfo.pairedDoctorName && (
                               <div className="text-gray-600">
-                                w/ {myInfo.pairedDoctorName}
+                                {myInfo.pairedDoctorName}
                               </div>
                             )}
                           </div>
@@ -389,14 +384,14 @@ export const FullScheduleCalendar = ({
                           <>
                             {onsiteAssignment && (
                               <div
-                                className={`text-xs rounded p-1.5 bg-gray-200 ${
+                                className={`text-xs rounded p-1.5 bg-teal-50 text-teal-800 ${
                                   highlightedDoctorId === onsiteAssignment.doctor_id
-                                    ? "ring-2 ring-blue-500"
+                                    ? "ring-2 ring-violet-500"
                                     : ""
                                 }`}
                               >
-                                <div className="font-medium">onDuty</div>
-                                <div className="text-gray-700">
+                                <div className="font-medium">On Site</div>
+                                <div className="text-teal-600">
                                   {doctorNames.get(onsiteAssignment.doctor_id) ||
                                     `Doctor #${onsiteAssignment.doctor_id}`}
                                 </div>
@@ -404,14 +399,14 @@ export const FullScheduleCalendar = ({
                             )}
                             {oncallAssignment && (
                               <div
-                                className={`text-xs rounded p-1.5 border border-gray-400 bg-white ${
+                                className={`text-xs rounded p-1.5 bg-amber-50 text-amber-800 border border-amber-200 ${
                                   highlightedDoctorId === oncallAssignment.doctor_id
-                                    ? "ring-2 ring-blue-500"
+                                    ? "ring-2 ring-violet-500"
                                     : ""
                                 }`}
                               >
-                                <div className="font-medium">onCall</div>
-                                <div className="text-gray-700">
+                                <div className="font-medium">On Call</div>
+                                <div className="text-amber-600">
                                   {doctorNames.get(oncallAssignment.doctor_id) ||
                                     `Doctor #${oncallAssignment.doctor_id}`}
                                 </div>

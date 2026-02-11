@@ -3,11 +3,18 @@ from __future__ import annotations
 
 from typing import Literal, Optional
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, status
 
-from backend.models.schemas import DoctorList, DoctorRole
+from backend.models.schemas import DoctorCreate, DoctorList, DoctorPut, DoctorRead, DoctorRole
+from backend.models.schemas.dto_common import ErrorPayload
 from backend.routers.deps import UserCtx, require_admin
-from backend.services.doctor_service import list_doctors
+from backend.services.doctor_service import (
+    create_doctor,
+    delete_doctor,
+    get_doctor,
+    list_doctors,
+    put_doctor,
+)
 
 router = APIRouter(tags=["doctors"])
 
@@ -39,3 +46,85 @@ def doctors_list(
         search=search,
         is_active=is_active,
     )
+
+
+@router.get(
+    "/api/v1/doctors/{doctor_id}",
+    response_model=DoctorRead,
+    summary="Get a single doctor by ID",
+    responses={
+        404: {
+            "model": ErrorPayload,
+            "description": "Doctor not found",
+        }
+    },
+)
+def doctors_get(
+    doctor_id: int,
+    user: UserCtx = Depends(require_admin),
+):
+    """Get a single doctor by ID."""
+    return get_doctor(doctor_id=doctor_id)
+
+
+@router.post(
+    "/api/v1/doctors",
+    response_model=DoctorRead,
+    status_code=status.HTTP_201_CREATED,
+    summary="Create a new doctor with auto-provisioned user account",
+    responses={
+        409: {
+            "model": ErrorPayload,
+            "description": "Email already in use",
+        }
+    },
+)
+def doctors_create(
+    payload: DoctorCreate,
+    user: UserCtx = Depends(require_admin),
+):
+    """Create a new doctor and linked user account."""
+    return create_doctor(payload=payload)
+
+
+@router.put(
+    "/api/v1/doctors/{doctor_id}",
+    response_model=DoctorRead,
+    summary="Update a doctor (full replace)",
+    responses={
+        404: {
+            "model": ErrorPayload,
+            "description": "Doctor not found",
+        },
+        409: {
+            "model": ErrorPayload,
+            "description": "Email already in use",
+        },
+    },
+)
+def doctors_update(
+    doctor_id: int,
+    payload: DoctorPut,
+    user: UserCtx = Depends(require_admin),
+):
+    """Update a doctor and their linked user account."""
+    return put_doctor(doctor_id=doctor_id, payload=payload)
+
+
+@router.delete(
+    "/api/v1/doctors/{doctor_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Delete a doctor and their linked user account",
+    responses={
+        404: {
+            "model": ErrorPayload,
+            "description": "Doctor not found",
+        }
+    },
+)
+def doctors_delete(
+    doctor_id: int,
+    user: UserCtx = Depends(require_admin),
+):
+    """Delete a doctor and their linked user account."""
+    delete_doctor(doctor_id=doctor_id)

@@ -5,17 +5,28 @@ import { Button } from "../../ui/button";
 import { X, AlertTriangle, Users, Pencil } from "lucide-react";
 import { availabilityApi } from "../../../services/api";
 import { getRiskIssueMessage } from "./riskMessages";
+import { enrichIssueMessage, buildDoctorNameMap } from "./SolverErrorPanel";
 import type {
   AvailabilityDayRead,
+  Doctor,
   DoctorMini,
   RiskLevel,
 } from "../../../types";
+
+export interface SolverDayIssue {
+  code: string;
+  message: string;
+}
 
 interface DayDrilldownModalProps {
   year: number;
   month: number;
   day: number;
   onClose: () => void;
+  /** Solver-reported issues for this day (from the error panel context) */
+  solverIssues?: SolverDayIssue[];
+  /** Full doctor list for resolving names in solver issues */
+  doctors?: Doctor[];
 }
 
 const DoctorList = ({
@@ -59,7 +70,10 @@ export const DayDrilldownModal = ({
   month,
   day,
   onClose,
+  solverIssues,
+  doctors,
 }: DayDrilldownModalProps) => {
+  const doctorNameMap = doctors ? buildDoctorNameMap(doctors) : new Map<number, string>();
   const navigate = useNavigate();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -104,15 +118,19 @@ export const DayDrilldownModal = ({
             <CardTitle className="text-xl">
               {monthName} {day}, {year}
             </CardTitle>
-            {data && (
-              <span
-                className={`inline-block mt-2 px-2 py-1 text-xs font-medium rounded ${getRiskBadgeColor(
-                  data.risk,
-                )}`}
-              >
-                {data.risk.toUpperCase()}
-              </span>
-            )}
+            {data && (() => {
+              const hasSolverIssues = solverIssues && solverIssues.length > 0;
+              const displayRisk = hasSolverIssues && data.risk === "ok" ? "critical" as const : data.risk;
+              return (
+                <span
+                  className={`inline-block mt-2 px-2 py-1 text-xs font-medium rounded ${getRiskBadgeColor(
+                    displayRisk,
+                  )}`}
+                >
+                  {displayRisk.toUpperCase()}
+                </span>
+              );
+            })()}
           </div>
           <Button variant="ghost" size="sm" onClick={onClose}>
             <X className="h-5 w-5" />
@@ -127,6 +145,25 @@ export const DayDrilldownModal = ({
             <div className="text-center py-8 text-red-600">{error}</div>
           ) : data ? (
             <>
+              {/* Solver Issues (from generate attempt) */}
+              {solverIssues && solverIssues.length > 0 && (
+                <div className="mb-4 p-3 rounded-lg bg-red-50 border border-red-200">
+                  <div className="flex items-center gap-2 mb-2">
+                    <AlertTriangle className="h-4 w-4 text-red-600" />
+                    <span className="font-medium text-sm text-red-800">
+                      Solver issues
+                    </span>
+                  </div>
+                  <ul className="space-y-1">
+                    {solverIssues.map((issue, idx) => (
+                      <li key={idx} className="text-sm text-red-700">
+                        {enrichIssueMessage(issue.message, issue.code, doctorNameMap, year, month)}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+
               {/* Risk Issues */}
               {data.risk !== "ok" && data.risk_issues.length > 0 && (
                 <div

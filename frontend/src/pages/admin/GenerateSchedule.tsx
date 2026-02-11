@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import { useNavigate } from "react-router-dom";
 import { AdminHeader } from "../../components/shared/AdminHeader";
 import { Button } from "../../components/ui/button";
@@ -8,13 +8,18 @@ import {
   AvailabilityHeatmap,
   DayDrilldownModal,
   IgnoreGapsModal,
+  SolverErrorPanel,
 } from "../../components/admin/generate";
-import { doctorsApi, availabilityApi, schedulesApi } from "../../services/api";
+import type {
+  SolverErrorData,
+  HeadCommitmentResolution,
+} from "../../components/admin/generate";
+import { doctorsApi, availabilityApi, schedulesApi, preferencesApi } from "../../services/api";
 import type {
   Doctor,
   AvailabilityOverviewRead,
-  AvailabilityDayOverview,
   IgnoredSlot,
+  PreferencesSummaryRead,
 } from "../../types";
 import {
   ArrowLeft,
@@ -25,17 +30,54 @@ import {
   Sparkles,
 } from "lucide-react";
 
+/** Known 409 error codes from the generate endpoint. */
+const SOLVER_ERROR_CODES = new Set([
+  "generate_requires_ignore",
+  "generate_requires_head_resolution",
+  "generate_infeasible",
+]);
+
+/** Extract human-readable message from backend error response. */
+function parseApiError(err: any): {
+  message: string;
+  solverError: SolverErrorData | null;
+} {
+  const detail = err.response?.data?.detail;
+
+  if (typeof detail === "object" && detail?.code && SOLVER_ERROR_CODES.has(detail.code)) {
+    return {
+      message: detail.detail || detail.code,
+      solverError: {
+        code: detail.code,
+        detail: detail.detail || detail.code,
+        context: detail.context || {},
+      },
+    };
+  }
+
+  const message =
+    typeof detail === "string"
+      ? detail
+      : detail?.detail || "An unexpected error occurred";
+
+  return { message, solverError: null };
+}
+
 export const GenerateSchedule = () => {
   const navigate = useNavigate();
 
-  // Period selection
+  // Period selection — default to next month
   const now = new Date();
-  const [year, setYear] = useState(now.getFullYear());
-  const [month, setMonth] = useState(now.getMonth() + 1);
+  const _defaultMonth = now.getMonth() + 2; // getMonth() is 0-based, +2 = next month
+  const [year, setYear] = useState(_defaultMonth > 12 ? now.getFullYear() + 1 : now.getFullYear());
+  const [month, setMonth] = useState(_defaultMonth > 12 ? 1 : _defaultMonth);
 
   // Data
   const [activeDoctors, setActiveDoctors] = useState<Doctor[]>([]);
   const [overview, setOverview] = useState<AvailabilityOverviewRead | null>(
+    null,
+  );
+  const [prefSummary, setPrefSummary] = useState<PreferencesSummaryRead | null>(
     null,
   );
 
@@ -46,6 +88,7 @@ export const GenerateSchedule = () => {
 
   // Error states
   const [error, setError] = useState<string | null>(null);
+  const [solverError, setSolverError] = useState<SolverErrorData | null>(null);
 
   // Modal states
   const [drilldownDay, setDrilldownDay] = useState<number | null>(null);
@@ -68,18 +111,22 @@ export const GenerateSchedule = () => {
     }
   }, []);
 
-  // Fetch availability overview
+  // Fetch availability overview + preferences summary in parallel
   const fetchOverview = useCallback(async () => {
     try {
       setLoadingOverview(true);
       setError(null);
-      const data = await availabilityApi.getOverview(year, month);
+      setSolverError(null);
+      const [data, summary] = await Promise.all([
+        availabilityApi.getOverview(year, month),
+        preferencesApi.getSummary(year, month).catch(() => null),
+      ]);
       setOverview(data);
+      setPrefSummary(summary);
     } catch (err: any) {
       console.error("Failed to load availability:", err);
-      setError(
-        err.response?.data?.detail || "Failed to load availability data",
-      );
+      const { message } = parseApiError(err);
+      setError(message);
     } finally {
       setLoadingOverview(false);
     }
@@ -128,6 +175,57 @@ export const GenerateSchedule = () => {
   const hasCriticalDays = criticalDays.length > 0;
   const hasAlertDays = alertDays.length > 0;
 
+  // Extract days with solver errors to highlight on the heatmap
+  const solverErrorDays = useMemo(() => {
+    if (!solverError?.context) return undefined;
+    const ctx = solverError.context;
+    const days = new Set<number>();
+
+    // Extract from issues_sample (generate_requires_ignore & generate_infeasible)
+    if (Array.isArray(ctx.issues_sample)) {
+      for (const issue of ctx.issues_sample) {
+        if (typeof issue.day === "number") days.add(issue.day);
+      }
+    }
+
+    // Extract from head_commitment_conflicts (generate_requires_head_resolution)
+    if (Array.isArray(ctx.head_commitment_conflicts)) {
+      for (const conflict of ctx.head_commitment_conflicts) {
+        if (typeof conflict.day === "number") days.add(conflict.day);
+      }
+    }
+
+    return days.size > 0 ? days : undefined;
+  }, [solverError]);
+
+  // Extract solver issues for a specific day (for the drilldown modal)
+  const getSolverIssuesForDay = (day: number) => {
+    if (!solverError?.context) return undefined;
+    const ctx = solverError.context;
+    const issues: { code: string; message: string }[] = [];
+
+    if (Array.isArray(ctx.issues_sample)) {
+      for (const issue of ctx.issues_sample) {
+        if (issue.day === day) {
+          issues.push({ code: issue.code, message: issue.message });
+        }
+      }
+    }
+
+    if (Array.isArray(ctx.head_commitment_conflicts)) {
+      for (const conflict of ctx.head_commitment_conflicts) {
+        if (conflict.day === day) {
+          issues.push({
+            code: "head_commitment_conflict",
+            message: `Head doctor conflict for ${conflict.shift_type}`,
+          });
+        }
+      }
+    }
+
+    return issues.length > 0 ? issues : undefined;
+  };
+
   // Handle generate button click
   const handleGenerateClick = () => {
     if (hasCriticalDays) {
@@ -137,34 +235,64 @@ export const GenerateSchedule = () => {
     }
   };
 
-  // Generate schedule
-  const handleGenerate = async (ignoreSlots: IgnoredSlot[]) => {
+  // Generate schedule (core call)
+  const handleGenerate = async (
+    ignoreSlots: IgnoredSlot[],
+    headResolutions: HeadCommitmentResolution[] = [],
+  ) => {
     try {
       setGenerating(true);
       setError(null);
+      setSolverError(null);
 
-      await schedulesApi.generate({
+      const body: any = {
         year,
         month,
         participant_doctor_ids: activeDoctors.map((d) => d.id),
-        ignore_days: [],
         ignore_slots: ignoreSlots,
-      });
+      };
+      if (headResolutions.length > 0) {
+        body.head_commitment_resolutions = headResolutions;
+      }
+
+      await schedulesApi.generate(body);
 
       // Navigate to schedules page on success
       navigate(`/admin/schedules?year=${year}&month=${month}`);
     } catch (err: any) {
       console.error("Failed to generate schedule:", err);
-      setError(err.response?.data?.detail || "Failed to generate schedule");
+      const { message, solverError: se } = parseApiError(err);
+
+      if (se) {
+        setSolverError(se);
+        setError(null);
+      } else {
+        setError(message);
+        setSolverError(null);
+      }
+
       setShowIgnoreModal(false);
     } finally {
       setGenerating(false);
     }
   };
 
-  // Handle accept from ignore modal
+  // Handle accept from availability-based ignore modal
   const handleAcceptIgnore = (ignoreSlots: IgnoredSlot[]) => {
     handleGenerate(ignoreSlots);
+  };
+
+  // Handle retry from solver error panel: ignore
+  const handleRetryWithIgnore = (ignoreSlots: IgnoredSlot[]) => {
+    handleGenerate(ignoreSlots);
+  };
+
+  // Handle retry from solver error panel: head resolution
+  const handleRetryWithHeadResolution = (
+    resolutions: HeadCommitmentResolution[],
+    ignoreSlots: IgnoredSlot[],
+  ) => {
+    handleGenerate(ignoreSlots, resolutions);
   };
 
   const monthName = new Date(year, month - 1, 1).toLocaleString("en-US", {
@@ -216,6 +344,50 @@ export const GenerateSchedule = () => {
 
         {/* Active Doctors List */}
         <ActiveDoctorsList doctors={activeDoctors} loading={loadingDoctors} />
+
+        {/* Preferences Warnings */}
+        {!isLoading && prefSummary && prefSummary.submitted.length === 0 && activeDoctors.length > 0 && (
+          <div className="mb-6 p-4 bg-amber-50 border border-amber-300 rounded-lg flex items-start gap-3">
+            <AlertTriangle className="h-5 w-5 text-amber-600 mt-0.5 flex-shrink-0" />
+            <div>
+              <p className="text-amber-800">
+                <strong>No doctor has submitted preferences for {monthName} {year}.</strong>{" "}
+                All doctors will be treated as fully available. Consider collecting preferences first.
+              </p>
+              <div className="mt-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => navigate(`/admin/preferences?year=${year}&month=${month}`)}
+                >
+                  Go to Preferences
+                </Button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {!isLoading && prefSummary && prefSummary.submitted.length > 0 && prefSummary.missing.length > 0 && (
+          <div className="mb-6 p-4 bg-blue-50 border border-blue-200 rounded-lg flex items-start gap-3">
+            <Info className="h-5 w-5 text-blue-600 mt-0.5 flex-shrink-0" />
+            <div>
+              <p className="text-blue-800">
+                <strong>{prefSummary.missing.length}</strong> of{" "}
+                {prefSummary.submitted.length + prefSummary.missing.length} doctors
+                haven't submitted preferences yet and will be treated as fully available.
+              </p>
+              <div className="mt-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => navigate(`/admin/preferences?year=${year}&month=${month}`)}
+                >
+                  View Preferences
+                </Button>
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* Warning Info Boxes */}
         {!isLoading && hasAlertDays && !hasCriticalDays && (
@@ -283,7 +455,19 @@ export const GenerateSchedule = () => {
           </div>
         )}
 
-        {/* Error display */}
+        {/* Solver error panel (structured 409 response) */}
+        {solverError && (
+          <SolverErrorPanel
+            error={solverError}
+            onRetryWithIgnore={handleRetryWithIgnore}
+            onRetryWithHeadResolution={handleRetryWithHeadResolution}
+            onDismiss={() => setSolverError(null)}
+            generating={generating}
+            doctors={activeDoctors}
+          />
+        )}
+
+        {/* Plain error display */}
         {error && (
           <div className="mb-6 p-4 bg-red-50 border border-red-200 rounded-lg text-red-800">
             {error}
@@ -297,6 +481,7 @@ export const GenerateSchedule = () => {
           days={overview?.days || []}
           onDayClick={setDrilldownDay}
           loading={loadingOverview}
+          solverErrorDays={solverErrorDays}
         />
 
         {/* Generate Button */}
@@ -326,10 +511,12 @@ export const GenerateSchedule = () => {
           month={month}
           day={drilldownDay}
           onClose={() => setDrilldownDay(null)}
+          solverIssues={getSolverIssuesForDay(drilldownDay)}
+          doctors={activeDoctors}
         />
       )}
 
-      {/* Ignore Gaps Modal */}
+      {/* Ignore Gaps Modal (availability-based, before generating) */}
       {showIgnoreModal && (
         <IgnoreGapsModal
           year={year}

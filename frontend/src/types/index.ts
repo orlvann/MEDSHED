@@ -234,6 +234,7 @@ export interface PreferencesDeadlineRead {
 
 // Schedule types
 export type ShiftType = "onsite" | "oncall";
+export type ScheduleStatus = "draft" | "published";
 
 export interface Assignment {
   day: number;
@@ -241,14 +242,64 @@ export interface Assignment {
   doctor_id: number;
 }
 
+// Inputs snapshot (frozen doctor data at generation time)
+export interface DoctorSnapshotRead {
+  role: DoctorRole;
+  is_head: boolean;
+  display_name: string;
+  is_active_at_snapshot: boolean;
+}
+
+export interface InputsSnapshotRead {
+  doctors: Record<number, DoctorSnapshotRead>;
+  preference_version_id_by_doctor: Record<number, number | null>;
+}
+
 export interface SchedulePayload {
   participant_doctor_ids: number[];
   assignments: Assignment[];
-  meta: { labels: string[] };
+  inputs_snapshot: InputsSnapshotRead | null;
+  meta: Record<string, any>;
 }
 
+// Working buffer
+export interface ScheduleWorkingRead {
+  year: number;
+  month: number;
+  exists: boolean;
+  participant_doctor_ids: number[];
+  assignments: Assignment[];
+  meta: Record<string, any>;
+  updated_at: string | null;
+  lock_version: number | null;
+  inputs_snapshot: InputsSnapshotRead | null;
+}
+
+export interface ScheduleWorkingPut {
+  assignments: Assignment[];
+  meta?: Record<string, any> | null;
+  if_match_lock_version?: number | null;
+}
+
+export interface ScheduleWorkingAck {
+  year: number;
+  month: number;
+  updated_at: string;
+  lock_version: number | null;
+}
+
+// Draft view
+export interface ScheduleDraftView {
+  version_id: number | null;
+  checkpoints_count: number;
+  can_undo: boolean;
+  can_redo: boolean;
+  payload: SchedulePayload | null;
+}
+
+// Published view
 export interface SchedulePublishedView {
-  version_id: string | null;
+  version_id: number | null;
   publications_count: number;
   can_undo: boolean;
   can_redo: boolean;
@@ -256,11 +307,154 @@ export interface SchedulePublishedView {
   payload: SchedulePayload | null;
 }
 
+// Period view (main admin endpoint)
+export interface ViewHint {
+  default_mode: "draft" | "published";
+  toggle_available: boolean;
+}
+
+export interface SchedulesPeriodViewRead {
+  year: number;
+  month: number;
+  org_timezone: string;
+  period_status: PeriodStatus;
+  view: ViewHint;
+  working: ScheduleWorkingRead;
+  draft: ScheduleDraftView;
+  published: SchedulePublishedView;
+  diagnostics: DiagnosticsRead | null;
+}
+
+// Published-only read (doctor path)
 export interface SchedulePublishedRead {
   year: number;
   month: number;
   org_timezone: string;
   period_status: PeriodStatus;
+  published: SchedulePublishedView;
+}
+
+// Diagnostics
+export interface DiagnosticsSummaryRead {
+  coverage_missing_required_slots: number;
+  hard_issues_count: number;
+  rest_violations: number;
+  fairness_index: number;
+  preference_fulfillment_pct: number;
+}
+
+export interface DiagnosticsFindingRead {
+  code: string;
+  severity: "critical" | "warning" | "info";
+  context: Record<string, any>;
+}
+
+export interface DoctorCategoriesRead {
+  rest: Record<string, any>;
+  preferred_days: Record<string, any>;
+  fairness: Record<string, any>;
+  totals: Record<string, any>;
+  weekday_patterns: Record<string, any>;
+  friday_free_weekend: Record<string, any>;
+  preferred_partners: Record<string, any>;
+}
+
+export interface SolverComponentsByDocRead {
+  [key: string]: any;
+}
+
+export interface DoctorDiagnosticsRead {
+  doctor_id: number;
+  display_name: string;
+  assigned_onsite_total: number;
+  assigned_oncall_total: number;
+  rest_violations: number;
+  preferred_days_requested: number;
+  preferred_days_missed: number;
+  preference_fulfillment_pct: number;
+  ui_stars: number | null;
+  ui_reasons_codes: string[];
+  categories: DoctorCategoriesRead;
+  solver_components_by_doc: SolverComponentsByDocRead;
+}
+
+export interface DoctorRankingItemRead {
+  doctor_id: number;
+  score: number;
+  reasons_codes: string[];
+}
+
+export interface RankingsRead {
+  unhappy: DoctorRankingItemRead[];
+  happy: DoctorRankingItemRead[];
+}
+
+export interface DiagnosticsAuditItemRead {
+  kind: "generation_ignore" | "publish_acceptance" | "head_commitment_resolution" | null;
+  code: string;
+  day: number | null;
+  shift_type: string | null;
+  justification: string | null;
+  accepted_by_user_id: number | null;
+  accepted_at: string | null;
+}
+
+export interface DiagnosticsDetailsRead {
+  findings: DiagnosticsFindingRead[];
+  per_doctor: DoctorDiagnosticsRead[];
+  rankings: RankingsRead;
+  audit: DiagnosticsAuditItemRead[];
+  solver_components_total: Record<string, any>;
+  working_lock_version: number | null;
+}
+
+export interface DiagnosticsRead {
+  version_id: number | null;
+  computed_at: string;
+  summary: DiagnosticsSummaryRead;
+  details: DiagnosticsDetailsRead | null;
+}
+
+// Checkpoint/Revert/Publish
+export interface ScheduleCheckpointRequest {
+  note?: string | null;
+}
+
+export interface ScheduleCheckpointCreated {
+  year: number;
+  month: number;
+  draft: ScheduleDraftView;
+  diagnostics: DiagnosticsRead;
+}
+
+export interface ScheduleRevertRead {
+  year: number;
+  month: number;
+  draft: ScheduleDraftView;
+  working: ScheduleWorkingRead;
+  diagnostics: DiagnosticsRead;
+}
+
+export interface AcceptedException {
+  code: string;
+  justification?: string | null;
+}
+
+export interface SchedulePublishRequest {
+  force?: boolean;
+  note?: string | null;
+  accepted_exceptions?: AcceptedException[];
+}
+
+export interface SchedulePublishCreated {
+  year: number;
+  month: number;
+  published: SchedulePublishedView;
+}
+
+export interface SchedulePublishedRevertRead {
+  year: number;
+  month: number;
   published: SchedulePublishedView;
 }
 
@@ -323,27 +517,26 @@ export interface AvailabilityDayRead {
 }
 
 // Schedule generation types
+export interface HeadCommitmentResolution {
+  day: number;
+  shift_type: string;
+  chosen_head_id: number;
+}
+
 export interface ScheduleGenerateRequest {
   year: number;
   month: number;
   participant_doctor_ids: number[];
-  ignore_days: number[];
   ignore_slots: IgnoredSlot[];
-}
-
-export interface ScheduleDiagnostics {
-  total_penalty: number;
-  rest_violations: number;
-  fairness_score: number;
-  coverage_gaps: number;
-  preference_fulfillment: number;
+  justification?: string;
+  head_commitment_resolutions?: HeadCommitmentResolution[];
 }
 
 export interface ScheduleGenerateCreated {
-  working: SchedulePayload;
-  draft: {
-    version_id: string;
-    payload: SchedulePayload;
-  };
-  diagnostics: ScheduleDiagnostics;
+  year: number;
+  month: number;
+  status: ScheduleStatus;
+  working: ScheduleWorkingRead;
+  draft: ScheduleDraftView;
+  diagnostics: DiagnosticsRead;
 }

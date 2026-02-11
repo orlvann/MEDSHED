@@ -78,9 +78,8 @@ def create_password_reset_token(
         ).first()
         if existing:
             db.delete(existing)
-            if should_close:
-                db.commit()
-        
+            db.flush()
+
         # Generate new secure token
         token = generate_secure_token()
         

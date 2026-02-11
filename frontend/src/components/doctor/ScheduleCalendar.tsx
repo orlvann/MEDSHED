@@ -87,6 +87,7 @@ interface ScheduleCalendarProps {
   title: string;
   onViewAll?: () => void;
   doctorNames?: Map<number, string>;
+  variant?: "personal" | "team";
 }
 
 export const ScheduleCalendar = ({
@@ -99,6 +100,7 @@ export const ScheduleCalendar = ({
   title,
   onViewAll,
   doctorNames,
+  variant = "personal",
 }: ScheduleCalendarProps) => {
   const weeks = getWeeksInMonth(year, month);
   const [showPicker, setShowPicker] = useState(false);
@@ -136,12 +138,12 @@ export const ScheduleCalendar = ({
     return Array.from(types);
   };
 
-  // Get circle style based on shift type
+  // Get circle style based on shift type (personal mode)
   const getShiftCircleStyle = (shiftType: ShiftType): string => {
     if (shiftType === "onsite") {
-      return "bg-blue-500 text-white";
+      return "bg-teal-500 text-white";
     }
-    return "bg-red-400 text-white";
+    return "bg-amber-400 text-white";
   };
 
   // Format selected date info
@@ -179,16 +181,14 @@ export const ScheduleCalendar = ({
             variant="ghost"
             size="sm"
             onClick={goToPrevMonth}
-            className="h-6 w-6 p-0 hover:bg-blue-50"
-            style={{ color: "#007AFF" }}
+            className="h-6 w-6 p-0 text-primary hover:bg-primary/10"
           >
             <ChevronLeft className="h-4 w-4" />
           </Button>
           <div className="relative">
             <button
               onClick={() => setShowPicker(!showPicker)}
-              className="font-medium hover:underline text-sm"
-              style={{ color: "#007AFF" }}
+              className="font-medium hover:underline text-sm text-primary"
             >
               {MONTH_NAMES[month - 1]} {year}
             </button>
@@ -237,8 +237,7 @@ export const ScheduleCalendar = ({
             variant="ghost"
             size="sm"
             onClick={goToNextMonth}
-            className="h-6 w-6 p-0 hover:bg-blue-50"
-            style={{ color: "#007AFF" }}
+            className="h-6 w-6 p-0 text-primary hover:bg-primary/10"
           >
             <ChevronRight className="h-4 w-4" />
           </Button>
@@ -280,8 +279,33 @@ export const ScheduleCalendar = ({
                       isSelected ? "bg-gray-50 rounded" : ""
                     }`}
                   >
-                    {hasShifts ? (
-                      // Show colored circle with day number
+                    {variant === "team" ? (
+                      // Team mode: plain number with small indicator dots below
+                      <div className="flex flex-col items-center justify-center">
+                        <span
+                          className={`w-6 h-6 flex items-center justify-center text-xs leading-none ${
+                            isTodayDate
+                              ? "rounded-full bg-primary/15 text-primary font-bold"
+                              : "text-gray-700"
+                          }`}
+                        >
+                          {day}
+                        </span>
+                        {hasShifts ? (
+                          <div className="flex items-center gap-1 mt-px">
+                            {shiftTypes.includes("onsite") && (
+                              <span className="w-1.5 h-1.5 rounded-full bg-teal-500" />
+                            )}
+                            {shiftTypes.includes("oncall") && (
+                              <span className="w-1.5 h-1.5 rounded-full bg-amber-500" />
+                            )}
+                          </div>
+                        ) : (
+                          <div className="h-1.5 mt-px" />
+                        )}
+                      </div>
+                    ) : hasShifts ? (
+                      // Personal mode: colored circle with day number
                       <div className="relative">
                         {shiftTypes.length === 1 ? (
                           <span
@@ -292,7 +316,6 @@ export const ScheduleCalendar = ({
                             {day}
                           </span>
                         ) : (
-                          // Multiple shift types - show split or stacked circles
                           <div className="relative w-8 h-8">
                             <span
                               className={`absolute inset-0 w-8 h-8 rounded-full flex items-center justify-center text-base font-medium ${getShiftCircleStyle(
@@ -301,19 +324,18 @@ export const ScheduleCalendar = ({
                             >
                               {day}
                             </span>
-                            <span className="absolute -bottom-0.5 -right-0.5 w-2.5 h-2.5 rounded-full bg-red-400 border border-white" />
+                            <span className="absolute -bottom-0.5 -right-0.5 w-2.5 h-2.5 rounded-full bg-amber-400 border border-white" />
                           </div>
                         )}
                       </div>
                     ) : (
-                      // No shifts - show plain day number
+                      // No shifts - plain day number
                       <span
                         className={`w-8 h-8 flex items-center justify-center text-base ${
                           isTodayDate
-                            ? "rounded-full border-2 font-semibold"
+                            ? "rounded-full bg-primary/15 text-primary font-bold"
                             : "text-gray-700"
                         }`}
-                        style={isTodayDate ? { borderColor: "#007AFF", color: "#007AFF" } : undefined}
                       >
                         {day}
                       </span>
@@ -332,9 +354,16 @@ export const ScheduleCalendar = ({
               {selectedInfo.date}
             </p>
             {selectedInfo.events.map((event, idx) => (
-              <p key={idx} className="text-sm text-gray-600">
-                {event.type === "onsite" ? "on-site" : "on-call"} {event.doctorName}
-              </p>
+              <div key={idx} className="flex items-center gap-1.5 text-sm text-gray-600">
+                <span
+                  className={`w-2 h-2 rounded-full flex-shrink-0 ${
+                    event.type === "onsite" ? "bg-teal-500" : "bg-amber-500"
+                  }`}
+                />
+                <span>
+                  {event.type === "onsite" ? "On Site" : "On Call"} — {event.doctorName}
+                </span>
+              </div>
             ))}
           </div>
         )}

@@ -6,7 +6,14 @@ import { Card, CardContent } from "../../components/ui/card";
 import { Button } from "../../components/ui/button";
 import { FullScheduleCalendar } from "../../components/doctor/FullScheduleCalendar";
 import { ExportPanel } from "../../components/doctor/ExportPanel";
-import { Lock, ChevronDown, ArrowLeft } from "lucide-react";
+import { Lock, ArrowLeft } from "lucide-react";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "../../components/ui/select";
 import {
   doctorPreferencesApi,
   schedulesApi,
@@ -97,7 +104,7 @@ export const DoctorSchedules = () => {
   // Create doctor names map
   const doctorNamesMap = new Map<number, string>();
   doctors.forEach((d) => {
-    doctorNamesMap.set(d.id, `Dr. ${d.first_name} ${d.last_name}`);
+    doctorNamesMap.set(d.id, `${d.first_name} ${d.last_name}`);
   });
 
   // Get user's display name for greeting
@@ -167,19 +174,20 @@ export const DoctorSchedules = () => {
               </div>
 
               {/* View Mode Dropdown */}
-              <div className="relative">
-                <select
-                  value={viewMode}
-                  onChange={(e) =>
-                    setViewMode(e.target.value as ScheduleViewMode)
-                  }
-                  className="appearance-none border rounded-lg px-4 py-2 pr-10 text-sm font-medium bg-white cursor-pointer hover:border-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                >
-                  <option value="my-schedule">My Schedule</option>
-                  <option value="team-schedule">Team Schedule</option>
-                </select>
-                <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-500 pointer-events-none" />
-              </div>
+              <Select
+                value={viewMode}
+                onValueChange={(value) =>
+                  setViewMode(value as ScheduleViewMode)
+                }
+              >
+                <SelectTrigger className="w-[160px] h-9">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="my-schedule">My Schedule</SelectItem>
+                  <SelectItem value="team-schedule">Team Schedule</SelectItem>
+                </SelectContent>
+              </Select>
             </div>
 
             {/* Calendar with controls */}
