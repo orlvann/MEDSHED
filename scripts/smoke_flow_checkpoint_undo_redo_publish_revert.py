@@ -77,10 +77,10 @@ def main() -> None:
 
     print("\n2) SAVE working with messy assignments + duplicate labels (service will normalize)")
     messy_assignments: List[Dict[str, Any]] = [
-        {"day": 2, "shift_type": ShiftType.on_call, "doctor_id": 2},
-        {"day": 1, "shift_type": ShiftType.on_duty, "doctor_id": 1},
-        {"day": 1, "shift_type": ShiftType.on_duty, "doctor_id": 1},  # duplicate
-        {"day": 1, "shift_type": ShiftType.on_call, "doctor_id": 2},
+        {"day": 2, "shift_type": ShiftType.oncall, "doctor_id": 2},
+        {"day": 1, "shift_type": ShiftType.onsite, "doctor_id": 1},
+        {"day": 1, "shift_type": ShiftType.onsite, "doctor_id": 1},  # duplicate
+        {"day": 1, "shift_type": ShiftType.oncall, "doctor_id": 2},
     ]
     w = svc.get_working(year, month)
     assert w.lock_version is not None, "Expected non-null lock_version for OCC"
@@ -125,7 +125,7 @@ def main() -> None:
         month,
         assignments=[
             *[Assignment(**a) for a in typed_expected_sorted],
-            Assignment(day=2, shift_type=ShiftType.on_duty, doctor_id=3),
+            Assignment(day=2, shift_type=ShiftType.onsite, doctor_id=3),
         ],
         meta={"labels": ["draft", "b"]},
         if_match_lock_version=w2.lock_version,
@@ -188,10 +188,10 @@ def main() -> None:
         year,
         month,
         assignments=[
-            Assignment(day=1, shift_type=ShiftType.on_call, doctor_id=2),
-            Assignment(day=1, shift_type=ShiftType.on_duty, doctor_id=1),
-            Assignment(day=2, shift_type=ShiftType.on_call, doctor_id=3),  # changed doctor on on-call
-            Assignment(day=2, shift_type=ShiftType.on_duty, doctor_id=3),
+            Assignment(day=1, shift_type=ShiftType.oncall, doctor_id=2),
+            Assignment(day=1, shift_type=ShiftType.onsite, doctor_id=1),
+            Assignment(day=2, shift_type=ShiftType.oncall, doctor_id=3),  # changed doctor on on-call
+            Assignment(day=2, shift_type=ShiftType.onsite, doctor_id=3),
         ],
         meta={"labels": ["live", "draft"]},
         if_match_lock_version=w3.lock_version,
