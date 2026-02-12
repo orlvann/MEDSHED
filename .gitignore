@@ -76,3 +76,6 @@ dump_full.sql
 
 # === Sensitive data for db seed ===
 data/preferences_excel_raw/
+
+
+/annex/

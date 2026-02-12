@@ -361,4 +361,4 @@ def test_totals_objective_returns_zero_var_when_participants_empty(
     v_tot = objective_builder.attach_totals_objective(cp=cp, x=x, model=model, problem=problem)
 
     assert isinstance(v_tot, cp_model.IntVar)
-    assert v_tot.Proto().domain == [0, 0]
+    assert list(v_tot.Proto().domain) == [0, 0]

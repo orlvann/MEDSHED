@@ -1,0 +1,10 @@
+
+# backend/requirements-dev.in
+
+-r requirements.in
+pytest
+httpx
+black
+ruff
+pre-commit
+pip-tools
