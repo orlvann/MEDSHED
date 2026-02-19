@@ -16,7 +16,7 @@ anyio==4.12.1
     # via
     #   httpx
     #   starlette
-bcrypt==5.0.0
+bcrypt==3.2.2
     # via -r backend/requirements.in
 black==26.1.0
     # via -r backend/requirements-dev.in
@@ -27,7 +27,9 @@ certifi==2026.1.4
     #   httpcore
     #   httpx
 cffi==2.0.0
-    # via cryptography
+    # via
+    #   bcrypt
+    #   cryptography
 cfgv==3.5.0
     # via pre-commit
 click==8.3.1
