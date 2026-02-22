@@ -1,0 +1,23 @@
+# backend/requirements.in - Main dependencies for the backend application
+
+fastapi
+uvicorn
+pydantic
+pydantic-settings
+python-dotenv
+email-validator
+sqlalchemy
+alembic
+
+# Pin OR-Tools + protobuf to avoid CP-SAT segfaults / ABI mismatches
+ortools==9.12.4544
+
+python-jose[cryptography]
+passlib
+bcrypt==3.2.2
+
+# SMS notifications
+twilio
+
+# Background scheduler (deadline reminders)
+apscheduler

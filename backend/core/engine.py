@@ -5,9 +5,10 @@ Adapter for the OR-Tools CP-SAT solver.
 This is the ONLY place where we directly import OR-Tools.
 Everything else in core works with plain Python structures.
 """
+from __future__ import annotations
 
 from datetime import datetime
-from typing import Dict, List, Tuple
+from typing import Any, Dict, List, Tuple, cast
 
 from ortools.sat.python import cp_model
 
@@ -86,7 +87,7 @@ def build_and_solve(model: HardModel) -> SolverSolution:
     # We intentionally do NOT duplicate it here (avoid double validation).
 
     # 1) Create CP-SAT model container.
-    cp = cp_model.CpModel()
+    cp = cast(Any, cp_model.CpModel())
 
     # 2) Create binary decision variables for each allowed (day, shift_type, doctor) slot.
     #    We do NOT create variables for forbidden combinations.

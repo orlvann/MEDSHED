@@ -1,12 +1,13 @@
+````md
 # MEDSCHED Web App
 
-> **Status:** Private repository — **All rights reserved**.
-> Publication is subject to the University’s **right of first publication**.
+> **Status:** Private repository — **All rights reserved**.  
+> Publication is subject to the University’s **right of first publication**.  
 > No public use or redistribution without the MEDSCHED Team’s written permission.
 
 ## Overview
 
-**MEDSCHED** is a web-based application that optimizes medical staff work schedules in Polish hospitals.
+**MEDSCHED** is a web-based application that optimizes medical staff work schedules in Polish hospitals.  
 It focuses on individual preferences, legal compliance, and work-life balance to improve both efficiency and physician satisfaction.
 
 ## Key Features
@@ -21,12 +22,12 @@ It focuses on individual preferences, legal compliance, and work-life balance to
 ## Architecture / Tech Stack
 
 - **Backend:** Python **3.11**, FastAPI, OR-Tools
-- **Frontend:** React, TypeScript _(planned/parallel work)_
+- **Frontend:** React, TypeScript *(planned/parallel work)*
 - **Database:** **SQLite (dev)** + **Alembic** migrations; **PostgreSQL (target in prod)**
 - **Runtime/Infra:** Uvicorn (dev/prod), Azure (deployment target)
 
-> **Python version:** we standardize on **3.11** for stable wheels (e.g., OR-Tools on Linux/WSL/macOS) and fewer dependency surprises.
-> If you try **3.12**, create a fresh venv and run the full test suite first. _(CI will pin 3.11 when added.)_
+> **Python version:** we standardize on **3.11** for stable wheels (e.g., OR-Tools on Linux/WSL/macOS) and fewer dependency surprises.  
+> If you try **3.12**, create a fresh venv and run the full test suite first.
 
 ## Project Team
 
@@ -53,11 +54,11 @@ See **[docs/DEV_STATUS.md](docs/DEV_STATUS.md)** for a living overview of what�
 ```bash
 sudo apt update
 sudo apt install -y python3.11 python3.11-venv python3-pip git
-```
+````
 
 **Windows 11 (WSL2 with Ubuntu):**
 
-- Install **WSL** + **Ubuntu** from Microsoft Store, then use the Linux commands above inside Ubuntu.
+* Install **WSL** + **Ubuntu** from Microsoft Store, then use the Linux commands above inside Ubuntu.
 
 **macOS (Sonoma/Sequoia):**
 
@@ -79,20 +80,36 @@ brew install python@3.11 git
 git clone <YOUR_SSH_OR_HTTPS_URL>.git
 cd <repo-folder>
 
-# 2) Fresh virtual env and runtime deps
+# 2) Create and activate virtual env (required)
 python3.11 -m venv .venv
-source .venv/bin/activate      # zsh/bash both ok on macOS; bash on Linux/WSL
-pip install --upgrade pip
-pip install -r requirements.txt
+source .venv/bin/activate
 
-# 3) Run the API (dev)
+# IMPORTANT: verify you are using the venv interpreter
+which python
+# expected: .../<repo-folder>/.venv/bin/python
+
+# 3) Install pinned lockfile (stable environment for everyone)
+python -m pip install --upgrade pip
+python -m pip install -r backend/requirements-dev.txt
+
+# Optional sanity check for broken deps
+python -m pip check
+
+# 4) Run the API (dev)
 PYTHONPATH=. uvicorn backend.asgi:app --reload
 
-# OR For Windows in wsl
-PYTHONPATH=. uvicorn backend.asgi:app --host 0.0.0.0 --port 8000 --reload
+# WSL only (expose to Windows host):
+# PYTHONPATH=. uvicorn backend.asgi:app --host 0.0.0.0 --port 8000 --reload
 
-# 4) Open Swagger at:
+# 5) Open Swagger:
 # http://127.0.0.1:8000/docs
+```
+
+### Smoke test (recommended)
+
+```bash
+source .venv/bin/activate
+pytest
 ```
 
 ---
@@ -109,8 +126,6 @@ make db-upgrade   # create/upgrade schema
 make db-seed      # optional: sample users/doctors
 make app          # run API and test at /docs
 ```
-
-For more DB helpers, see **Makefile shortcuts** below.
 
 > For production, `DATABASE_URL` will point to **PostgreSQL** (e.g., in Azure App Settings). **Alembic migrations are shared.**
 
@@ -134,9 +149,11 @@ make db-dump-full  # schema + data to dump_full.sql
 ## API exploration (without frontend)
 
 1. Start the backend (`make app` or the Quickstart command).
-2. Open **Swagger UI**: `http://127.0.0.1:8000/docs`
-   Or **ReDoc**: `http://127.0.0.1:8000/redoc`
-   Raw OpenAPI JSON: `http://127.0.0.1:8000/openapi.json`
+2. Open:
+
+   * Swagger UI: `http://127.0.0.1:8000/docs`
+   * ReDoc: `http://127.0.0.1:8000/redoc`
+   * OpenAPI JSON: `http://127.0.0.1:8000/openapi.json`
 3. Test endpoints directly in Swagger (**Try it out → Execute**).
 
 **Base URL (dev):** `http://127.0.0.1:8000`
@@ -148,27 +165,20 @@ Example (curl):
 curl http://127.0.0.1:8000/api/v1/diagnostics/health
 ```
 
-Example (fetch in FE):
-
-```ts
-const res = await fetch("http://127.0.0.1:8000/api/v1/diagnostics/health");
-const data = await res.json();
-```
-
-> Auth is still mocked in routers, but the **DB layer is ready**. The Auth team can start replacing mocks with a DB-backed `auth_service`.
-
 ---
 
 ## CORS (dev)
 
-If the frontend runs on a different origin (e.g., Vite on `http://127.0.0.1:5173`), enable CORS in **`backend/asgi.py`** (the file that **imports and builds** the `app`):
+If the frontend runs on a different origin (e.g., Vite on `http://127.0.0.1:5173`), enable CORS in **`backend/asgi.py`**:
 
 ```python
 # backend/asgi.py
 import os
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from .app import create_app  # your factory
+
+from .app import create_app  # app factory
 
 app: FastAPI = create_app()
 
@@ -190,58 +200,46 @@ if origins:
 
 ## Configuration
 
-### 2) Uprość sekcję „Configuration”
-
-Zastąp całą obecną sekcję „Configuration” tym krótkim wariantem:
-
-`````md
-## Configuration
-
 No local config is required for dev: Alembic and the app fall back to SQLite at `backend/db/sqlite.db`.
 If you want to use another DB (e.g., Postgres), set:
 
-````dotenv
+```dotenv
 DATABASE_URL=postgresql+psycopg://USER:PASS@HOST:5432/DBNAME
+```
 
 **Optional variables (not required for local dev):**
-- `ALLOWED_ORIGINS` — enable CORS in dev (comma-separated), e.g. `http://127.0.0.1:5173`.
-- `JWT_SECRET` — dev-only secret for auth (will be used when auth is wired).
 
+* `ALLOWED_ORIGINS` — enable CORS in dev (comma-separated), e.g. `http://127.0.0.1:5173`
+* `JWT_SECRET` — dev-only secret for auth (will be used when auth is wired)
 
 ---
 
 ## API Versioning
 
-All public routes live under **`/api/v1`**:
-
-```python
-API_V1_PREFIX = "/api/v1"  # Version now → painless /api/v2 later without breaking clients
-````
-`````
-
-````
-
+All public routes live under **`/api/v1`**.
 When the contract evolves, add `/api/v2` alongside `/api/v1` and migrate gradually.
 
 ---
 
 ## Project Structure (backend)
 
-```
+```text
 backend/
-  app.py           # assemble FastAPI; register routers under /api/v1; expose create_app()
-  asgi.py          # imports create_app(), builds FastAPI app, attaches dev CORS
-  routers/         # API surface (APIRouter modules, thin)
-  services/        # application layer (orchestrates core/DB)
-  core/            # solver & domain logic (framework-agnostic, OR-Tools)
-  models/          # ORM (SQLAlchemy) + Pydantic schemas
-  db/              # db engine/session/dependencies
-  utils/           # helpers (validators, loaders, exporters, ...)
-tests/             # pytest tests (smoke/unit)
-.vscode/           # editor debug/tasks config (optional)
-.env.example       # sample environment variables
-requirements.txt   # runtime deps (short, only top-level libs)
-requirements-dev.txt # dev tools (tests, lint, format, hooks)
+  app.py                      # assemble FastAPI; register routers under /api/v1; expose create_app()
+  asgi.py                     # imports create_app(), builds FastAPI app, attaches dev CORS
+  routers/                    # API surface (APIRouter modules, thin)
+  services/                   # application layer (orchestrates core/DB)
+  core/                       # solver & domain logic (framework-agnostic, OR-Tools)
+  models/                     # ORM (SQLAlchemy) + Pydantic schemas
+  db/                         # db engine/session/dependencies
+  utils/                      # helpers (validators, loaders, exporters, ...)
+  requirements.in             # top-level runtime deps (edited by humans)
+  requirements.txt            # pinned runtime lockfile (autogenerated)
+  requirements-dev.in         # runtime + dev tools (edited by humans)
+  requirements-dev.txt        # pinned dev lockfile (autogenerated)
+tests/                        # pytest tests (smoke/unit)
+.vscode/                      # editor debug/tasks config (optional)
+.env.example                  # sample environment variables
 ```
 
 ---
@@ -257,12 +255,8 @@ PYTHONPATH=. uvicorn backend.asgi:app --reload
 
 **VS Code / Cursor:**
 
-- `.vscode/launch.json` runs `uvicorn backend.asgi:app --reload`
-- Uses your selected interpreter `.venv/bin/python`
-
-**Tasks (optional):**
-
-- `.vscode/tasks.json` → Terminal → _Run Task_ → **Run API (uvicorn)**
+* Ensure interpreter is `.venv/bin/python` (**Python: Select Interpreter**)
+* `.vscode/launch.json` runs `uvicorn backend.asgi:app --reload`
 
 ---
 
@@ -277,61 +271,103 @@ pytest
 
 ---
 
-## Dependencies
+## Dependencies (reproducible installs)
 
-We keep `requirements.txt` **short** (only top-level libraries). Pip resolves sub-dependencies.
+We use **pip-tools** to keep environments reproducible across the team.
 
-**Runtime (`requirements.txt`):**
+### Files (important)
 
-- `fastapi` — web framework
-- `uvicorn[standard]` — ASGI server; `[standard]` pulls faster libs (**uvloop**, **httptools**) on Linux/WSL/macOS
-- `python-dotenv` — loads `.env` config
-- `pydantic[email]` — request/response models **+ email validation** (`EmailStr`)
-- `ortools` — CP-SAT solver for scheduling
-- _(optional later)_ `pandas`, `numpy` for reports/analytics
+* `backend/requirements.in` — runtime top-level deps (**human-edited**)
+* `backend/requirements.txt` — runtime lockfile (**autogenerated**, pinned versions)
+* `backend/requirements-dev.in` — dev top-level deps (**human-edited**; includes `-r requirements.in`)
+* `backend/requirements-dev.txt` — dev lockfile (**autogenerated**, pinned versions)
 
-**Dev tools (`requirements-dev.txt`):**
+> **Rule:** never edit `backend/requirements*.txt` manually.
+> Always change `.in` and regenerate `.txt`.
 
-- `pytest` — tests
-- `ruff` — fast linter
-- `black` — code formatter
-- `pre-commit` — runs format/lint **before each git commit** (team consistency)
-
-Enable pre-commit hooks (optional but recommended):
+### Install (recommended for dev)
 
 ```bash
-pip install -r requirements-dev.txt
+python -m pip install -r backend/requirements-dev.txt
+```
+
+### Regenerate lockfiles (only when `.in` changes)
+
+> Typically done by one person in a PR. Commit both updated `.txt` files.
+
+```bash
+python -m piptools compile --output-file=backend/requirements.txt backend/requirements.in
+python -m piptools compile --output-file=backend/requirements-dev.txt backend/requirements-dev.in
+```
+
+### Why `.in` and `.txt` look different?
+
+* `.in` lists only packages we chose directly (top-level).
+* `.txt` contains **all resolved dependencies** (including transitive ones) with **exact pinned versions**.
+
+### OR-Tools / protobuf stability
+
+We pin OR-Tools + protobuf to a known stable combination.
+
+Pinned by lockfiles (example):
+
+* `ortools==9.12.4544`
+* `protobuf==5.29.6`
+
+If you see crashes / import problems again:
+
+1. delete and recreate `.venv`
+2. reinstall from `backend/requirements-dev.txt`
+3. run `pytest`
+
+---
+
+## Pre-commit (recommended)
+
+```bash
+source .venv/bin/activate
 pre-commit install
 pre-commit run --all-files   # one-time run across repo
 ```
 
 ---
 
-## Using Swagger / ReDoc (quick guide)
-
-- Start the backend (`make app`).
-- Open **Swagger UI**: **[http://127.0.0.1:8000/docs](http://127.0.0.1:8000/docs)**
-- Or **ReDoc**: **[http://127.0.0.1:8000/redoc](http://127.0.0.1:8000/redoc)**
-- Raw OpenAPI spec: **[http://127.0.0.1:8000/openapi.json](http://127.0.0.1:8000/openapi.json)**
-  (Optional) snapshot to file:
-  `curl http://127.0.0.1:8000/openapi.json -o docs/openapi-v1.json`
-
----
-
-## Git Workflow (short)
-
-- Branch per feature: `feat/<name>`
-- Small, frequent commits with clear messages
-- PR → review → merge
-
----
-
 ## Troubleshooting
 
-- **Debugger can’t find Python** → ensure interpreter is `.venv/bin/python`; recreate venv if needed.
-- **Imports like `backend.*` fail** → run from repo root; `PYTHONPATH=.` is already set in `launch.json` / `pytest.ini`.
-- **OR-Tools won’t install** → use Python **3.11**. If needed on Linux/macOS:
-  `pip install --only-binary=:all: ortools`.
+### Pylance shows “Import fastapi could not be resolved”
+
+VS Code is using the wrong interpreter.
+
+1. `Ctrl+Shift+P` → **Python: Select Interpreter**
+2. Pick: `<repo>/.venv/bin/python`
+3. **Reload Window**
+
+### You installed packages but they are “somewhere else”
+
+Check:
+
+```bash
+which python
+python -m pip show fastapi
+```
+
+Both should point to `.venv`.
+
+### Imports like `backend.*` fail
+
+Run from repo root and use:
+
+```bash
+PYTHONPATH=. uvicorn backend.asgi:app --reload
+```
+
+### OR-Tools won’t install
+
+Use Python **3.11**. On Linux/macOS you can try:
+
+```bash
+python -m pip install --only-binary=:all: ortools
+```
 
 ---
 
@@ -340,4 +376,7 @@ pre-commit run --all-files   # one-time run across repo
 This is an **educational project** under a **private** repository.
 The University retains a **right of first publication** for the diploma thesis.
 No license is granted for public use or redistribution without the MEDSCHED Team’s written permission.
-````
+
+```
+::contentReference[oaicite:0]{index=0}
+```
