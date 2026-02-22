@@ -439,7 +439,7 @@ export const FullScheduleCalendar = ({
                                     className={`w-full rounded-sm py-0.5 text-center text-[8px] font-medium leading-tight bg-teal-100 text-teal-700 truncate px-0.5 ${
                                       highlightedDoctorId ===
                                       onsiteAssignment.doctor_id
-                                        ? "ring-1 ring-violet-500"
+                                        ? "relative z-10 ring-1 ring-violet-500"
                                         : ""
                                     }`}
                                   >
@@ -451,7 +451,7 @@ export const FullScheduleCalendar = ({
                                     className={`w-full rounded-sm py-0.5 text-center text-[8px] font-medium leading-tight bg-amber-100 text-amber-700 truncate px-0.5 ${
                                       highlightedDoctorId ===
                                       oncallAssignment.doctor_id
-                                        ? "ring-1 ring-violet-500"
+                                        ? "relative z-10 ring-1 ring-violet-500"
                                         : ""
                                     }`}
                                   >
@@ -492,7 +492,7 @@ export const FullScheduleCalendar = ({
                                     className={`text-xs rounded p-1.5 bg-teal-50 text-teal-800 ${
                                       highlightedDoctorId ===
                                       onsiteAssignment.doctor_id
-                                        ? "ring-2 ring-violet-500"
+                                        ? "relative z-10 ring-2 ring-violet-500"
                                         : ""
                                     }`}
                                   >
@@ -510,7 +510,7 @@ export const FullScheduleCalendar = ({
                                     className={`text-xs rounded p-1.5 bg-amber-50 text-amber-800 border border-amber-200 ${
                                       highlightedDoctorId ===
                                       oncallAssignment.doctor_id
-                                        ? "ring-2 ring-violet-500"
+                                        ? "relative z-10 ring-2 ring-violet-500"
                                         : ""
                                     }`}
                                   >

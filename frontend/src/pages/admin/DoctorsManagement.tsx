@@ -48,6 +48,13 @@ import {
   DialogTitle,
   DialogDescription,
 } from "../../components/ui/dialog";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "../../components/ui/select";
 import axios from "axios";
 
 const API_BASE_URL =
@@ -323,69 +330,59 @@ export const DoctorsManagement = () => {
                 </SheetHeader>
                 <div className="space-y-4">
                   <div>
-                    <Label htmlFor="m-role">Doctor Role</Label>
-                    <select
-                      id="m-role"
-                      value={roleFilter}
-                      onChange={(e) => setRoleFilter(e.target.value)}
-                      className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
-                    >
-                      <option value="all">All Roles</option>
-                      <option value="specialist">Specialist</option>
-                      <option value="resident">Resident</option>
-                    </select>
+                    <Label>Doctor Role</Label>
+                    <Select value={roleFilter} onValueChange={setRoleFilter}>
+                      <SelectTrigger><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="all">All Roles</SelectItem>
+                        <SelectItem value="specialist">Specialist</SelectItem>
+                        <SelectItem value="resident">Resident</SelectItem>
+                      </SelectContent>
+                    </Select>
                   </div>
                   <div>
-                    <Label htmlFor="m-active">Scheduling Status</Label>
-                    <select
-                      id="m-active"
-                      value={activeFilter}
-                      onChange={(e) => setActiveFilter(e.target.value as any)}
-                      className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
-                    >
-                      <option value="all">All</option>
-                      <option value="true">Active</option>
-                      <option value="false">Inactive</option>
-                    </select>
+                    <Label>Scheduling Status</Label>
+                    <Select value={activeFilter} onValueChange={(v) => setActiveFilter(v as any)}>
+                      <SelectTrigger><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="all">All</SelectItem>
+                        <SelectItem value="true">Active</SelectItem>
+                        <SelectItem value="false">Inactive</SelectItem>
+                      </SelectContent>
+                    </Select>
                   </div>
                   <div>
-                    <Label htmlFor="m-userRole">User Role</Label>
-                    <select
-                      id="m-userRole"
-                      value={userRoleFilter}
-                      onChange={(e) => setUserRoleFilter(e.target.value)}
-                      className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
-                    >
-                      <option value="all">All User Roles</option>
-                      <option value="doctor">Doctor</option>
-                      <option value="doctor_admin">Doctor Admin</option>
-                    </select>
+                    <Label>User Role</Label>
+                    <Select value={userRoleFilter} onValueChange={setUserRoleFilter}>
+                      <SelectTrigger><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="all">All User Roles</SelectItem>
+                        <SelectItem value="doctor">Doctor</SelectItem>
+                        <SelectItem value="doctor_admin">Doctor Admin</SelectItem>
+                      </SelectContent>
+                    </Select>
                   </div>
                   <div>
-                    <Label htmlFor="m-userActive">Login Status</Label>
-                    <select
-                      id="m-userActive"
-                      value={userActiveFilter}
-                      onChange={(e) => setUserActiveFilter(e.target.value)}
-                      className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
-                    >
-                      <option value="all">All</option>
-                      <option value="true">Can Login</option>
-                      <option value="false">Cannot Login</option>
-                    </select>
+                    <Label>Login Status</Label>
+                    <Select value={userActiveFilter} onValueChange={setUserActiveFilter}>
+                      <SelectTrigger><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="all">All</SelectItem>
+                        <SelectItem value="true">Can Login</SelectItem>
+                        <SelectItem value="false">Cannot Login</SelectItem>
+                      </SelectContent>
+                    </Select>
                   </div>
                   <div>
-                    <Label htmlFor="m-isHead">Head of Department</Label>
-                    <select
-                      id="m-isHead"
-                      value={isHeadFilter}
-                      onChange={(e) => setIsHeadFilter(e.target.value)}
-                      className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
-                    >
-                      <option value="all">All</option>
-                      <option value="true">Yes</option>
-                      <option value="false">No</option>
-                    </select>
+                    <Label>Head of Department</Label>
+                    <Select value={isHeadFilter} onValueChange={setIsHeadFilter}>
+                      <SelectTrigger><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="all">All</SelectItem>
+                        <SelectItem value="true">Yes</SelectItem>
+                        <SelectItem value="false">No</SelectItem>
+                      </SelectContent>
+                    </Select>
                   </div>
                   {activeFilterCount > 0 && (
                     <Button
@@ -425,71 +422,61 @@ export const DoctorsManagement = () => {
                   </div>
                 </div>
                 <div>
-                  <Label htmlFor="role">Doctor Role</Label>
-                  <select
-                    id="role"
-                    value={roleFilter}
-                    onChange={(e) => setRoleFilter(e.target.value)}
-                    className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
-                  >
-                    <option value="all">All Roles</option>
-                    <option value="specialist">Specialist</option>
-                    <option value="resident">Resident</option>
-                  </select>
+                  <Label>Doctor Role</Label>
+                  <Select value={roleFilter} onValueChange={setRoleFilter}>
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">All Roles</SelectItem>
+                      <SelectItem value="specialist">Specialist</SelectItem>
+                      <SelectItem value="resident">Resident</SelectItem>
+                    </SelectContent>
+                  </Select>
                 </div>
                 <div>
-                  <Label htmlFor="active">Scheduling Status</Label>
-                  <select
-                    id="active"
-                    value={activeFilter}
-                    onChange={(e) => setActiveFilter(e.target.value as any)}
-                    className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
-                  >
-                    <option value="all">All</option>
-                    <option value="true">Active</option>
-                    <option value="false">Inactive</option>
-                  </select>
+                  <Label>Scheduling Status</Label>
+                  <Select value={activeFilter} onValueChange={(v) => setActiveFilter(v as any)}>
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">All</SelectItem>
+                      <SelectItem value="true">Active</SelectItem>
+                      <SelectItem value="false">Inactive</SelectItem>
+                    </SelectContent>
+                  </Select>
                 </div>
               </div>
               <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                 <div>
-                  <Label htmlFor="userRole">User Role</Label>
-                  <select
-                    id="userRole"
-                    value={userRoleFilter}
-                    onChange={(e) => setUserRoleFilter(e.target.value)}
-                    className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
-                  >
-                    <option value="all">All User Roles</option>
-                    <option value="doctor">Doctor</option>
-                    <option value="doctor_admin">Doctor Admin</option>
-                  </select>
+                  <Label>User Role</Label>
+                  <Select value={userRoleFilter} onValueChange={setUserRoleFilter}>
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">All User Roles</SelectItem>
+                      <SelectItem value="doctor">Doctor</SelectItem>
+                      <SelectItem value="doctor_admin">Doctor Admin</SelectItem>
+                    </SelectContent>
+                  </Select>
                 </div>
                 <div>
-                  <Label htmlFor="userActive">Login Status</Label>
-                  <select
-                    id="userActive"
-                    value={userActiveFilter}
-                    onChange={(e) => setUserActiveFilter(e.target.value)}
-                    className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
-                  >
-                    <option value="all">All</option>
-                    <option value="true">Can Login</option>
-                    <option value="false">Cannot Login</option>
-                  </select>
+                  <Label>Login Status</Label>
+                  <Select value={userActiveFilter} onValueChange={setUserActiveFilter}>
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">All</SelectItem>
+                      <SelectItem value="true">Can Login</SelectItem>
+                      <SelectItem value="false">Cannot Login</SelectItem>
+                    </SelectContent>
+                  </Select>
                 </div>
                 <div>
-                  <Label htmlFor="isHead">Head of Department</Label>
-                  <select
-                    id="isHead"
-                    value={isHeadFilter}
-                    onChange={(e) => setIsHeadFilter(e.target.value)}
-                    className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
-                  >
-                    <option value="all">All</option>
-                    <option value="true">Yes</option>
-                    <option value="false">No</option>
-                  </select>
+                  <Label>Head of Department</Label>
+                  <Select value={isHeadFilter} onValueChange={setIsHeadFilter}>
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">All</SelectItem>
+                      <SelectItem value="true">Yes</SelectItem>
+                      <SelectItem value="false">No</SelectItem>
+                    </SelectContent>
+                  </Select>
                 </div>
               </div>
             </CardContent>
@@ -738,18 +725,24 @@ export const DoctorsManagement = () => {
                 </div>
                 <div className="grid grid-cols-2 gap-3">
                   <div>
-                    <Label htmlFor="m-role" className="text-xs">Doctor Role *</Label>
-                    <select id="m-role" value={formData.role} onChange={(e) => setFormData({ ...formData, role: e.target.value as DoctorRole })} className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1.5 text-sm" required>
-                      <option value="resident">Resident</option>
-                      <option value="specialist">Specialist</option>
-                    </select>
+                    <Label className="text-xs">Doctor Role *</Label>
+                    <Select value={formData.role} onValueChange={(v) => setFormData({ ...formData, role: v as DoctorRole })}>
+                      <SelectTrigger className="h-9"><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="resident">Resident</SelectItem>
+                        <SelectItem value="specialist">Specialist</SelectItem>
+                      </SelectContent>
+                    </Select>
                   </div>
                   <div>
-                    <Label htmlFor="m-user_role" className="text-xs">User Role *</Label>
-                    <select id="m-user_role" value={(formData as any).user_role || "doctor"} onChange={(e) => setFormData({ ...formData, user_role: e.target.value as any } as any)} className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1.5 text-sm" required={!editingDoctor}>
-                      <option value="doctor">Doctor</option>
-                      <option value="doctor_admin">Doctor Admin</option>
-                    </select>
+                    <Label className="text-xs">User Role *</Label>
+                    <Select value={(formData as any).user_role || "doctor"} onValueChange={(v) => setFormData({ ...formData, user_role: v as any } as any)}>
+                      <SelectTrigger className="h-9"><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="doctor">Doctor</SelectItem>
+                        <SelectItem value="doctor_admin">Doctor Admin</SelectItem>
+                      </SelectContent>
+                    </Select>
                   </div>
                 </div>
                 <div className="space-y-2 border-t pt-2.5">
@@ -809,18 +802,24 @@ export const DoctorsManagement = () => {
                   <Input id="email" type="email" value={formData.email || ""} onChange={(e) => setFormData({ ...formData, email: e.target.value })} required />
                 </div>
                 <div>
-                  <Label htmlFor="role">Doctor Role *</Label>
-                  <select id="role" value={formData.role} onChange={(e) => setFormData({ ...formData, role: e.target.value as DoctorRole })} className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm" required>
-                    <option value="resident">Resident</option>
-                    <option value="specialist">Specialist</option>
-                  </select>
+                  <Label>Doctor Role *</Label>
+                  <Select value={formData.role} onValueChange={(v) => setFormData({ ...formData, role: v as DoctorRole })}>
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="resident">Resident</SelectItem>
+                      <SelectItem value="specialist">Specialist</SelectItem>
+                    </SelectContent>
+                  </Select>
                 </div>
                 <div>
-                  <Label htmlFor="user_role">User Role *</Label>
-                  <select id="user_role" value={(formData as any).user_role || "doctor"} onChange={(e) => setFormData({ ...formData, user_role: e.target.value as any } as any)} className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm" required={!editingDoctor}>
-                    <option value="doctor">Doctor</option>
-                    <option value="doctor_admin">Doctor Admin</option>
-                  </select>
+                  <Label>User Role *</Label>
+                  <Select value={(formData as any).user_role || "doctor"} onValueChange={(v) => setFormData({ ...formData, user_role: v as any } as any)}>
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="doctor">Doctor</SelectItem>
+                      <SelectItem value="doctor_admin">Doctor Admin</SelectItem>
+                    </SelectContent>
+                  </Select>
                   <p className="text-xs text-muted-foreground mt-1">
                     Doctor: can view schedules. Doctor Admin: can also manage preferences.
                   </p>

@@ -200,7 +200,7 @@ export const SetPassword = () => {
                   type={showPassword ? "text" : "password"}
                   placeholder="Enter your new password"
                   value={newPassword}
-                  onChange={(e) => setNewPassword(e.target.value)}
+                  onChange={(e) => { setNewPassword(e.target.value); if (error) setError(""); }}
                   required
                   disabled={loading}
                   className="pr-10"
@@ -232,7 +232,7 @@ export const SetPassword = () => {
                   type={showConfirmPassword ? "text" : "password"}
                   placeholder="Confirm your password"
                   value={confirmPassword}
-                  onChange={(e) => setConfirmPassword(e.target.value)}
+                  onChange={(e) => { setConfirmPassword(e.target.value); if (error) setError(""); }}
                   required
                   disabled={loading}
                   className="pr-10"

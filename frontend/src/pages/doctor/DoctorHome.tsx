@@ -683,7 +683,7 @@ export const DoctorHome = () => {
               selectedDate={teamSelectedDate}
               onDateSelect={setTeamSelectedDate}
               title="Team schedule"
-              onViewAll={() => navigate("/doctor/schedules")}
+              onViewAll={() => navigate("/doctor/schedules?view=team-schedule")}
               doctorNames={doctorNamesMap}
               variant="team"
             />

@@ -63,6 +63,13 @@ import {
   SheetTitle,
   SheetDescription,
 } from "../../components/ui/sheet";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "../../components/ui/select";
 
 export const PreferencesManagement = () => {
   const navigate = useNavigate();
@@ -581,30 +588,26 @@ export const PreferencesManagement = () => {
                 </SheetHeader>
                 <div className="space-y-4">
                   <div>
-                    <Label htmlFor="m-status">Status</Label>
-                    <select
-                      id="m-status"
-                      value={statusFilter}
-                      onChange={(e) => setStatusFilter(e.target.value as any)}
-                      className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
-                    >
-                      <option value="all">All</option>
-                      <option value="submitted">Submitted</option>
-                      <option value="missing">Missing</option>
-                    </select>
+                    <Label>Status</Label>
+                    <Select value={statusFilter} onValueChange={(v) => setStatusFilter(v as any)}>
+                      <SelectTrigger><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="all">All</SelectItem>
+                        <SelectItem value="submitted">Submitted</SelectItem>
+                        <SelectItem value="missing">Missing</SelectItem>
+                      </SelectContent>
+                    </Select>
                   </div>
                   <div>
-                    <Label htmlFor="m-role">Role</Label>
-                    <select
-                      id="m-role"
-                      value={roleFilter}
-                      onChange={(e) => setRoleFilter(e.target.value as any)}
-                      className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
-                    >
-                      <option value="all">All</option>
-                      <option value="specialist">Specialist</option>
-                      <option value="resident">Resident</option>
-                    </select>
+                    <Label>Role</Label>
+                    <Select value={roleFilter} onValueChange={(v) => setRoleFilter(v as any)}>
+                      <SelectTrigger><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="all">All</SelectItem>
+                        <SelectItem value="specialist">Specialist</SelectItem>
+                        <SelectItem value="resident">Resident</SelectItem>
+                      </SelectContent>
+                    </Select>
                   </div>
                   {activeFilterCount > 0 && (
                     <Button
@@ -638,27 +641,25 @@ export const PreferencesManagement = () => {
                 </div>
                 <div className="flex items-center space-x-2">
                   <Label>Status:</Label>
-                  <select
-                    value={statusFilter}
-                    onChange={(e) => setStatusFilter(e.target.value as any)}
-                    className="flex h-10 rounded-md border border-input bg-background px-3 py-2 text-sm"
-                  >
-                    <option value="all">All</option>
-                    <option value="submitted">Submitted</option>
-                    <option value="missing">Missing</option>
-                  </select>
+                  <Select value={statusFilter} onValueChange={(v) => setStatusFilter(v as any)}>
+                    <SelectTrigger className="w-[130px]"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">All</SelectItem>
+                      <SelectItem value="submitted">Submitted</SelectItem>
+                      <SelectItem value="missing">Missing</SelectItem>
+                    </SelectContent>
+                  </Select>
                 </div>
                 <div className="flex items-center space-x-2">
                   <Label>Role:</Label>
-                  <select
-                    value={roleFilter}
-                    onChange={(e) => setRoleFilter(e.target.value as any)}
-                    className="flex h-10 rounded-md border border-input bg-background px-3 py-2 text-sm"
-                  >
-                    <option value="all">All</option>
-                    <option value="specialist">Specialist</option>
-                    <option value="resident">Resident</option>
-                  </select>
+                  <Select value={roleFilter} onValueChange={(v) => setRoleFilter(v as any)}>
+                    <SelectTrigger className="w-[130px]"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">All</SelectItem>
+                      <SelectItem value="specialist">Specialist</SelectItem>
+                      <SelectItem value="resident">Resident</SelectItem>
+                    </SelectContent>
+                  </Select>
                 </div>
                 {(searchQuery || statusFilter !== "all" || roleFilter !== "all") && (
                   <Button

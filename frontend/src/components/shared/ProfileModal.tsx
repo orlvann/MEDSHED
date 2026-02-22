@@ -157,7 +157,7 @@ export const ProfileModal = ({ open, onOpenChange }: ProfileModalProps) => {
               </Button>
               {canAccessAdmin && (
                 <Button
-                  variant="outline"
+                  variant="default"
                   onClick={handleGoToAdmin}
                   className="flex-1"
                 >

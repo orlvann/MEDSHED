@@ -20,7 +20,7 @@ import {
   ChevronRight,
   UserPlus,
 } from "lucide-react";
-import { doctorsApi } from "../../services/api";
+import { doctorsApi, preferencesApi } from "../../services/api";
 import axios from "axios";
 
 const API_BASE_URL =
@@ -140,17 +140,17 @@ export const AdminHome = () => {
   useEffect(() => {
     const loadStats = async () => {
       try {
-        const response = await doctorsApi.list({
-          page: 1,
-          size: 200,
-          is_active: "all",
-        });
+        const now = new Date();
+        const [response, summary] = await Promise.all([
+          doctorsApi.list({ page: 1, size: 200, is_active: "all" }),
+          preferencesApi.getSummary(now.getFullYear(), now.getMonth() + 1),
+        ]);
         const activeCount = response.items.filter((d) => d.is_active).length;
         setStats({
           totalEmployees: response.total,
           activeEmployees: activeCount,
-          schedulesSubmitted: 2,
-          totalSchedules: 10,
+          schedulesSubmitted: summary.submitted.length,
+          totalSchedules: summary.submitted.length + summary.missing.length,
         });
       } catch (err) {
         console.error("Failed to load stats:", err);

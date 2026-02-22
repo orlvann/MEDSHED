@@ -36,15 +36,15 @@ def doctors_list(
     user_is_active: Optional[str] = Query(None, description="Filter by user login status"),
     is_head: Optional[str] = Query(None, description="Filter by head of department status"),
 ):
-    # NOTE:
-    # user_role / user_is_active / is_head are accepted for FE compatibility,
-    # but are currently NOT passed to the service unless/ until doctor_service supports them.
     return list_doctors(
         page=page,
         size=size,
         role=role,
         search=search,
         is_active=is_active,
+        user_role=user_role,
+        user_is_active=user_is_active,
+        is_head=is_head,
     )
 
 

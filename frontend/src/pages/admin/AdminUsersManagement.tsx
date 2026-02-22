@@ -48,6 +48,13 @@ import {
   DialogTitle,
   DialogDescription,
 } from "../../components/ui/dialog";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "../../components/ui/select";
 
 export const AdminUsersManagement = () => {
   const navigate = useNavigate();
@@ -225,15 +232,14 @@ export const AdminUsersManagement = () => {
               className="pl-9 h-9 sm:h-10 text-sm"
             />
           </div>
-          <select
-            value={activeFilter}
-            onChange={(e) => setActiveFilter(e.target.value as any)}
-            className="h-9 sm:h-10 rounded-md border border-input bg-background px-2 sm:px-3 py-1.5 text-sm shrink-0"
-          >
-            <option value="all">All</option>
-            <option value="true">Active</option>
-            <option value="false">Inactive</option>
-          </select>
+          <Select value={activeFilter} onValueChange={(v) => setActiveFilter(v as any)}>
+            <SelectTrigger className="h-9 sm:h-10 w-[100px] sm:w-[120px] shrink-0"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All</SelectItem>
+              <SelectItem value="true">Active</SelectItem>
+              <SelectItem value="false">Inactive</SelectItem>
+            </SelectContent>
+          </Select>
         </div>
 
         {/* Users Table */}

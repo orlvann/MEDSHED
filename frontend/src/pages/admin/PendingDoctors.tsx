@@ -37,6 +37,13 @@ import {
   DialogTitle,
   DialogDescription,
 } from "../../components/ui/dialog";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "../../components/ui/select";
 
 const API_BASE_URL =
   import.meta.env.VITE_API_BASE_URL || "http://127.0.0.1:8000";
@@ -325,18 +332,28 @@ export const PendingDoctors = () => {
               <div className="space-y-3">
                 <div className="grid grid-cols-2 gap-3">
                   <div>
-                    <Label htmlFor="m-a-role" className="text-xs">Doctor Role *</Label>
-                    <select id="m-a-role" value={approvalData.role} onChange={(e) => setApprovalData({ ...approvalData, role: e.target.value as any })} className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1.5 text-sm">
-                      <option value="resident">Resident</option>
-                      <option value="specialist">Specialist</option>
-                    </select>
+                    <Label className="text-xs">Doctor Role *</Label>
+                    <Select value={approvalData.role} onValueChange={(value) => setApprovalData({ ...approvalData, role: value as any })}>
+                      <SelectTrigger className="h-9">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="resident">Resident</SelectItem>
+                        <SelectItem value="specialist">Specialist</SelectItem>
+                      </SelectContent>
+                    </Select>
                   </div>
                   <div>
-                    <Label htmlFor="m-a-user_role" className="text-xs">User Role *</Label>
-                    <select id="m-a-user_role" value={approvalData.user_role} onChange={(e) => setApprovalData({ ...approvalData, user_role: e.target.value as any })} className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1.5 text-sm">
-                      <option value="doctor">Doctor</option>
-                      <option value="doctor_admin">Doctor Admin</option>
-                    </select>
+                    <Label className="text-xs">User Role *</Label>
+                    <Select value={approvalData.user_role} onValueChange={(value) => setApprovalData({ ...approvalData, user_role: value as any })}>
+                      <SelectTrigger className="h-9">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="doctor">Doctor</SelectItem>
+                        <SelectItem value="doctor_admin">Doctor Admin</SelectItem>
+                      </SelectContent>
+                    </Select>
                   </div>
                 </div>
                 <div className="space-y-2 border-t pt-2.5">
@@ -373,18 +390,28 @@ export const PendingDoctors = () => {
               </DialogHeader>
               <form className="space-y-4">
                 <div>
-                  <Label htmlFor="role">Doctor Role *</Label>
-                  <select id="role" value={approvalData.role} onChange={(e) => setApprovalData({ ...approvalData, role: e.target.value as any })} className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm">
-                    <option value="resident">Resident</option>
-                    <option value="specialist">Specialist</option>
-                  </select>
+                  <Label>Doctor Role *</Label>
+                  <Select value={approvalData.role} onValueChange={(value) => setApprovalData({ ...approvalData, role: value as any })}>
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="resident">Resident</SelectItem>
+                      <SelectItem value="specialist">Specialist</SelectItem>
+                    </SelectContent>
+                  </Select>
                 </div>
                 <div>
-                  <Label htmlFor="user_role">User Role *</Label>
-                  <select id="user_role" value={approvalData.user_role} onChange={(e) => setApprovalData({ ...approvalData, user_role: e.target.value as any })} className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm">
-                    <option value="doctor">Doctor</option>
-                    <option value="doctor_admin">Doctor Admin</option>
-                  </select>
+                  <Label>User Role *</Label>
+                  <Select value={approvalData.user_role} onValueChange={(value) => setApprovalData({ ...approvalData, user_role: value as any })}>
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="doctor">Doctor</SelectItem>
+                      <SelectItem value="doctor_admin">Doctor Admin</SelectItem>
+                    </SelectContent>
+                  </Select>
                   <p className="text-xs text-muted-foreground mt-1">
                     Doctor: view only. Doctor Admin: can manage preferences.
                   </p>

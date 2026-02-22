@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { useAuth } from "../../contexts/AuthContext";
 import { Header } from "../../components/shared/Header";
 import { Card, CardContent } from "../../components/ui/card";
@@ -29,6 +29,7 @@ type ScheduleViewMode = "my-schedule" | "team-schedule";
 
 export const DoctorSchedules = () => {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const { user } = useAuth();
 
   // Current period defaults
@@ -36,8 +37,9 @@ export const DoctorSchedules = () => {
   const [year, setYear] = useState(now.getFullYear());
   const [month, setMonth] = useState(now.getMonth() + 1);
 
-  // View mode state
-  const [viewMode, setViewMode] = useState<ScheduleViewMode>("my-schedule");
+  // View mode state — initialise from ?view= query param
+  const initialView = searchParams.get("view") === "team-schedule" ? "team-schedule" : "my-schedule";
+  const [viewMode, setViewMode] = useState<ScheduleViewMode>(initialView);
 
   // Data states
   const [publishedSchedule, setPublishedSchedule] =
