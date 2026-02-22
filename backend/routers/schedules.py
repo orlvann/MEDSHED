@@ -578,6 +578,65 @@ def generate_schedule(
         assert False
 
 
+# ---------------------- DOCTOR: calendar subscription token ------
+# IMPORTANT: these /me/* routes MUST be registered before any /{year}/{month}
+# routes, otherwise FastAPI tries to parse "me" as an integer and returns 422.
+
+from backend.services.export_service import ExportService as _CalExportService
+
+_cal_export_svc = _CalExportService()
+
+
+@router.get(
+    "/me/calendar-token",
+    tags=["schedules:doctor"],
+    summary="Get or create my calendar subscription token",
+    responses={
+        200: {
+            "description": "Calendar feed token.",
+            "content": {"application/json": {"example": {"token": "550e8400-e29b-41d4-a716-446655440000"}}},
+        },
+        403: {"description": "Forbidden (not a doctor account)."},
+    },
+)
+def get_calendar_token(
+    user: UserCtx = Depends(require_doctor),
+):
+    if user.doctor_id is None:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=make_error("forbidden"))
+    try:
+        token = _cal_export_svc.get_or_create_calendar_token(int(user.doctor_id))
+        return {"token": token}
+    except ValueError as e:
+        _raise(e)
+        assert False
+
+
+@router.post(
+    "/me/calendar-token/regenerate",
+    tags=["schedules:doctor"],
+    summary="Regenerate my calendar subscription token (invalidates old URL)",
+    responses={
+        200: {
+            "description": "New calendar feed token.",
+            "content": {"application/json": {"example": {"token": "550e8400-e29b-41d4-a716-446655440000"}}},
+        },
+        403: {"description": "Forbidden (not a doctor account)."},
+    },
+)
+def regenerate_calendar_token(
+    user: UserCtx = Depends(require_doctor),
+):
+    if user.doctor_id is None:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=make_error("forbidden"))
+    try:
+        token = _cal_export_svc.regenerate_calendar_token(int(user.doctor_id))
+        return {"token": token}
+    except ValueError as e:
+        _raise(e)
+        assert False
+
+
 # --------------------------- ADMIN: diagnostics --------------------------
 
 
@@ -2553,6 +2612,141 @@ def schedules_my_assignments(
     except ValueError as e:
         _raise(e)
         assert False
+
+
+# ---------------------- DOCTOR: my export -----------------------
+
+from io import BytesIO
+from typing import Literal as LiteralType
+
+from fastapi.responses import StreamingResponse
+
+from backend.services.export_service import ExportService
+
+export_svc = ExportService()
+
+
+@router.get(
+    "/{year}/{month}/my-export",
+    tags=["schedules:doctor"],
+    summary="Download my published schedule as XLSX, PDF, or ICS",
+    responses={
+        200: {
+            "description": "Binary file download (xlsx, pdf, or ics).",
+            "content": {
+                "application/pdf": {},
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": {},
+                "text/calendar": {},
+            },
+        },
+        404: {
+            "description": "No published schedule for this period.",
+            "content": {
+                "application/json": {
+                    "example": _err_example(
+                        "not_found",
+                        detail="not_found",
+                        context={
+                            "where": "export_my_schedule.no_published",
+                            "year": 2026,
+                            "month": 2,
+                        },
+                    )
+                }
+            },
+        },
+    },
+)
+def schedules_my_export(
+    year: int = Path(..., ge=1900, le=2100),
+    month: int = Path(..., ge=1, le=12),
+    format: LiteralType["xlsx", "pdf", "ics"] = Query(...),
+    user: UserCtx = Depends(require_doctor),
+):
+    if user.doctor_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=make_error("forbidden"),
+        )
+    try:
+        result = export_svc.export_my_schedule(
+            year=year,
+            month=month,
+            doctor_id=int(user.doctor_id),
+            fmt=format,
+        )
+        return StreamingResponse(
+            BytesIO(result.content),
+            media_type=result.content_type,
+            headers={
+                "Content-Disposition": f'attachment; filename="{result.filename}"',
+            },
+        )
+    except ValueError as e:
+        _raise(e)
+        assert False
+
+
+@router.get(
+    "/{year}/{month}/team-export",
+    tags=["schedules:doctor"],
+    summary="Download full team published schedule as XLSX, PDF, or ICS",
+    responses={
+        200: {
+            "description": "Binary file download (xlsx, pdf, or ics).",
+            "content": {
+                "application/pdf": {},
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": {},
+                "text/calendar": {},
+            },
+        },
+        404: {
+            "description": "No published schedule for this period.",
+            "content": {
+                "application/json": {
+                    "example": _err_example(
+                        "not_found",
+                        detail="not_found",
+                        context={
+                            "where": "export_team_schedule.no_published",
+                            "year": 2026,
+                            "month": 2,
+                        },
+                    )
+                }
+            },
+        },
+    },
+)
+def schedules_team_export(
+    year: int = Path(..., ge=1900, le=2100),
+    month: int = Path(..., ge=1, le=12),
+    format: LiteralType["xlsx", "pdf", "ics"] = Query(...),
+    doctor_id: Optional[int] = Query(default=None, description="Filter by doctor"),
+    shift_type: Optional[LiteralType["onsite", "oncall"]] = Query(default=None, description="Filter by shift type"),
+    role: Optional[LiteralType["specialist", "resident"]] = Query(default=None, description="Filter by role"),
+    user: UserCtx = Depends(require_doctor),
+):
+    try:
+        result = export_svc.export_team_schedule(
+            year=year,
+            month=month,
+            fmt=format,
+            doctor_id=doctor_id,
+            shift_type=shift_type,
+            role=role,
+        )
+        return StreamingResponse(
+            BytesIO(result.content),
+            media_type=result.content_type,
+            headers={
+                "Content-Disposition": f'attachment; filename="{result.filename}"',
+            },
+        )
+    except ValueError as e:
+        _raise(e)
+        assert False
+
 
 
 # ---------------------- DOCTOR: my diagnostics -------------------

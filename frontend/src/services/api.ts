@@ -375,6 +375,55 @@ export const schedulesApi = {
     return response.data;
   },
 
+  exportMySchedule: async (
+    year: number,
+    month: number,
+    format: "xlsx" | "pdf" | "ics",
+  ): Promise<Blob> => {
+    const response = await api.get(
+      `/api/v1/schedules/${year}/${month}/my-export`,
+      {
+        params: { format },
+        responseType: "blob",
+      },
+    );
+    return response.data;
+  },
+
+  exportTeamSchedule: async (
+    year: number,
+    month: number,
+    format: "xlsx" | "pdf" | "ics",
+    filters?: {
+      doctor_id?: number;
+      shift_type?: "onsite" | "oncall";
+      role?: "specialist" | "resident";
+    },
+  ): Promise<Blob> => {
+    const response = await api.get(
+      `/api/v1/schedules/${year}/${month}/team-export`,
+      {
+        params: { format, ...filters },
+        responseType: "blob",
+      },
+    );
+    return response.data;
+  },
+
+  getCalendarToken: async (): Promise<{ token: string }> => {
+    const response = await api.get<{ token: string }>(
+      "/api/v1/schedules/me/calendar-token",
+    );
+    return response.data;
+  },
+
+  regenerateCalendarToken: async (): Promise<{ token: string }> => {
+    const response = await api.post<{ token: string }>(
+      "/api/v1/schedules/me/calendar-token/regenerate",
+    );
+    return response.data;
+  },
+
   generate: async (
     data: ScheduleGenerateRequest,
   ): Promise<ScheduleGenerateCreated> => {

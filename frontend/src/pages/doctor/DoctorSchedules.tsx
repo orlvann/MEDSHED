@@ -200,10 +200,22 @@ export const DoctorSchedules = () => {
               hasPublishedSchedule={publishedSchedule !== null}
             />
 
-            {/* Export Panel */}
-            <div className="mt-4 sm:mt-6 flex justify-end">
-              <ExportPanel />
-            </div>
+            {/* Export Panel — only shown when a published schedule exists */}
+            {publishedSchedule && (
+              <div className="mt-4 sm:mt-6 flex justify-end">
+                <ExportPanel
+                  year={year}
+                  month={month}
+                  viewMode={viewMode}
+                  highlightedDoctorId={highlightedDoctorId}
+                  highlightedDoctorName={
+                    highlightedDoctorId != null
+                      ? doctorNamesMap.get(highlightedDoctorId) ?? null
+                      : null
+                  }
+                />
+              </div>
+            )}
           </CardContent>
         </Card>
       </main>

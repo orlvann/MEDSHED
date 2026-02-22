@@ -1,7 +1,7 @@
 # backend/app.py
 from fastapi import FastAPI
 
-from .routers import admin_users, auth, availability, doctors, pending_doctors, preferences, schedules
+from .routers import admin_users, auth, availability, calendars, doctors, pending_doctors, preferences, schedules
 
 TAGS_METADATA = [
     {"name": "auth", "description": "Login and identity"},
@@ -43,6 +43,7 @@ def create_app() -> FastAPI:
     app.include_router(preferences.router)
     app.include_router(schedules.router)
     app.include_router(availability.router)
+    app.include_router(calendars.router)
 
     # Hide root from OpenAPI to keep docs tidy
     @app.get("/", include_in_schema=False)

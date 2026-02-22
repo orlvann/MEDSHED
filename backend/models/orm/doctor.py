@@ -52,6 +52,11 @@ class Doctor(Base):
     # Note: NULLs do not violate uniqueness in Postgres; multiple NULLs allowed.
     email: Mapped[Optional[str]] = mapped_column(String(320), nullable=True)
 
+    # --- Calendar feed token (UUID for public ICS subscription URL) ---
+    calendar_feed_token: Mapped[Optional[str]] = mapped_column(
+        String(36), nullable=True, unique=True, index=True
+    )
+
     # --- Timestamps (timezone-aware, server-managed) ---
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
@@ -63,6 +68,7 @@ class Doctor(Base):
         Index("ix_doctors_last_name_role", "last_name", "role"),
         # Explicit unique constraint name for clarity and stable migrations
         UniqueConstraint("email", name="uq_doctors_email"),
+        UniqueConstraint("calendar_feed_token", name="uq_doctors_calendar_feed_token"),
     )
 
     def __repr__(self) -> str:
