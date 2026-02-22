@@ -19,7 +19,10 @@ from backend.db.session import Base  # <- our Base
 
 # Import models for autogenerate to detect them
 from backend.models.orm import (
+    deadline_reminder,  # noqa: F401
     doctor,  # noqa: F401
+    password_reset_token,  # noqa: F401
+    pending_doctor,  # noqa: F401
     preference,  # noqa: F401
     schedule,  # noqa: F401
     user,  # noqa: F401

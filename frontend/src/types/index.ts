@@ -23,6 +23,7 @@ export interface User {
   is_active: boolean;
   first_name: string | null;
   last_name: string | null;
+  phone_number: string | null;
   created_at: string | null;
   updated_at: string | null;
 }
@@ -35,6 +36,7 @@ export interface Doctor {
   is_active: boolean;
   is_head: boolean;
   email: string | null;
+  phone_number: string | null;
   created_at: string;
   updated_at: string;
   user_is_active?: boolean | null;
@@ -48,6 +50,7 @@ export interface DoctorCreate {
   is_active: boolean;
   is_head: boolean;
   email: string; // Required
+  phone_number?: string;
   user_role: Role; // Required: "doctor" or "doctor_admin"
 }
 
@@ -58,6 +61,7 @@ export interface DoctorPut {
   is_active: boolean;
   is_head: boolean;
   email?: string | null;
+  phone_number?: string | null;
   user_role?: Role | null;
   user_is_active?: boolean | null;
 }

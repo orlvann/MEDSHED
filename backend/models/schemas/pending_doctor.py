@@ -4,7 +4,7 @@ PendingDoctor DTOs — request/response schemas for doctor registration workflow
 """
 
 from datetime import datetime
-from typing import List
+from typing import List, Optional
 
 from pydantic import BaseModel, EmailStr, Field
 
@@ -21,6 +21,7 @@ class PendingDoctorRegister(BaseModel):
     first_name: str = Field(..., min_length=1, max_length=100)
     last_name: str = Field(..., min_length=1, max_length=100)
     email: EmailStr
+    phone_number: Optional[str] = None
 
     model_config = {
         "json_schema_extra": {
@@ -38,6 +39,7 @@ class PendingDoctorRead(BaseModel):
     first_name: str
     last_name: str
     email: EmailStr
+    phone_number: Optional[str] = None
     created_at: datetime
 
     model_config = {

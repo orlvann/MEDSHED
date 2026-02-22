@@ -50,6 +50,7 @@ def _pending_doctor_to_dto(pending: PendingDoctor) -> PendingDoctorRead:
         first_name=pending.first_name,
         last_name=pending.last_name,
         email=pending.email,
+        phone_number=pending.phone_number,
         created_at=pending.created_at,
     )
 
@@ -117,6 +118,7 @@ def register_doctor(*, payload: PendingDoctorRegister) -> PendingDoctorRead:
             first_name=payload.first_name,
             last_name=payload.last_name,
             email=payload.email,
+            phone_number=payload.phone_number,
         )
         
         db.add(pending)
@@ -243,6 +245,7 @@ def approve_doctor(*, pending_id: int, approval_data: PendingDoctorApprove) -> N
             is_active=approval_data.is_active,
             is_head=approval_data.is_head,
             email=pending.email,
+            phone_number=pending.phone_number,
         )
         
         db.add(doctor)

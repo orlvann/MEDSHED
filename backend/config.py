@@ -33,6 +33,11 @@ class Settings(BaseSettings):
     SMTP_FROM_EMAIL: str = os.getenv("SMTP_FROM_EMAIL", "noreply@medshed.local")
     SMTP_FROM_NAME: str = os.getenv("SMTP_FROM_NAME", "MedShed System")
     
+    # Twilio SMS
+    TWILIO_ACCOUNT_SID: str = os.getenv("TWILIO_ACCOUNT_SID", "")
+    TWILIO_AUTH_TOKEN: str = os.getenv("TWILIO_AUTH_TOKEN", "")
+    TWILIO_FROM_NUMBER: str = os.getenv("TWILIO_FROM_NUMBER", "")
+
     # Frontend URL (for password reset links)
     FRONTEND_URL: str = os.getenv("FRONTEND_URL", "http://localhost:5173")
     

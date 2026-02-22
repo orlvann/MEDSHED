@@ -498,6 +498,119 @@ The MedShed Team
         raise  # Raise for password reset since it's user-initiated
 
 
+def send_deadline_reminder_email(
+    *,
+    email: str,
+    first_name: str,
+    last_name: str,
+    year: int,
+    month: int,
+    deadline: str,
+    hours_before: int,
+) -> None:
+    """
+    Send reminder email before preferences deadline expires.
+
+    Args:
+        email: Recipient email address
+        first_name: Doctor's first name
+        last_name: Doctor's last name
+        year: Year of the period
+        month: Month of the period (1-12)
+        deadline: Deadline datetime string (ISO format)
+        hours_before: Hours remaining until deadline (24 or 2)
+    """
+    try:
+        from datetime import datetime
+
+        from zoneinfo import ZoneInfo
+        from backend.utils.timez import ORG_TZ
+
+        deadline_dt = datetime.fromisoformat(deadline.replace("Z", "+00:00"))
+        deadline_local = deadline_dt.astimezone(ZoneInfo(ORG_TZ))
+        deadline_formatted = deadline_local.strftime("%B %d, %Y at %H:%M")
+
+        month_names = [
+            "January", "February", "March", "April", "May", "June",
+            "July", "August", "September", "October", "November", "December",
+        ]
+        month_name = month_names[month - 1]
+
+        msg = MIMEMultipart("alternative")
+        msg["Subject"] = f"MedShed: {hours_before}h left — Preferences Deadline for {month_name} {year}"
+        msg["From"] = f"{settings.SMTP_FROM_NAME} <{settings.SMTP_FROM_EMAIL}>"
+        msg["To"] = email
+
+        text_body = f"""
+Hello {first_name} {last_name},
+
+This is a reminder that the deadline for submitting your scheduling preferences for {month_name} {year} is approaching.
+
+Time remaining: {hours_before} hours
+Deadline: {deadline_formatted}
+
+Please ensure you submit your preferences before the deadline by logging into MedShed.
+
+Best regards,
+The MedShed Team
+        """.strip()
+
+        html_body = f"""
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <style>
+        body {{ font-family: Arial, sans-serif; line-height: 1.6; color: #333; }}
+        .container {{ max-width: 600px; margin: 0 auto; padding: 20px; }}
+        .header {{ background-color: #f59e0b; color: white; padding: 20px; text-align: center; border-radius: 5px 5px 0 0; }}
+        .content {{ background-color: #f9fafb; padding: 30px; border: 1px solid #e5e7eb; }}
+        .deadline-box {{ background-color: #fef3c7; border: 1px solid #f59e0b; border-radius: 5px; padding: 15px; margin: 20px 0; text-align: center; }}
+        .deadline-label {{ color: #92400e; font-size: 0.875rem; margin-bottom: 5px; }}
+        .deadline-value {{ color: #78350f; font-size: 1.25rem; font-weight: bold; }}
+        .footer {{ color: #6b7280; font-size: 0.875rem; margin-top: 20px; padding-top: 20px; border-top: 1px solid #e5e7eb; }}
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>Deadline Reminder</h1>
+        </div>
+        <div class="content">
+            <p>Hello <strong>{first_name} {last_name}</strong>,</p>
+            <p>The deadline for submitting your scheduling preferences for <strong>{month_name} {year}</strong> is approaching.</p>
+            <div class="deadline-box">
+                <div class="deadline-label">Time Remaining: {hours_before} hours</div>
+                <div class="deadline-value">{deadline_formatted}</div>
+            </div>
+            <p>Please ensure you submit your preferences before the deadline by logging into MedShed.</p>
+            <div class="footer">
+                <p>Best regards,<br>The MedShed Team</p>
+            </div>
+        </div>
+    </div>
+</body>
+</html>
+        """.strip()
+
+        part1 = MIMEText(text_body, "plain")
+        part2 = MIMEText(html_body, "html")
+        msg.attach(part1)
+        msg.attach(part2)
+
+        with smtplib.SMTP(settings.SMTP_HOST, settings.SMTP_PORT) as server:
+            if settings.SMTP_HOST not in ["localhost", "127.0.0.1", "mailhog", "maildev"]:
+                server.starttls()
+            if settings.SMTP_USER and settings.SMTP_PASSWORD:
+                server.login(settings.SMTP_USER, settings.SMTP_PASSWORD)
+            server.sendmail(settings.SMTP_FROM_EMAIL, email, msg.as_string())
+
+        logger.info(f"Deadline reminder email ({hours_before}h) sent to {email}")
+
+    except Exception as e:
+        logger.error(f"Failed to send deadline reminder email to {email}: {e}")
+
+
 def send_deadline_changed_email(
     *,
     email: str,
@@ -525,9 +638,13 @@ def send_deadline_changed_email(
     try:
         from datetime import datetime
 
-        # Parse and format deadline for display
+        # Parse and format deadline for display (in org timezone)
+        from zoneinfo import ZoneInfo
+        from backend.utils.timez import ORG_TZ
+
         deadline_dt = datetime.fromisoformat(new_deadline.replace("Z", "+00:00"))
-        deadline_formatted = deadline_dt.strftime("%B %d, %Y at %H:%M")
+        deadline_local = deadline_dt.astimezone(ZoneInfo(ORG_TZ))
+        deadline_formatted = deadline_local.strftime("%B %d, %Y at %H:%M")
 
         # Month name
         month_names = [

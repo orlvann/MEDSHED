@@ -89,6 +89,7 @@ export const DoctorsManagement = () => {
     is_active: true,
     is_head: false,
     email: "",
+    phone_number: "",
     user_role: "doctor",
   });
 
@@ -232,6 +233,7 @@ export const DoctorsManagement = () => {
       is_active: doctor.is_active,
       is_head: doctor.is_head,
       email: doctor.email || "",
+      phone_number: doctor.phone_number || "",
       user_role: doctor.user_role || "doctor",
       user_is_active:
         doctor.user_is_active !== undefined ? doctor.user_is_active : true,
@@ -248,6 +250,7 @@ export const DoctorsManagement = () => {
       is_active: true,
       is_head: false,
       email: "",
+      phone_number: "",
       user_role: "doctor",
     });
   };
@@ -723,6 +726,10 @@ export const DoctorsManagement = () => {
                   <Label htmlFor="m-email" className="text-xs">Email *</Label>
                   <Input id="m-email" type="email" value={formData.email || ""} onChange={(e) => setFormData({ ...formData, email: e.target.value })} required className="h-9 text-sm" />
                 </div>
+                <div>
+                  <Label htmlFor="m-phone" className="text-xs">Phone Number</Label>
+                  <Input id="m-phone" type="tel" placeholder="+48123456789" value={formData.phone_number || ""} onChange={(e) => setFormData({ ...formData, phone_number: e.target.value })} className="h-9 text-sm" />
+                </div>
                 <div className="grid grid-cols-2 gap-3">
                   <div>
                     <Label className="text-xs">Doctor Role *</Label>
@@ -800,6 +807,13 @@ export const DoctorsManagement = () => {
                 <div>
                   <Label htmlFor="email">Email *</Label>
                   <Input id="email" type="email" value={formData.email || ""} onChange={(e) => setFormData({ ...formData, email: e.target.value })} required />
+                </div>
+                <div>
+                  <Label htmlFor="phone_number">Phone Number</Label>
+                  <Input id="phone_number" type="tel" placeholder="+48123456789" value={formData.phone_number || ""} onChange={(e) => setFormData({ ...formData, phone_number: e.target.value })} />
+                  <p className="text-xs text-muted-foreground mt-1">
+                    For SMS notifications. Use E.164 format (e.g. +48123456789).
+                  </p>
                 </div>
                 <div>
                   <Label>Doctor Role *</Label>

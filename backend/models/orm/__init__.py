@@ -14,6 +14,7 @@ Usage examples:
 """
 
 # Core entities
+from .deadline_reminder import DeadlineReminderSent  # noqa: F401
 from .doctor import Doctor  # noqa: F401
 from .password_reset_token import PasswordResetToken  # noqa: F401
 from .pending_doctor import PendingDoctor  # noqa: F401
@@ -41,6 +42,7 @@ __all__ = [
     "Doctor",
     "PasswordResetToken",
     "PendingDoctor",
+    "DeadlineReminderSent",
     # preferences
     "PreferenceWorking",
     "PreferenceVersion",

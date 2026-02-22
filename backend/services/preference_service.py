@@ -26,6 +26,7 @@ from zoneinfo import ZoneInfo
 from backend.db.session import SessionLocal
 from backend.models.common_enums import DeadlineStatus, PeriodStatus, PreferenceStatus
 from backend.models.orm.doctor import Doctor
+from backend.models.orm.deadline_reminder import DeadlineReminderSent
 from backend.models.orm.preference import (
     PreferenceDeadline,
     PreferencePointer,
@@ -1075,6 +1076,10 @@ def upsert_deadline(*, year: int, month: int, body: dict, actor: UserCtx) -> Pre
         else:
             row.deadline_utc = deadline_utc
             row.org_timezone = ORG_TZ
+            # Clear old reminder records so reminders fire again for the new time
+            session.query(DeadlineReminderSent).filter(
+                DeadlineReminderSent.deadline_id == row.id,
+            ).delete()
 
         session.commit()
         session.refresh(row)

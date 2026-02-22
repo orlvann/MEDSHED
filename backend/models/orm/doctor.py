@@ -52,6 +52,9 @@ class Doctor(Base):
     # Note: NULLs do not violate uniqueness in Postgres; multiple NULLs allowed.
     email: Mapped[Optional[str]] = mapped_column(String(320), nullable=True)
 
+    # --- Phone number (optional, for SMS notifications) ---
+    phone_number: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+
     # --- Calendar feed token (UUID for public ICS subscription URL) ---
     calendar_feed_token: Mapped[Optional[str]] = mapped_column(
         String(36), nullable=True, unique=True, index=True

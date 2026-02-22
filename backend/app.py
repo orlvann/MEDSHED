@@ -1,7 +1,10 @@
 # backend/app.py
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 
 from .routers import admin_users, auth, availability, calendars, doctors, pending_doctors, preferences, schedules
+from .services.reminder_scheduler import start_scheduler, stop_scheduler
 
 TAGS_METADATA = [
     {"name": "auth", "description": "Login and identity"},
@@ -26,6 +29,14 @@ TAGS_METADATA = [
 ]
 
 
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Start background services on startup, stop on shutdown."""
+    start_scheduler()
+    yield
+    stop_scheduler()
+
+
 def create_app() -> FastAPI:
     app = FastAPI(
         title="MedSchedApp API",
@@ -34,6 +45,7 @@ def create_app() -> FastAPI:
         openapi_tags=TAGS_METADATA,
         docs_url="/docs",
         redoc_url="/redoc",
+        lifespan=lifespan,
     )
     app.include_router(auth.router)
     app.include_router(doctors.router)

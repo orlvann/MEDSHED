@@ -53,6 +53,7 @@ interface PendingDoctor {
   first_name: string;
   last_name: string;
   email: string;
+  phone_number: string | null;
   created_at: string;
 }
 
@@ -235,6 +236,9 @@ export const PendingDoctors = () => {
                             {doctor.first_name} {doctor.last_name}
                           </p>
                           <p className="text-xs text-muted-foreground truncate">{doctor.email}</p>
+                          {doctor.phone_number && (
+                            <p className="text-xs text-muted-foreground truncate">{doctor.phone_number}</p>
+                          )}
                           <p className="text-[11px] text-muted-foreground mt-0.5">
                             {new Date(doctor.created_at).toLocaleDateString()}
                           </p>
@@ -271,6 +275,7 @@ export const PendingDoctors = () => {
                         <th className="text-left py-3 px-4">First Name</th>
                         <th className="text-left py-3 px-4">Last Name</th>
                         <th className="text-left py-3 px-4">Email</th>
+                        <th className="text-left py-3 px-4">Phone</th>
                         <th className="text-left py-3 px-4">Date Submitted</th>
                         <th className="text-right py-3 px-4">Actions</th>
                       </tr>
@@ -284,6 +289,9 @@ export const PendingDoctors = () => {
                           <td className="py-3 px-4">{doctor.first_name}</td>
                           <td className="py-3 px-4">{doctor.last_name}</td>
                           <td className="py-3 px-4 text-sm">{doctor.email}</td>
+                          <td className="py-3 px-4 text-sm text-muted-foreground">
+                            {doctor.phone_number || "-"}
+                          </td>
                           <td className="py-3 px-4 text-sm text-muted-foreground">
                             {new Date(doctor.created_at).toLocaleDateString()}
                           </td>

@@ -6,6 +6,12 @@ uvicorn[standard]>=0.29,<1.0  # ASGI server with reload, httptools, uvloop
 pydantic[email]>=2.6,<3.0     # Pydantic + email validation (EmailStr)
 python-dotenv>=1.0,<2.0       # Load env vars from .env
 
+# SMS (Twilio)
+twilio>=9.0,<10.0
+
+# Background scheduler (reminders)
+apscheduler>=3.10,<4.0
+
 # Solver & data (keep only if you really use them)
 ortools>=9.9,<10.0            # Google OR-Tools CP-SAT
 pandas>=2.2,<3.0              # Optional: tabular utils for reports

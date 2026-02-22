@@ -26,6 +26,7 @@ class DoctorCreate(BaseModel):
     is_active: bool = True
     is_head: bool = False
     email: EmailStr  # Required: user account will be auto-created
+    phone_number: Optional[str] = None
     user_role: UserRole = Field(..., description="User account role: doctor or doctor_admin")
 
 
@@ -38,6 +39,7 @@ class DoctorPut(BaseModel):
     is_active: bool
     is_head: bool
     email: Optional[EmailStr] = Field(None, description="Email address of the doctor")
+    phone_number: Optional[str] = None
     user_role: Optional[UserRole] = Field(None, description="User account role: doctor or doctor_admin")
     user_is_active: Optional[bool] = Field(None, description="Whether user can login (users.is_active)")
 
@@ -52,6 +54,7 @@ class DoctorRead(BaseModel):
     is_active: bool
     is_head: bool
     email: Optional[EmailStr] = None
+    phone_number: Optional[str] = None
     created_at: datetime
     updated_at: datetime
     # User account fields (None if no linked user)

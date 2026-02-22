@@ -19,6 +19,7 @@ from backend.models.schemas import (
 from backend.models.schemas.dto_common import MonthInt, YearInt, make_error
 from backend.routers.deps import UserCtx, require_admin, require_doctor, require_user
 from backend.services.email_service import send_deadline_changed_email
+from backend.services.sms_service import send_deadline_changed_sms
 from backend.services.preference_service import (
     create_checkpoint,
     get_deadline,
@@ -160,6 +161,15 @@ def deadline_put(
                 if doctor.email:
                     send_deadline_changed_email(
                         email=doctor.email,
+                        first_name=doctor.first_name,
+                        last_name=doctor.last_name,
+                        year=year,
+                        month=month,
+                        new_deadline=result.deadline.isoformat(),
+                    )
+                if doctor.phone_number:
+                    send_deadline_changed_sms(
+                        phone_number=doctor.phone_number,
                         first_name=doctor.first_name,
                         last_name=doctor.last_name,
                         year=year,

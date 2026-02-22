@@ -80,6 +80,7 @@ def _doctor_to_dto(doctor: Doctor, db: Session) -> DoctorRead:
         is_active=doctor.is_active,
         is_head=doctor.is_head,
         email=doctor.email,
+        phone_number=doctor.phone_number,
         created_at=doctor.created_at,
         updated_at=doctor.updated_at,
         user_is_active=linked_user.is_active if linked_user else None,
@@ -255,6 +256,7 @@ def create_doctor(*, payload: DoctorCreate) -> DoctorRead:
             is_active=payload.is_active,
             is_head=payload.is_head,
             email=payload.email,
+            phone_number=payload.phone_number,
         )
         
         db.add(doctor)
@@ -380,7 +382,8 @@ def put_doctor(*, doctor_id: int, payload: DoctorPut) -> DoctorRead:
         doctor.is_active = payload.is_active
         doctor.is_head = payload.is_head
         doctor.email = payload.email
-        
+        doctor.phone_number = payload.phone_number
+
         # Handle user account updates
         if linked_user:
             # Update existing user

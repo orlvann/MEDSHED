@@ -11,7 +11,7 @@ import {
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { Label } from "../ui/label";
-import { LogOut, Shield, Save, Lock, Eye, EyeOff } from "lucide-react";
+import { LogOut, Shield, Save, Lock, Eye, EyeOff, Smartphone } from "lucide-react";
 
 interface ProfileModalProps {
   open: boolean;
@@ -25,6 +25,7 @@ export const ProfileModal = ({ open, onOpenChange }: ProfileModalProps) => {
   // Profile form state
   const [firstName, setFirstName] = useState(user?.first_name || "");
   const [lastName, setLastName] = useState(user?.last_name || "");
+  const [phoneNumber, setPhoneNumber] = useState(user?.phone_number || "");
   const [profileLoading, setProfileLoading] = useState(false);
   const [profileError, setProfileError] = useState<string | null>(null);
   const [profileSuccess, setProfileSuccess] = useState(false);
@@ -51,6 +52,7 @@ export const ProfileModal = ({ open, onOpenChange }: ProfileModalProps) => {
       await authApi.updateProfile({
         first_name: firstName,
         last_name: lastName,
+        phone_number: phoneNumber,
       });
       setProfileSuccess(true);
       // Refresh user data
@@ -111,7 +113,7 @@ export const ProfileModal = ({ open, onOpenChange }: ProfileModalProps) => {
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-[425px] p-0 gap-0">
+      <DialogContent className="sm:max-w-[480px] p-0 gap-0">
         <DialogHeader className="sticky top-0 bg-background z-10 px-4 sm:px-6 pt-4 sm:pt-6 pb-3 border-b">
           <DialogTitle>Profile Settings</DialogTitle>
         </DialogHeader>
@@ -139,6 +141,23 @@ export const ProfileModal = ({ open, onOpenChange }: ProfileModalProps) => {
                   placeholder="Last name"
                 />
               </div>
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="phoneNumber">Phone Number</Label>
+              <div className="relative">
+                <Smartphone className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                <Input
+                  id="phoneNumber"
+                  type="tel"
+                  value={phoneNumber}
+                  onChange={(e) => setPhoneNumber(e.target.value)}
+                  placeholder="+48 123 456 789"
+                  className="pl-9"
+                />
+              </div>
+              <p className="text-xs text-muted-foreground">
+                For SMS deadline reminders. International format, e.g. +48...
+              </p>
             </div>
             {profileError && (
               <p className="text-sm text-red-600">{profileError}</p>

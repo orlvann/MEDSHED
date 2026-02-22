@@ -10,6 +10,7 @@ If rejected, the pending record is simply deleted.
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Optional
 
 from sqlalchemy import DateTime, Index, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
@@ -36,7 +37,8 @@ class PendingDoctor(Base):
     first_name: Mapped[str] = mapped_column(String(100), nullable=False)
     last_name: Mapped[str] = mapped_column(String(100), nullable=False)
     email: Mapped[str] = mapped_column(String(320), nullable=False)
-    
+    phone_number: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+
     # Audit
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), 

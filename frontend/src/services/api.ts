@@ -111,6 +111,7 @@ export const authApi = {
   updateProfile: async (data: {
     first_name?: string;
     last_name?: string;
+    phone_number?: string;
   }): Promise<User> => {
     const response = await api.patch<User>("/api/v1/auth/me", data);
     return response.data;

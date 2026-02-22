@@ -39,6 +39,7 @@ class UserRead(BaseModel):
     is_active: bool = True
     first_name: Optional[str] = None  # From linked Doctor if exists
     last_name: Optional[str] = None   # From linked Doctor if exists
+    phone_number: Optional[str] = None  # From linked Doctor if exists
     created_at: datetime | None = None
     updated_at: datetime | None = None  # keep parity with other DTOs using created_at/updated_at
 
@@ -95,10 +96,11 @@ class UserAdminList(PageMeta):
 
 
 class ProfileUpdate(BaseModel):
-    """Update current user's profile (name only)."""
+    """Update current user's profile."""
 
     first_name: Optional[str] = Field(None, min_length=1, max_length=100)
     last_name: Optional[str] = Field(None, min_length=1, max_length=100)
+    phone_number: Optional[str] = Field(None, max_length=20)
 
 
 class ChangePasswordRequest(BaseModel):

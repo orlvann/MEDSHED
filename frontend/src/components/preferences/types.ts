@@ -52,10 +52,16 @@ export const getWeekdayState = (
   return "can";
 };
 
+// Ensure a datetime string is interpreted as UTC (append Z if no timezone info)
+const ensureUTC = (dateStr: string): string => {
+  if (/[Zz]$|[+-]\d{2}:\d{2}$/.test(dateStr)) return dateStr;
+  return dateStr + "Z";
+};
+
 // Format deadline date
 export const formatDate = (dateStr: string | null): string => {
   if (!dateStr) return "-";
-  const date = new Date(dateStr);
+  const date = new Date(ensureUTC(dateStr));
   return date.toLocaleDateString("en-US", {
     month: "short",
     day: "numeric",
@@ -77,7 +83,7 @@ export interface TimeRemaining {
 export const getTimeRemaining = (deadline: string | null): TimeRemaining | null => {
   if (!deadline) return null;
   const now = new Date();
-  const deadlineDate = new Date(deadline);
+  const deadlineDate = new Date(ensureUTC(deadline));
   const total = deadlineDate.getTime() - now.getTime();
 
   if (total <= 0) {

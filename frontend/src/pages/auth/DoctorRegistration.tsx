@@ -22,6 +22,7 @@ export const DoctorRegistration = () => {
   const [firstName, setFirstName] = useState("");
   const [lastName, setLastName] = useState("");
   const [email, setEmail] = useState("");
+  const [phoneNumber, setPhoneNumber] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [success, setSuccess] = useState(false);
@@ -36,6 +37,7 @@ export const DoctorRegistration = () => {
         first_name: firstName,
         last_name: lastName,
         email: email,
+        ...(phoneNumber && { phone_number: phoneNumber }),
       });
 
       setSuccess(true);
@@ -94,6 +96,7 @@ export const DoctorRegistration = () => {
                   setFirstName("");
                   setLastName("");
                   setEmail("");
+                  setPhoneNumber("");
                 }}
                 variant="outline"
                 className="flex-1"
@@ -155,6 +158,20 @@ export const DoctorRegistration = () => {
                 required
                 disabled={loading}
               />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="phone_number">Phone Number</Label>
+              <Input
+                id="phone_number"
+                type="tel"
+                placeholder="+48123456789 (optional)"
+                value={phoneNumber}
+                onChange={(e) => setPhoneNumber(e.target.value)}
+                disabled={loading}
+              />
+              <p className="text-xs text-muted-foreground">
+                For SMS notifications about deadlines. Use international format.
+              </p>
             </div>
             {error && (
               <div className="p-3 text-sm text-red-600 bg-red-50 border border-red-200 rounded-md">

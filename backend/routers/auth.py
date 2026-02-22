@@ -229,9 +229,11 @@ def me(user: UserCtx = Depends(get_current_user), db: Session = Depends(get_db))
 
     first_name = None
     last_name = None
+    phone_number = None
     if db_user.doctor:
         first_name = db_user.doctor.first_name
         last_name = db_user.doctor.last_name
+        phone_number = db_user.doctor.phone_number
 
     return UserRead(
         id=db_user.id,
@@ -240,6 +242,7 @@ def me(user: UserCtx = Depends(get_current_user), db: Session = Depends(get_db))
         is_active=db_user.is_active,
         first_name=first_name,
         last_name=last_name,
+        phone_number=phone_number,
         created_at=db_user.created_at,
         updated_at=db_user.updated_at,
     )
@@ -280,6 +283,8 @@ def update_profile(
         db_user.doctor.first_name = payload.first_name
     if payload.last_name is not None:
         db_user.doctor.last_name = payload.last_name
+    if payload.phone_number is not None:
+        db_user.doctor.phone_number = payload.phone_number
 
     db.commit()
     db.refresh(db_user)
@@ -291,6 +296,7 @@ def update_profile(
         is_active=db_user.is_active,
         first_name=db_user.doctor.first_name,
         last_name=db_user.doctor.last_name,
+        phone_number=db_user.doctor.phone_number,
         created_at=db_user.created_at,
         updated_at=db_user.updated_at,
     )
