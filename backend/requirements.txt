@@ -58,6 +58,8 @@ pandas==3.0.0
     # via ortools
 passlib==1.7.4
     # via -r backend/requirements.in
+psycopg2-binary==2.9.10
+    # via -r backend/requirements.in
 protobuf==5.29.6
     # via ortools
 pyasn1==0.6.2

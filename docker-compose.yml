@@ -1,0 +1,67 @@
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    environment:
+      POSTGRES_USER: medshed
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: medshed
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U medshed"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql+psycopg2://medshed:${POSTGRES_PASSWORD}@db:5432/medshed
+      JWT_SECRET: ${JWT_SECRET:?Set JWT_SECRET in .env}
+      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-https://medshed.vercel.app}
+      FRONTEND_URL: ${FRONTEND_URL:-https://medshed.vercel.app}
+      ORG_TIMEZONE: ${ORG_TIMEZONE:-Europe/Warsaw}
+      # Email (SMTP)
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      SMTP_FROM_EMAIL: ${SMTP_FROM_EMAIL:-}
+      SMTP_FROM_NAME: ${SMTP_FROM_NAME:-MedShed System}
+      # Twilio SMS
+      TWILIO_ACCOUNT_SID: ${TWILIO_ACCOUNT_SID:-}
+      TWILIO_AUTH_TOKEN: ${TWILIO_AUTH_TOKEN:-}
+      TWILIO_FROM_NUMBER: ${TWILIO_FROM_NUMBER:-}
+    ports:
+      - "127.0.0.1:8000:8000"
+    # Run migrations, then start the server
+    command: >
+      sh -c "
+        python -m alembic -c backend/alembic.ini upgrade head &&
+        python -m uvicorn backend.asgi:app --host 0.0.0.0 --port 8000 --workers 2
+      "
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    depends_on:
+      - backend
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+
+volumes:
+  pgdata:
+  caddy_data:
+  caddy_config:
