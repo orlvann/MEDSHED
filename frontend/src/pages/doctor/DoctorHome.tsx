@@ -3,7 +3,6 @@ import { useNavigate } from "react-router-dom";
 import { useAuth } from "../../contexts/AuthContext";
 import { Header } from "../../components/shared/Header";
 import { Card, CardContent } from "../../components/ui/card";
-import { Button } from "../../components/ui/button";
 import { ScheduleCalendar } from "../../components/doctor/ScheduleCalendar";
 import {
   Calendar,
@@ -25,27 +24,9 @@ import type {
   PreferenceWorkingRead,
   SchedulePublishedRead,
   Assignment,
-  Doctor,
+  DoctorMini,
 } from "../../types";
-
-// Get time remaining until deadline
-const getTimeRemaining = (
-  deadline: string | null
-): { days: number; hours: number; minutes: number; isPast: boolean } | null => {
-  if (!deadline) return null;
-  const now = new Date();
-  const deadlineDate = new Date(deadline);
-  const total = deadlineDate.getTime() - now.getTime();
-
-  if (total <= 0) {
-    return { days: 0, hours: 0, minutes: 0, isPast: true };
-  }
-
-  const days = Math.floor(total / (1000 * 60 * 60 * 24));
-  const hours = Math.floor((total % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
-  const minutes = Math.floor((total % (1000 * 60 * 60)) / (1000 * 60));
-  return { days, hours, minutes, isPast: false };
-};
+import { getTimeRemaining } from "../../components/preferences/types";
 
 interface WeatherData {
   temperature: number;
@@ -90,7 +71,7 @@ export const DoctorHome = () => {
   );
   const [publishedSchedule, setPublishedSchedule] =
     useState<SchedulePublishedRead | null>(null);
-  const [doctors, setDoctors] = useState<Doctor[]>([]);
+  const [doctors, setDoctors] = useState<DoctorMini[]>([]);
   const [loading, setLoading] = useState(true);
 
   // Weather and time states
@@ -184,13 +165,9 @@ export const DoctorHome = () => {
         );
         setPreferences(prefsData);
 
-        // Load doctors list for name mapping
-        const doctorsList = await doctorsApi.list({
-          page: 1,
-          size: 200,
-          is_active: "all",
-        });
-        setDoctors(doctorsList.items);
+        // Load doctors list for name mapping (lightweight endpoint for all doctors)
+        const doctorNames = await doctorsApi.listNames();
+        setDoctors(doctorNames);
       } catch (err) {
         console.error("Failed to load initial data:", err);
       } finally {
@@ -338,28 +315,26 @@ export const DoctorHome = () => {
             </div>
 
             {/* Desktop warning banner */}
-            <Card className="mb-6 hidden lg:block border-orange-300 bg-orange-50">
-              <CardContent className="py-4 flex flex-col sm:flex-row items-start sm:items-center gap-2 sm:gap-3">
-                <AlertCircle className="h-5 w-5 text-orange-600 flex-shrink-0" />
+            <div
+              className="mb-6 hidden lg:block rounded-xl bg-gradient-to-r from-orange-500 to-amber-500 p-4 cursor-pointer hover:shadow-md active:scale-[0.98] transition-all shadow-sm"
+              onClick={() => navigate("/doctor/preferences")}
+            >
+              <div className="flex items-center gap-3">
+                <div className="h-10 w-10 rounded-xl bg-white/20 flex items-center justify-center flex-shrink-0">
+                  <AlertCircle className="h-5 w-5 text-white" />
+                </div>
                 <div className="flex-1">
-                  <p className="text-sm font-medium text-orange-800">
+                  <p className="text-sm font-bold text-white">
                     Deadline approaching! Only {deadlineInfo?.days} day
                     {deadlineInfo?.days !== 1 ? "s" : ""} left.
                   </p>
-                  <p className="text-xs text-orange-600">
+                  <p className="text-xs text-white/80">
                     Please submit your preferences before the deadline.
                   </p>
                 </div>
-                <Button
-                  size="sm"
-                  variant="outline"
-                  className="border-orange-300 text-orange-700 hover:bg-orange-100 w-full sm:w-auto"
-                  onClick={() => navigate("/doctor/preferences")}
-                >
-                  Fill Now
-                </Button>
-              </CardContent>
-            </Card>
+                <ChevronRight className="h-5 w-5 text-white/50 flex-shrink-0" />
+              </div>
+            </div>
           </>
         )}
 
@@ -516,136 +491,151 @@ export const DoctorHome = () => {
 
             {/* === DESKTOP CARDS (hidden below lg) === */}
             <div className="hidden lg:grid grid-cols-1 gap-3">
-              <Card className="min-h-[100px]">
-                <CardContent className="py-4">
-                  <h3 className="text-lg font-semibold mb-1 flex items-center gap-2">
-                    <Clock className="h-5 w-5 text-blue-600" />
+              <div className="rounded-xl bg-gradient-to-br from-sky-50 to-blue-50 border border-sky-100/80 p-4 min-h-[100px]">
+                <div className="flex items-center gap-2 mb-1">
+                  <div className="h-7 w-7 rounded-md bg-sky-500 flex items-center justify-center shadow-sm">
+                    <Clock className="h-3.5 w-3.5 text-white" />
+                  </div>
+                  <h3 className="text-lg font-semibold text-slate-800">
                     Current Time
                   </h3>
-                  <p className="text-2xl font-bold text-blue-600">
-                    {formatTime(currentTime)}
-                  </p>
-                  <p className="text-xs text-muted-foreground mt-1">
-                    {formatDate(currentTime)}
-                  </p>
-                </CardContent>
-              </Card>
+                </div>
+                <p className="text-2xl font-bold text-slate-800 tabular-nums">
+                  {formatTime(currentTime)}
+                </p>
+                <p className="text-xs text-slate-500 mt-1">
+                  {formatDate(currentTime)}
+                </p>
+              </div>
 
-              <Card className="min-h-[100px]">
-                <CardContent className="py-4">
-                  <h3 className="text-lg font-semibold mb-1 flex items-center gap-2">
-                    <CloudSun className="h-5 w-5 text-orange-500" />
+              <div className="rounded-xl bg-gradient-to-br from-amber-50 to-orange-50 border border-amber-100/80 p-4 min-h-[100px]">
+                <div className="flex items-center gap-2 mb-1">
+                  <div className="h-7 w-7 rounded-md bg-amber-500 flex items-center justify-center shadow-sm">
+                    <CloudSun className="h-3.5 w-3.5 text-white" />
+                  </div>
+                  <h3 className="text-lg font-semibold text-slate-800">
                     Weather in Poznan
                   </h3>
-                  {weatherLoading ? (
-                    <p className="text-sm text-gray-500">Loading...</p>
-                  ) : weather ? (
-                    <>
-                      <p className="text-2xl font-bold text-orange-600">
-                        {weather.temperature}°C
-                      </p>
-                      <p className="text-xs text-muted-foreground">
-                        {weather.condition}
-                      </p>
-                      <p className="text-xs text-muted-foreground">
-                        Humidity: {weather.humidity}% | Wind:{" "}
-                        {weather.windSpeed} km/h
-                      </p>
-                    </>
-                  ) : (
-                    <p className="text-sm text-gray-500">
-                      Unable to load weather
+                </div>
+                {weatherLoading ? (
+                  <p className="text-sm text-slate-400">Loading...</p>
+                ) : weather ? (
+                  <>
+                    <p className="text-2xl font-bold text-slate-800">
+                      {weather.temperature}°C
                     </p>
-                  )}
-                </CardContent>
-              </Card>
+                    <p className="text-xs text-slate-500">
+                      {weather.condition}
+                    </p>
+                    <p className="text-xs text-slate-500">
+                      Humidity: {weather.humidity}% | Wind:{" "}
+                      {weather.windSpeed} km/h
+                    </p>
+                  </>
+                ) : (
+                  <p className="text-sm text-slate-400">
+                    Unable to load weather
+                  </p>
+                )}
+              </div>
 
-              <Card className="min-h-[100px]">
-                <CardContent className="py-4">
-                  <h3 className="text-lg font-semibold mb-2 flex items-center gap-2">
-                    <Calendar className="h-5 w-5 text-purple-600" />
+              <div className="rounded-xl bg-gradient-to-br from-violet-50 to-purple-50 border border-violet-100/80 p-4 min-h-[100px]">
+                <div className="flex items-center gap-2 mb-2">
+                  <div className="h-7 w-7 rounded-md bg-violet-500 flex items-center justify-center shadow-sm">
+                    <Calendar className="h-3.5 w-3.5 text-white" />
+                  </div>
+                  <h3 className="text-lg font-semibold text-slate-800">
                     Deadline
                   </h3>
-                  {deadlineInfo ? (
-                    <>
-                      <div className="flex items-center gap-2 text-primary mb-1">
-                        <span className="font-medium">
-                          <span className="text-lg">{deadlineInfo.days}</span>{" "}
-                          <span className="text-sm">days</span>{" "}
-                          <span className="text-lg">{deadlineInfo.hours}</span>{" "}
-                          <span className="text-sm">hours</span>{" "}
-                          <span className="text-lg">
-                            {deadlineInfo.minutes}
-                          </span>{" "}
-                          <span className="text-sm">minutes</span>
+                </div>
+                {deadlineInfo ? (
+                  <>
+                    <div className="flex items-center gap-2 text-slate-800 mb-1">
+                      <span className="font-medium">
+                        <span className="text-lg">{deadlineInfo.days}</span>{" "}
+                        <span className="text-sm">days</span>{" "}
+                        <span className="text-lg">{deadlineInfo.hours}</span>{" "}
+                        <span className="text-sm">hours</span>{" "}
+                        <span className="text-lg">
+                          {deadlineInfo.minutes}
+                        </span>{" "}
+                        <span className="text-sm">minutes</span>
+                      </span>
+                    </div>
+                    {!deadlineInfo.isPast ? (
+                      <div className="flex items-center gap-1.5 text-emerald-600">
+                        <CheckCircle className="h-4 w-4" />
+                        <span className="text-sm">
+                          you still have time!
                         </span>
                       </div>
-                      {!deadlineInfo.isPast ? (
-                        <div className="flex items-center gap-1.5 text-green-600">
-                          <CheckCircle className="h-4 w-4" />
-                          <span className="text-sm">
-                            you still have time!
-                          </span>
-                        </div>
-                      ) : (
-                        <div className="flex items-center gap-1.5 text-red-600">
-                          <AlertCircle className="h-4 w-4" />
-                          <span className="text-sm">deadline has passed</span>
-                        </div>
-                      )}
-                    </>
-                  ) : (
-                    <p className="text-base text-gray-500">No deadline set</p>
-                  )}
-                </CardContent>
-              </Card>
+                    ) : (
+                      <div className="flex items-center gap-1.5 text-red-500">
+                        <AlertCircle className="h-4 w-4" />
+                        <span className="text-sm">deadline has passed</span>
+                      </div>
+                    )}
+                  </>
+                ) : (
+                  <p className="text-base text-slate-400">No deadline set</p>
+                )}
+              </div>
 
-              <Card className="min-h-[100px]">
-                <CardContent className="py-4">
-                  <h3 className="text-lg font-semibold mb-2 flex items-center gap-2">
-                    <ClipboardList className="h-5 w-5 text-indigo-600" />
+              <div className="rounded-xl bg-gradient-to-br from-indigo-50 to-blue-50 border border-indigo-100/80 p-4 min-h-[100px]">
+                <div className="flex items-center gap-2 mb-2">
+                  <div className="h-7 w-7 rounded-md bg-indigo-500 flex items-center justify-center shadow-sm">
+                    <ClipboardList className="h-3.5 w-3.5 text-white" />
+                  </div>
+                  <h3 className="text-lg font-semibold text-slate-800">
                     Status
                   </h3>
-                  {preferences?.status === "submitted" ? (
-                    <>
-                      <p className="text-base text-gray-700 mb-1">
-                        your preferences are submitted
-                      </p>
-                      <div className="flex items-center gap-1.5 text-green-600">
-                        <CheckCircle className="h-4 w-4" />
-                        <span className="text-sm">all done!</span>
-                      </div>
-                    </>
-                  ) : (
-                    <>
-                      <p className="text-base text-gray-700 mb-1">
-                        your preferences are not submitted
-                      </p>
-                      <div className="flex items-center gap-1.5 text-red-600">
-                        <AlertCircle className="h-4 w-4" />
-                        <span className="text-sm">
-                          prepare your schedule!
-                        </span>
-                      </div>
-                    </>
-                  )}
-                </CardContent>
-              </Card>
+                </div>
+                {preferences?.status === "submitted" ? (
+                  <>
+                    <p className="text-base text-slate-700 mb-1">
+                      your preferences are submitted
+                    </p>
+                    <div className="flex items-center gap-1.5 text-emerald-600">
+                      <CheckCircle className="h-4 w-4" />
+                      <span className="text-sm">all done!</span>
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <p className="text-base text-slate-700 mb-1">
+                      your preferences are not submitted
+                    </p>
+                    <div className="flex items-center gap-1.5 text-red-500">
+                      <AlertCircle className="h-4 w-4" />
+                      <span className="text-sm">
+                        prepare your schedule!
+                      </span>
+                    </div>
+                  </>
+                )}
+              </div>
 
-              <Card
-                className="min-h-[100px] cursor-pointer hover:shadow-md transition-shadow border-2 hover:border-primary"
+              <div
+                className="rounded-xl bg-gradient-to-r from-emerald-500 to-teal-500 p-4 min-h-[100px] cursor-pointer hover:shadow-md active:scale-[0.98] transition-all"
                 onClick={() => navigate("/doctor/preferences")}
               >
-                <CardContent className="py-4">
-                  <h3 className="text-lg font-semibold mb-0.5 flex items-center gap-2">
-                    <Calendar className="h-5 w-5 text-green-600" />
-                    Preferences
-                  </h3>
-                  <p className="text-sm text-muted-foreground">
-                    set your preferences
-                  </p>
-                </CardContent>
-              </Card>
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    <div className="h-9 w-9 rounded-lg bg-white/20 flex items-center justify-center">
+                      <Calendar className="h-5 w-5 text-white" />
+                    </div>
+                    <div>
+                      <h3 className="text-lg font-semibold text-white">
+                        Preferences
+                      </h3>
+                      <p className="text-sm text-white/70">
+                        set your preferences
+                      </p>
+                    </div>
+                  </div>
+                  <ChevronRight className="h-5 w-5 text-white/50" />
+                </div>
+              </div>
             </div>
           </div>
 
@@ -663,6 +653,8 @@ export const DoctorHome = () => {
                 setTeamScheduleMonth(m);
               }}
               assignments={getMyAssignments()}
+              allAssignments={getTeamAssignments()}
+              myDoctorId={preferences?.doctor_id}
               selectedDate={mySelectedDate}
               onDateSelect={setMySelectedDate}
               title="My schedule"

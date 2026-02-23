@@ -22,7 +22,7 @@ import {
 import type {
   PreferenceWorkingRead,
   SchedulePublishedRead,
-  Doctor,
+  DoctorMini,
 } from "../../types";
 
 type ScheduleViewMode = "my-schedule" | "team-schedule";
@@ -44,7 +44,7 @@ export const DoctorSchedules = () => {
   // Data states
   const [publishedSchedule, setPublishedSchedule] =
     useState<SchedulePublishedRead | null>(null);
-  const [doctors, setDoctors] = useState<Doctor[]>([]);
+  const [doctors, setDoctors] = useState<DoctorMini[]>([]);
   const [preferences, setPreferences] = useState<PreferenceWorkingRead | null>(
     null
   );
@@ -61,13 +61,9 @@ export const DoctorSchedules = () => {
     const loadInitialData = async () => {
       setLoading(true);
       try {
-        // Load doctors list for name mapping
-        const doctorsList = await doctorsApi.list({
-          page: 1,
-          size: 200,
-          is_active: "all",
-        });
-        setDoctors(doctorsList.items);
+        // Load doctors list for name mapping (lightweight endpoint for all doctors)
+        const doctorNames = await doctorsApi.listNames();
+        setDoctors(doctorNames);
 
         // Load my preferences to get doctor_id
         const prefsData = await doctorPreferencesApi.getMyPreferences(

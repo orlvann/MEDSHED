@@ -82,6 +82,8 @@ interface ScheduleCalendarProps {
   month: number;
   onMonthChange: (year: number, month: number) => void;
   assignments: Assignment[];
+  allAssignments?: Assignment[];
+  myDoctorId?: number;
   selectedDate: number | null;
   onDateSelect: (day: number) => void;
   title: string;
@@ -95,6 +97,8 @@ export const ScheduleCalendar = ({
   month,
   onMonthChange,
   assignments,
+  allAssignments,
+  myDoctorId,
   selectedDate,
   onDateSelect,
   title,
@@ -146,8 +150,19 @@ export const ScheduleCalendar = ({
     return "bg-amber-400 text-white";
   };
 
+  // Get partner doctors for a given day (other doctors working on the same day, excluding current user)
+  const getPartners = (day: number): { type: ShiftType; doctorName: string }[] => {
+    if (!allAssignments || !myDoctorId) return [];
+    return allAssignments
+      .filter((a) => a.day === day && a.doctor_id !== myDoctorId)
+      .map((a) => ({
+        type: a.shift_type,
+        doctorName: doctorNames?.get(a.doctor_id) || `Doctor #${a.doctor_id}`,
+      }));
+  };
+
   // Format selected date info
-  const formatSelectedDateInfo = (): { date: string; events: { type: ShiftType; doctorName: string }[] } | null => {
+  const formatSelectedDateInfo = (): { date: string; events: { type: ShiftType; doctorName: string }[]; partners: { type: ShiftType; doctorName: string }[] } | null => {
     if (!selectedDate) return null;
 
     const dayAssignments = getDayAssignments(selectedDate);
@@ -158,8 +173,9 @@ export const ScheduleCalendar = ({
       type: a.shift_type,
       doctorName: doctorNames?.get(a.doctor_id) || `Doctor #${a.doctor_id}`,
     }));
+    const partners = variant === "personal" ? getPartners(selectedDate) : [];
 
-    return { date, events };
+    return { date, events, partners };
   };
 
   const selectedInfo = formatSelectedDateInfo();
@@ -373,6 +389,31 @@ export const ScheduleCalendar = ({
                 <span className="text-gray-600">{event.doctorName}</span>
               </div>
             ))}
+            {/* Partners for personal variant */}
+            {variant === "personal" && selectedInfo.partners.length > 0 && (
+              <div>
+                {selectedInfo.partners.map((partner, idx) => (
+                  <div
+                    key={idx}
+                    className={`flex items-center gap-2 text-sm rounded-md px-2.5 py-1.5 ${
+                      partner.type === "onsite"
+                        ? "bg-teal-50/60 text-teal-700"
+                        : "bg-amber-50/60 text-amber-700"
+                    }`}
+                  >
+                    <span
+                      className={`w-2 h-2 rounded-full flex-shrink-0 ${
+                        partner.type === "onsite" ? "bg-teal-400" : "bg-amber-400"
+                      }`}
+                    />
+                    <span className="font-medium">
+                      {partner.type === "onsite" ? "On Site" : "On Call"}
+                    </span>
+                    <span className="text-gray-600">{partner.doctorName}</span>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         )}
 

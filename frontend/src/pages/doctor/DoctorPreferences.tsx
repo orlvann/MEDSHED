@@ -28,7 +28,7 @@ import {
   doctorsApi,
 } from "../../services/api";
 import type {
-  Doctor,
+  DoctorMini,
   PreferencesDeadlineRead,
   PreferenceWorkingRead,
   PreferenceWorkingPut,
@@ -65,7 +65,7 @@ export const DoctorPreferences = () => {
   const [deadline, setDeadline] = useState<PreferencesDeadlineRead | null>(
     null
   );
-  const [colleagues, setColleagues] = useState<Doctor[]>([]);
+  const [colleagues, setColleagues] = useState<DoctorMini[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [saveLoading, setSaveLoading] = useState(false);
@@ -118,15 +118,15 @@ export const DoctorPreferences = () => {
       setLoading(true);
       setError("");
 
-      const [prefsRes, deadlineRes, doctorsRes] = await Promise.all([
+      const [prefsRes, deadlineRes, doctorNames] = await Promise.all([
         doctorPreferencesApi.getMyPreferences(year, month),
         preferencesApi.getDeadline(year, month),
-        doctorsApi.list({ size: 200, is_active: "true" }),
+        doctorsApi.listNames(),
       ]);
 
       setPreferenceData(prefsRes);
       setDeadline(deadlineRes);
-      setColleagues(doctorsRes.items);
+      setColleagues(doctorNames);
 
       // Check for localStorage draft first
       const savedDraft = draft.loadDraft(prefsRes.doctor_id, {

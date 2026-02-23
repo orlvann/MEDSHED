@@ -1,17 +1,18 @@
 # backend/routers/doctors.py
 from __future__ import annotations
 
-from typing import Literal, Optional
+from typing import List, Literal, Optional
 
 from fastapi import APIRouter, Depends, Query, status
 
-from backend.models.schemas import DoctorCreate, DoctorList, DoctorPut, DoctorRead, DoctorRole
+from backend.models.schemas import DoctorCreate, DoctorList, DoctorMini, DoctorPut, DoctorRead, DoctorRole
 from backend.models.schemas.dto_common import ErrorPayload
-from backend.routers.deps import UserCtx, require_admin
+from backend.routers.deps import UserCtx, require_admin, require_doctor
 from backend.services.doctor_service import (
     create_doctor,
     delete_doctor,
     get_doctor,
+    list_doctor_names,
     list_doctors,
     put_doctor,
 )
@@ -46,6 +47,22 @@ def doctors_list(
         user_is_active=user_is_active,
         is_head=is_head,
     )
+
+
+@router.get(
+    "/api/v1/doctors/names",
+    response_model=List[DoctorMini],
+    summary="List doctor names (lightweight, accessible by all doctors)",
+    operation_id="doctors_names",
+)
+def doctors_names(
+    user: UserCtx = Depends(require_doctor),
+):
+    """Return id + first_name + last_name for all active doctors.
+    Accessible by any authenticated doctor (regular or admin).
+    Used for name-mapping in team schedule views and colleague selectors.
+    """
+    return list_doctor_names()
 
 
 @router.get(
