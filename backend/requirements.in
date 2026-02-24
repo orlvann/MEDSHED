@@ -21,3 +21,12 @@ twilio
 
 # Background scheduler (deadline reminders)
 apscheduler
+
+# Excel Export functionality
+openpyxl
+
+# PDF Export functionality
+reportlab
+
+# Calendar Export functionality
+icalendar
