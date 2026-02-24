@@ -120,22 +120,27 @@ export const ProfileModal = ({ open, onOpenChange }: ProfileModalProps) => {
 
         <div className="space-y-6 p-4 sm:p-6 pt-4">
           {/* Profile Section */}
-          <div className="space-y-4">
+          <form autoComplete="off" onSubmit={(e) => { e.preventDefault(); handleSaveProfile(); }} className="space-y-4">
             <h3 className="text-sm font-medium text-gray-900">Personal Information</h3>
+            {/* Hidden decoy fields to absorb browser autofill */}
+            <input type="text" name="fakeuser" autoComplete="off" style={{ display: "none" }} tabIndex={-1} />
+            <input type="email" name="fakeemail" autoComplete="off" style={{ display: "none" }} tabIndex={-1} />
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-1.5">
-                <Label htmlFor="firstName">First Name</Label>
+                <Label htmlFor="profile-first">First Name</Label>
                 <Input
-                  id="firstName"
+                  id="profile-first"
+                  autoComplete="off"
                   value={firstName}
                   onChange={(e) => setFirstName(e.target.value)}
                   placeholder="First name"
                 />
               </div>
               <div className="space-y-1.5">
-                <Label htmlFor="lastName">Last Name</Label>
+                <Label htmlFor="profile-last">Last Name</Label>
                 <Input
-                  id="lastName"
+                  id="profile-last"
+                  autoComplete="off"
                   value={lastName}
                   onChange={(e) => setLastName(e.target.value)}
                   placeholder="Last name"
@@ -143,12 +148,13 @@ export const ProfileModal = ({ open, onOpenChange }: ProfileModalProps) => {
               </div>
             </div>
             <div className="space-y-1.5">
-              <Label htmlFor="phoneNumber">Phone Number</Label>
+              <Label htmlFor="profile-phone">Phone Number</Label>
               <div className="relative">
                 <Smartphone className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
                 <Input
-                  id="phoneNumber"
+                  id="profile-phone"
                   type="tel"
+                  autoComplete="off"
                   value={phoneNumber}
                   onChange={(e) => setPhoneNumber(e.target.value)}
                   placeholder="+48 123 456 789"
@@ -167,7 +173,7 @@ export const ProfileModal = ({ open, onOpenChange }: ProfileModalProps) => {
             )}
             <div className="flex gap-2">
               <Button
-                onClick={handleSaveProfile}
+                type="submit"
                 disabled={profileLoading}
                 className={canAccessAdmin ? "flex-1" : "w-full"}
               >
@@ -176,6 +182,7 @@ export const ProfileModal = ({ open, onOpenChange }: ProfileModalProps) => {
               </Button>
               {canAccessAdmin && (
                 <Button
+                  type="button"
                   variant="default"
                   onClick={handleGoToAdmin}
                   className="flex-1"
@@ -185,7 +192,7 @@ export const ProfileModal = ({ open, onOpenChange }: ProfileModalProps) => {
                 </Button>
               )}
             </div>
-          </div>
+          </form>
 
           {/* Change Password Section */}
           <div className="space-y-4 pt-2 border-t">
@@ -196,7 +203,9 @@ export const ProfileModal = ({ open, onOpenChange }: ProfileModalProps) => {
                 <div className="relative">
                   <Input
                     id="currentPassword"
+                    name="current-password"
                     type={showCurrentPassword ? "text" : "password"}
+                    autoComplete="current-password"
                     value={currentPassword}
                     onChange={(e) => setCurrentPassword(e.target.value)}
                     placeholder="Enter current password"
@@ -220,7 +229,9 @@ export const ProfileModal = ({ open, onOpenChange }: ProfileModalProps) => {
                 <div className="relative">
                   <Input
                     id="newPassword"
+                    name="new-password"
                     type={showNewPassword ? "text" : "password"}
+                    autoComplete="new-password"
                     value={newPassword}
                     onChange={(e) => setNewPassword(e.target.value)}
                     placeholder="Enter new password"
@@ -244,7 +255,9 @@ export const ProfileModal = ({ open, onOpenChange }: ProfileModalProps) => {
                 <div className="relative">
                   <Input
                     id="confirmPassword"
+                    name="new-password"
                     type={showConfirmPassword ? "text" : "password"}
+                    autoComplete="new-password"
                     value={confirmPassword}
                     onChange={(e) => setConfirmPassword(e.target.value)}
                     placeholder="Confirm new password"

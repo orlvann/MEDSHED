@@ -8,6 +8,7 @@ python-dotenv
 email-validator
 sqlalchemy
 alembic
+psycopg2-binary
 
 # Pin OR-Tools + protobuf to avoid CP-SAT segfaults / ABI mismatches
 ortools==9.12.4544

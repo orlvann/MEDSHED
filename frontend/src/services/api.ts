@@ -5,6 +5,7 @@ import type {
   User,
   Doctor,
   DoctorCreate,
+  DoctorMini,
   DoctorPut,
   DoctorList,
   ErrorPayload,
@@ -139,6 +140,11 @@ export const doctorsApi = {
     is_active?: "true" | "false" | "all";
   }): Promise<DoctorList> => {
     const response = await api.get<DoctorList>("/api/v1/doctors", { params });
+    return response.data;
+  },
+
+  listNames: async (): Promise<DoctorMini[]> => {
+    const response = await api.get<DoctorMini[]>("/api/v1/doctors/names");
     return response.data;
   },
 

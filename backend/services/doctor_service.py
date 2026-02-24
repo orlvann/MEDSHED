@@ -51,7 +51,7 @@ from sqlalchemy.orm import Session
 from backend.db.session import SessionLocal
 from backend.models.common_enums import DoctorRole
 from backend.models.orm.doctor import Doctor
-from backend.models.schemas import DoctorCreate, DoctorList, DoctorPut, DoctorRead
+from backend.models.schemas import DoctorCreate, DoctorList, DoctorMini, DoctorPut, DoctorRead
 from backend.models.schemas.dto_common import make_error
 
 
@@ -86,6 +86,27 @@ def _doctor_to_dto(doctor: Doctor, db: Session) -> DoctorRead:
         user_is_active=linked_user.is_active if linked_user else None,
         user_role=linked_user.role if linked_user else None,
     )
+
+
+# --------------------------- NAMES (lightweight, doctor-accessible) --------
+
+
+def list_doctor_names() -> list[DoctorMini]:
+    """Return id + first_name + last_name for all active doctors."""
+    db = _get_db()
+    try:
+        doctors = (
+            db.query(Doctor.id, Doctor.first_name, Doctor.last_name)
+            .filter(Doctor.is_active == True)
+            .order_by(Doctor.last_name, Doctor.first_name)
+            .all()
+        )
+        return [
+            DoctorMini(id=d.id, first_name=d.first_name, last_name=d.last_name)
+            for d in doctors
+        ]
+    finally:
+        db.close()
 
 
 # --------------------------- LIST ------------------------------------------

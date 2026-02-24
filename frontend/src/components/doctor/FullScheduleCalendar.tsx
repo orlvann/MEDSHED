@@ -8,7 +8,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "../ui/select";
-import type { Assignment, Doctor } from "../../types";
+import type { Assignment, DoctorMini } from "../../types";
 import {
   MONTH_NAMES,
   WEEKDAY_NAMES_SHORT,
@@ -90,7 +90,7 @@ interface FullScheduleCalendarProps {
   doctorNames: Map<number, string>;
   highlightedDoctorId: number | null;
   onHighlightChange: (doctorId: number | null) => void;
-  doctors: Doctor[];
+  doctors: DoctorMini[];
   loading?: boolean;
   hasPublishedSchedule: boolean;
 }

@@ -18,7 +18,7 @@ import {
 } from "./types";
 import type { ValidationError } from "./validation";
 import type {
-  Doctor,
+  DoctorMini,
   PreferenceWorkingPut,
   PreferenceStatus,
   PreferencesDeadlineRead,
@@ -36,7 +36,7 @@ export interface PreferencesEditorProps {
   month: number;
 
   // External data
-  colleagues: Doctor[];
+  colleagues: DoctorMini[];
   deadline: PreferencesDeadlineRead | null;
 
   // Form data (controlled)

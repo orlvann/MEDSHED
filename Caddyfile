@@ -1,0 +1,4 @@
+# Replace with your actual domain
+api.medshed.example.com {
+	reverse_proxy backend:8000
+}

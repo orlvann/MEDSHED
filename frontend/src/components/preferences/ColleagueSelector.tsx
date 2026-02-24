@@ -1,10 +1,10 @@
 import { useState, useRef, useEffect } from "react";
 import { ChevronDown, X, Check } from "lucide-react";
 import { InfoTooltip } from "./InfoTooltip";
-import type { Doctor } from "../../types";
+import type { DoctorMini } from "../../types";
 
 interface ColleagueSelectorProps {
-  colleagues: Doctor[];
+  colleagues: DoctorMini[];
   selectedIds: number[];
   currentDoctorId: number;
   onChange: (selectedIds: number[]) => void;
