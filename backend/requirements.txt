@@ -92,8 +92,6 @@ pandas==3.0.0
     # via ortools
 passlib==1.7.4
     # via -r backend/requirements.in
-psycopg2-binary==2.9.10
-    # via -r backend/requirements.in
 pillow==12.1.1
     # via reportlab
 propcache==0.4.1
@@ -102,6 +100,8 @@ propcache==0.4.1
     #   yarl
 protobuf==5.29.6
     # via ortools
+psycopg2-binary==2.9.10
+    # via -r backend/requirements.in
 pyasn1==0.6.2
     # via
     #   python-jose

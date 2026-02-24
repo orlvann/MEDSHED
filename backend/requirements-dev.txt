@@ -151,6 +151,8 @@ propcache==0.4.1
     #   yarl
 protobuf==5.29.6
     # via ortools
+psycopg2-binary==2.9.11
+    # via -r backend/requirements.in
 pyasn1==0.6.2
     # via
     #   python-jose
