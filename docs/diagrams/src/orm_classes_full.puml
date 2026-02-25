@@ -1,0 +1,145 @@
+@startuml orm_classes_full
+' run:
+' cd docs/diagrams/src
+' plantuml -tpng -Ddpi=300 -o ../export orm_classes_full.puml
+
+hide circle
+skinparam Shadowing false
+skinparam RoundCorner 8
+skinparam ClassAttributeIconSize 0
+skinparam DefaultFontName Arial
+skinparam DefaultFontSize 14
+skinparam ArrowColor #333333
+skinparam LineColor #333333
+skinparam PackageBorderColor #333333
+skinparam PackageBackgroundColor #FFFFFF
+skinparam ClassBorderColor #333333
+skinparam ClassBackgroundColor #FFFFFF
+skinparam NoteBackgroundColor #FFFFFF
+skinparam NoteBorderColor #333333
+skinparam BackgroundColor #FFFFFF
+
+top to bottom direction
+skinparam linetype ortho
+
+package "ORM — Doctor" {
+  class Doctor {
+    +id: int
+    +first_name: str
+    +last_name: str
+    +role: DoctorRole
+    +is_active: bool
+    +is_head: bool
+    +email: Optional[str]
+    +created_at: datetime
+    +updated_at: datetime
+  }
+}
+
+package "ORM — Preferences" {
+  class PreferenceWorking {
+    +id: int
+    +doctor_id: int
+    +year: int
+    +month: int
+    +lock_version: int
+    +unavailable_onsite_days: Optional[list[int]]
+    +unavailable_oncall_days: Optional[list[int]]
+    +preferred_onsite_days: Optional[list[int]]
+    +preferred_oncall_days: Optional[list[int]]
+    +min_onsite_total: Optional[int]
+    +max_onsite_total: Optional[int]
+    +target_onsite_total: Optional[int]
+    +min_oncall_total: Optional[int]
+    +max_oncall_total: Optional[int]
+    +target_oncall_total: Optional[int]
+    +max_onsite_weekends: Optional[int]
+    +target_onsite_weekends: Optional[int]
+    +max_oncall_weekends: Optional[int]
+    +target_oncall_weekends: Optional[int]
+    +preferred_onsite_weekdays: Optional[list[int]]
+    +preferred_oncall_weekdays: Optional[list[int]]
+    +avoid_onsite_weekdays: Optional[list[int]]
+    +avoid_oncall_weekdays: Optional[list[int]]
+    +allow_weekend_consecutive_onsite_oncall: bool
+    +preferred_partners: Optional[list[int]]
+    +comments: Optional[str]
+    +last_saved_at: Optional[datetime]
+    +last_saved_by_user_id: Optional[int]
+    +last_saved_by_role: Optional[str]
+    +last_admin_note: Optional[str]
+  }
+
+  class PreferenceVersion {
+    +id: int
+    +doctor_id: int
+    +year: int
+    +month: int
+    +kind: str
+    +payload: dict
+    +created_at: datetime
+    +created_by_user_id: int
+    +created_by_role: str
+    +note: Optional[str]
+  }
+
+  class PreferencePointer {
+    +id: int
+    +doctor_id: int
+    +year: int
+    +month: int
+    +current_version_id: Optional[int]
+    +submitted_at: Optional[datetime]
+    +submitted_by_user_id: Optional[int]
+    +submitted_by_role: Optional[str]
+  }
+}
+
+package "ORM — Schedules" {
+  class ScheduleWorking {
+    +year: int
+    +month: int
+    +payload: dict
+    +lock_version: int
+    +updated_by_user_id: Optional[int]
+    +updated_at: datetime
+  }
+
+  class ScheduleVersion {
+    +id: int
+    +year: int
+    +month: int
+    +payload: dict
+    +kind: str
+    +created_by_user_id: Optional[int]
+    +created_by_role: Optional[str]
+    +created_at: datetime
+  }
+
+  class SchedulePointer {
+    +year: int
+    +month: int
+    +current_draft_version_id: Optional[int]
+    +current_published_version_id: Optional[int]
+    +updated_at: datetime
+  }
+
+  class ScheduleDiagnostics {
+    +id: int
+    +version_id: int
+    +quality: dict
+    +computed_at: datetime
+  }
+}
+
+' --- FK intent ---
+PreferenceWorking --> Doctor : doctor_id
+PreferenceVersion --> Doctor : doctor_id
+PreferencePointer --> Doctor : doctor_id
+PreferencePointer --> PreferenceVersion : current_version_id
+
+SchedulePointer --> ScheduleVersion : current_draft_version_id
+SchedulePointer --> ScheduleVersion : current_published_version_id
+ScheduleDiagnostics --> ScheduleVersion : version_id
+
+@enduml

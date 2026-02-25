@@ -1,0 +1,106 @@
+@startuml dto_classes_full
+' run:
+' cd docs/diagrams/src
+' plantuml -tpng -Ddpi=300 -o ../export dto_classes_full.puml
+
+hide circle
+skinparam Shadowing false
+skinparam RoundCorner 8
+skinparam ClassAttributeIconSize 0
+skinparam DefaultFontName Arial
+skinparam DefaultFontSize 18
+skinparam ArrowColor #333333
+skinparam LineColor #333333
+skinparam PackageBorderColor #333333
+skinparam PackageBackgroundColor #FFFFFF
+skinparam ClassBorderColor #333333
+skinparam ClassBackgroundColor #FFFFFF
+skinparam ObjectBorderColor #333333
+skinparam ObjectBackgroundColor #FFFFFF
+skinparam NoteBackgroundColor #FFFFFF
+skinparam NoteBorderColor #333333
+skinparam BackgroundColor #FFFFFF
+skinparam RectangleBackgroundColor #FFFFFF
+skinparam RectangleBorderColor #333333
+
+' A4 portrait, but force MORE vertical stacking (bigger text)
+top to bottom direction
+skinparam linetype ortho
+skinparam ranksep 55
+skinparam nodesep 35
+skinparam padding 12
+
+package "DTO — Schedules (backend/models/schemas/schedule.py)" {
+
+  ' --- Top: request side ---
+  class ScheduleGenerateRequest {
+    +year: YearInt
+    +month: MonthInt
+    +participant_doctor_ids: List[int]
+    +ignore_slots: List[IgnoreSlot]
+    +justification: Optional[str]
+    +head_commitment_resolutions: List[HeadCommitmentResolution]
+  }
+
+  together {
+    class IgnoreSlot {
+      +day: DayInt
+      +shift_type: ShiftType
+    }
+
+    class HeadCommitmentResolution {
+      +day: DayInt
+      +shift_type: ShiftType
+      +chosen_head_id: int
+    }
+  }
+
+  ' --- Bottom: payload side ---
+  class SchedulePayload {
+    +participant_doctor_ids: List[int]
+    +assignments: List[Assignment]
+    +inputs_snapshot: Optional[InputsSnapshotRead]
+    +meta: dict[str, Any]
+  }
+
+  class Assignment {
+    +day: DayInt
+    +shift_type: ShiftType
+    +doctor_id: int
+  }
+
+  class InputsSnapshotRead {
+    +doctors: Dict[int, DoctorSnapshotRead]
+    +preference_version_id_by_doctor: Dict[int, Optional[int]]
+  }
+
+  class DoctorSnapshotRead {
+    +role: DoctorRole
+    +is_head: bool
+    +display_name: str
+    +is_active_at_snapshot: bool
+  }
+}
+
+' =========================
+' Relationships
+' =========================
+
+' Keep connections vertical and clean
+ScheduleGenerateRequest *-- "0..*" IgnoreSlot
+ScheduleGenerateRequest *-- "0..*" HeadCommitmentResolution
+
+SchedulePayload *-- "0..*" Assignment
+SchedulePayload o-- "0..1" InputsSnapshotRead
+InputsSnapshotRead *-- "0..*" DoctorSnapshotRead
+
+' =========================
+' Layout nudges (hidden links)
+' =========================
+' Force 2 vertical "lanes": request lane above payload lane
+ScheduleGenerateRequest -[hidden]down-> SchedulePayload
+
+' Keep the two small request helper classes directly under the request
+IgnoreSlot -[hidden]right-> HeadCommitmentResolution
+
+@enduml

@@ -1,0 +1,97 @@
+@startuml core_classes
+' run:
+' cd docs/diagrams/src
+' plantuml -tpng -Ddpi=300 -o ../export core_classes.puml
+
+' --- Common style (keep identical across all PlantUML diagrams) ---
+hide circle
+skinparam Shadowing false
+skinparam RoundCorner 8
+skinparam ClassAttributeIconSize 0
+skinparam DefaultFontName Arial
+skinparam DefaultFontSize 14
+skinparam ArrowColor #333333
+skinparam LineColor #333333
+skinparam PackageBorderColor #333333
+skinparam PackageBackgroundColor #FFFFFF
+skinparam ClassBorderColor #333333
+skinparam ClassBackgroundColor #FFFFFF
+skinparam ObjectBorderColor #333333
+skinparam ObjectBackgroundColor #FFFFFF
+skinparam NoteBackgroundColor #FFFFFF
+skinparam NoteBorderColor #333333
+skinparam BackgroundColor #FFFFFF
+skinparam RectangleBackgroundColor #FFFFFF
+skinparam RectangleBorderColor #333333
+
+' Layout: vertical for A4 portrait readability
+top to bottom direction
+skinparam linetype ortho
+skinparam ranksep 30
+skinparam nodesep 18
+
+package "Core classes — solver input & output (backend/core/types.py)" {
+
+  class DoctorInput {
+    +id: int
+    +role: DoctorRole
+    +is_head: bool
+    +is_active: bool
+  }
+
+  class PreferencesInput {
+    +doctor_id: int
+    +unavailable_onsite_days: List[int]
+    +unavailable_oncall_days: List[int]
+    +preferred_onsite_days: List[int]
+    +preferred_oncall_days: List[int]
+    +preferred_partners: List[int]
+  }
+
+  class ProblemData {
+    +year: int
+    +month: int
+    +days: List[int]
+    +participant_doctor_ids: Set[int]
+    +ignore_slots: Set[(int, ShiftType)]
+    +carryover: MonthCarryover?
+  }
+
+  class MonthCarryover {
+    +prev_year: int
+    +prev_month: int
+    +per_doctor: Dict[int, DoctorCarryover]
+  }
+
+  class HardModel {
+    +active_days: List[int]
+    +participant_doctor_ids: Set[int]
+    +ignore_slots: Set[(int, ShiftType)]
+    +allowed_slots: Dict[(int, ShiftType), List[int]]
+    +carryover: MonthCarryover?
+  }
+
+  class SolverSolution {
+    +status: SolverStatus
+    +assignments: List[SolverAssignment]
+    +issues: List[FeasibilityIssue]
+  }
+
+  class SolverAssignment {
+    +day: int
+    +shift_type: ShiftType
+    +doctor_id: int
+  }
+}
+
+' Minimal key relations (not a full "encyclopedia map")
+ProblemData o-- "0..1" MonthCarryover
+ProblemData *-- "0..*" DoctorInput
+ProblemData *-- "0..*" PreferencesInput
+
+HardModel o-- "0..1" MonthCarryover
+ProblemData ..> HardModel : build_hard_model()
+
+SolverSolution *-- "0..*" SolverAssignment
+
+@enduml

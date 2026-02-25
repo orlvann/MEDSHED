@@ -1,0 +1,99 @@
+' run: 
+'cd docs/diagrams/src
+'plantuml -tpng -Ddpi=300 -o ../export components.puml
+
+@startuml component_diagram
+hide circle
+skinparam Shadowing false
+skinparam RoundCorner 8
+skinparam ClassAttributeIconSize 0
+skinparam DefaultFontName Arial
+skinparam DefaultFontSize 14
+skinparam ArrowColor #333333
+skinparam LineColor #333333
+skinparam PackageBorderColor #333333
+skinparam PackageBackgroundColor #FFFFFF
+skinparam ClassBorderColor #333333
+skinparam ClassBackgroundColor #FFFFFF
+' Make object diagrams black & white as well
+skinparam ObjectBorderColor #333333
+skinparam ObjectBackgroundColor #FFFFFF
+skinparam NoteBackgroundColor #FFFFFF
+skinparam NoteBorderColor #333333
+skinparam BackgroundColor #FFFFFF
+' Force black & white fills for non-class shapes (rectangle/component/etc.)
+skinparam RectangleBackgroundColor #FFFFFF
+skinparam RectangleBorderColor #333333
+skinparam ComponentBackgroundColor #FFFFFF
+skinparam ComponentBorderColor #333333
+
+title Component diagram (components, dependencies, interfaces)
+
+
+package "Frontend" {
+  [React + TypeScript SPA] as FE
+}
+
+package "Backend API (FastAPI)" {
+  [Routers\n(auth, doctors, preferences,\navailability, schedules, admin users)] as Routers
+  [Services\n(orchestration + policies)] as Services
+  [DTO Schemas\n(Pydantic)] as DTO
+  [Normalization Utils] as Norm
+  [Email Service\n(SMTP)] as Email
+}
+
+package "Scheduling Core (pure Python)" {
+  [Core Types\n(ProblemData, DoctorInput,\nPreferencesInput)] as CoreTypes
+  [Scheduler Pipeline\n(precheck → hard model → solve)] as Scheduler
+  [CP-SAT Engine\n(OR-Tools)] as Engine
+  [Diagnostics Core\n(snapshot-only metrics)] as DiagCore
+}
+
+package "Persistence" {
+  [SQLAlchemy ORM Models] as ORM
+  database "PostgreSQL" as DB
+}
+
+cloud "External SMTP Server" as SMTP
+
+' --- Interfaces (explicit) ---
+interface "IHTTP_API\n(JSON/REST)" as IHTTP
+interface "IDB\n(SQLAlchemy Session)" as IDB
+interface "ISolver\n(core call boundary)" as ISolver
+interface "IEmail\n(SMTP)" as IEmail
+
+FE - IHTTP
+IHTTP - Routers
+
+Routers --> DTO : request/response models
+Routers --> Services : call
+
+Services --> Norm : deterministic payload normalization
+Services --> ORM : map DB rows to domain objects
+Services - IDB
+IDB - DB
+
+Services - ISolver
+ISolver - Scheduler
+
+Scheduler --> CoreTypes
+Scheduler --> Engine
+Services --> DiagCore : compute verification metrics
+
+Email - IEmail
+Services --> Email : password reset,\naccount setup, deadlines
+IEmail - SMTP
+
+note right of Scheduler
+"Pure core" boundary:
+no DB, no FastAPI/Pydantic
+end note
+
+note right of Services
+Service layer owns:
+versioning, pointers,
+no-fallback policies,
+snapshot building
+end note
+
+@enduml

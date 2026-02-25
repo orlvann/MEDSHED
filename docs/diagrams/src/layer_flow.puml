@@ -1,0 +1,41 @@
+' run: 
+'cd docs/diagrams/src
+'plantuml -tpng -Ddpi=300 -o ../export layer_flow.puml
+
+@startuml layer_flow_diagram
+' --- Common style (keep identical across all PlantUML diagrams) ---
+hide circle
+skinparam Shadowing false
+skinparam RoundCorner 8
+skinparam ClassAttributeIconSize 0
+skinparam DefaultFontName Arial
+skinparam DefaultFontSize 14
+skinparam ArrowColor #333333
+skinparam LineColor #333333
+skinparam PackageBorderColor #333333
+skinparam PackageBackgroundColor #FFFFFF
+skinparam ClassBorderColor #333333
+skinparam ClassBackgroundColor #FFFFFF
+' Make object diagrams black & white as well
+skinparam ObjectBorderColor #333333
+skinparam ObjectBackgroundColor #FFFFFF
+skinparam NoteBackgroundColor #FFFFFF
+skinparam NoteBorderColor #333333
+skinparam BackgroundColor #FFFFFF
+' Force black & white fills for non-class shapes (rectangle/component/etc.)
+skinparam RectangleBackgroundColor #FFFFFF
+skinparam RectangleBorderColor #333333
+skinparam ComponentBackgroundColor #FFFFFF
+skinparam ComponentBorderColor #333333
+
+
+rectangle "PostgreSQL\n(DB tables)" as db
+rectangle "SQLAlchemy ORM\n(backend/models/orm/*)" as orm
+rectangle "Pydantic DTO\n(backend/models/schemas/*)" as dto
+rectangle "Core dataclasses\n(backend/core/types.py)" as core
+
+db --> orm : "mapped by"
+orm --> dto : "validated/serialized"
+dto --> core : "services build\nProblemData"
+
+@enduml

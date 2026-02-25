@@ -13,5 +13,8 @@
         "source.fixAll.ruff": "explicit",
         "source.organizeImports.ruff": "explicit"
     },
-    "makefile.configureOnOpen": false
+    "makefile.configureOnOpen": false,
+    "plantuml.diagramsRoot": "docs/diagrams/src",
+    "plantuml.exportOutDir": "docs/diagrams/export",
+    "plantuml.render": "Local"
 }

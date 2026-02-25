@@ -1,0 +1,158 @@
+@startuml core_classes_full2
+' run:
+' cd docs/diagrams/src
+' plantuml -tpng -Ddpi=300 -o ../export core_classes_full2.puml
+
+hide circle
+skinparam Shadowing false
+skinparam RoundCorner 8
+skinparam ClassAttributeIconSize 0
+skinparam DefaultFontName Arial
+skinparam DefaultFontSize 14
+skinparam ArrowColor #333333
+skinparam LineColor #333333
+skinparam PackageBorderColor #333333
+skinparam PackageBackgroundColor #FFFFFF
+skinparam ClassBorderColor #333333
+skinparam ClassBackgroundColor #FFFFFF
+skinparam ObjectBorderColor #333333
+skinparam ObjectBackgroundColor #FFFFFF
+skinparam NoteBackgroundColor #FFFFFF
+skinparam NoteBorderColor #333333
+skinparam BackgroundColor #FFFFFF
+skinparam RectangleBackgroundColor #FFFFFF
+skinparam RectangleBorderColor #333333
+
+top to bottom direction
+skinparam linetype ortho
+skinparam ranksep 30
+skinparam nodesep 18
+
+package "Core — solver input & output (backend/core/types.py)" {
+
+  class DoctorInput {
+    +id: int
+    +role: DoctorRole
+    +is_head: bool
+    +is_active: bool = True
+  }
+
+  class PreferencesInput {
+    +doctor_id: int
+    --
+    +unavailable_onsite_days: List[int]
+    +unavailable_oncall_days: List[int]
+    +preferred_onsite_days: List[int]
+    +preferred_oncall_days: List[int]
+    --
+    +min_onsite_total: int?
+    +max_onsite_total: int?
+    +target_onsite_total: int?
+    +min_oncall_total: int?
+    +max_oncall_total: int?
+    +target_oncall_total: int?
+    --
+    +max_onsite_weekends: int?
+    +target_onsite_weekends: int?
+    +max_oncall_weekends: int?
+    +target_oncall_weekends: int?
+    --
+    +preferred_onsite_weekdays: List[int]
+    +preferred_oncall_weekdays: List[int]
+    +avoid_onsite_weekdays: List[int]
+    +avoid_oncall_weekdays: List[int]
+    --
+    +allow_weekend_consecutive_onsite_oncall: bool = False
+    +preferred_partners: List[int]
+    +comments: str?
+  }
+
+  class ProblemData {
+    +year: int
+    +month: int
+    --
+    +days: List[int]
+    +weekdays: Dict[int, int]
+    --
+    +doctors: Dict[int, DoctorInput]
+    +preferences: Dict[int, PreferencesInput]
+    --
+    +participant_doctor_ids: Set[int]
+    +ignore_slots: Set[Tuple[int, ShiftType]]
+    --
+    +carryover: MonthCarryover?
+  }
+
+  class MonthCarryover {
+    +prev_year: int
+    +prev_month: int
+    +per_doctor: Dict[int, DoctorCarryover]
+  }
+
+  class HardModel {
+    +year: int
+    +month: int
+    --
+    +days: List[int]
+    +active_days: List[int]
+    --
+    +doctors: Dict[int, DoctorInput]
+    +preferences: Dict[int, PreferencesInput]
+    --
+    +participant_doctor_ids: Set[int]
+    +ignore_slots: Set[Tuple[int, ShiftType]]
+    --
+    +carryover: MonthCarryover?
+    --
+    +allowed_slots: Dict[Tuple[int, ShiftType], List[int]]
+    +seed_hints: Any?
+  }
+
+  together {
+    class SolverSolution {
+      +status: SolverStatus
+      +assignments: List[SolverAssignment]
+      +issues: List[FeasibilityIssue]
+    }
+
+    class SolverAssignment {
+      +day: int
+      +shift_type: ShiftType
+      +doctor_id: int
+    }
+  }
+}
+
+' -------------------------
+' Relations
+' -------------------------
+
+ProblemData o-- "0..1" MonthCarryover
+
+' KEY CHANGE:
+' - DoctorInput is placed to the LEFT of ProblemData
+' - and the relation enters ProblemData from the left side
+ProblemData "1" *--left-- "0..*" DoctorInput
+
+ProblemData *-- "0..*" PreferencesInput
+
+HardModel o-- "0..1" MonthCarryover
+ProblemData ..> HardModel : build_hard_model()
+
+SolverSolution *-- "0..*" SolverAssignment
+
+' -------------------------
+' Layout helpers
+' -------------------------
+
+' Force DoctorInput to the LEFT of ProblemData
+DoctorInput -[hidden]right-> ProblemData
+
+' Main vertical flow
+ProblemData -[hidden]down-> HardModel
+HardModel  -[hidden]down-> SolverSolution
+
+' Output row side-by-side
+SolverSolution -[hidden]right-> SolverAssignment
+
+@enduml

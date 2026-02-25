@@ -65,9 +65,9 @@ def rest_cross_shift_weight(*, role: DoctorRole) -> int:
 # Preferred concrete day missing penalty (per preferred day that is not assigned).
 # NOTE: We want head+specialist to SUM, so head is an "extra" added on top.
 
-PREF_DAY_HEAD_MISS_WEIGHT = 40
-PREF_DAY_SPECIALIST_MISS_WEIGHT = 30
-PREF_DAY_RESIDENT_MISS_WEIGHT = 20
+PREF_DAY_HEAD_MISS_WEIGHT = 180  # 40 # 80
+PREF_DAY_SPECIALIST_MISS_WEIGHT = 140  # 30 # 40
+PREF_DAY_RESIDENT_MISS_WEIGHT = 100  # 20
 
 # Exceeding max totals (per 1 shift above max).
 MAX_TOTAL_EXCESS_WEIGHT = 40
@@ -116,8 +116,8 @@ def preferred_day_miss_weight_for_doctor(*, is_head: bool, role: DoctorRole) -> 
 
 # MVP weights: a bit lower than rest rules, comparable or slightly lower than totals.
 # Weekends are slightly more important because they are usually less preferred.
-FAIRNESS_WEEKDAY_ONSITE_WEIGHT = 10
-FAIRNESS_WEEKEND_ONSITE_WEIGHT = 14
+FAIRNESS_WEEKDAY_ONSITE_WEIGHT = 20  # 10
+FAIRNESS_WEEKEND_ONSITE_WEIGHT = 28  # 14
 FAIRNESS_WEEKDAY_ONCALL_WEIGHT = 8
 FAIRNESS_WEEKEND_ONCALL_WEIGHT = 12
 
