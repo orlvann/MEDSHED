@@ -1,0 +1,125 @@
+@startuml schedule_payload_object_diagram_a4_bw
+' run:
+' cd docs/diagrams/src
+' plantuml -tpng -Ddpi=300 -o ../export schedule_payload_object_diagram_a4_bw.puml
+
+' --- Common style (B/W) ---
+hide circle
+skinparam Shadowing false
+skinparam RoundCorner 8
+skinparam ClassAttributeIconSize 0
+skinparam DefaultFontName Arial
+skinparam DefaultFontSize 14
+skinparam ArrowColor #333333
+skinparam LineColor #333333
+skinparam BackgroundColor #FFFFFF
+skinparam ObjectBorderColor #333333
+skinparam ObjectBackgroundColor #FFFFFF
+skinparam NoteBackgroundColor #FFFFFF
+skinparam NoteBorderColor #333333
+skinparam RectangleBackgroundColor #FFFFFF
+skinparam RectangleBorderColor #333333
+
+' --- Layout: more vertical ---
+top to bottom direction
+skinparam linetype ortho
+skinparam ranksep 26
+skinparam nodesep 18
+skinparam padding 8
+skinparam maxMessageSize 28
+
+title Object diagram — one stored SchedulePayload (schedule artifact)
+
+' =========================
+' Main object: SchedulePayload (ONLY real DTO fields)
+' =========================
+object "payload_2026_03 : SchedulePayload" as P {
+  participant_doctor_ids = "[1,2,3,4,5,6,7,8,9,10,11,12]"
+  assignments = "List[Assignment]"
+  inputs_snapshot = "InputsSnapshotRead | null"
+  meta = "dict[str, Any]"
+}
+
+' =========================
+' Meta (dict[str, Any]) — on the RIGHT
+' =========================
+object "meta_2026_03 : dict[str, Any]" as M {
+  labels = "[""draft"", ""as_generated""]"
+  exceptions = "[{...}]"
+}
+
+' Force placement + connect (composition-style)
+P -[hidden]right-> M
+P *-- M
+
+' =========================
+' Assignments — fewer examples
+' =========================
+object "a1 : Assignment" as A1 {
+  day = 1
+  shift_type = ONSITE
+  doctor_id = 1
+}
+object "a2 : Assignment" as A2 {
+  day = 1
+  shift_type = ONCALL
+  doctor_id = 2
+}
+object "a3 : Assignment" as A3 {
+  day = 2
+  shift_type = ONSITE
+  doctor_id = 7
+}
+object "a4 : Assignment" as A4 {
+  day = 2
+  shift_type = ONCALL
+  doctor_id = 3
+}
+
+P *-- A1
+P *-- A2
+P *-- A3
+P *-- A4
+
+' Layout: keep assignments under payload
+P -[hidden]down-> A1
+A1 -[hidden]right-> A2
+A1 -[hidden]down-> A3
+A3 -[hidden]right-> A4
+
+' =========================
+' Inputs snapshot
+' =========================
+object "snap_2026_03 : InputsSnapshotRead" as S {
+  doctors = "{ 1->doc_1, 2->doc_2, 7->doc_7, ... }"
+  preference_version_id_by_doctor = "{ 1->1012, 2->1013, 3->1014, ... }"
+}
+
+' Put snapshot below assignments and connect as optional reference
+A3 -[hidden]down-> S
+P o-- S
+
+object "doc_1 : DoctorSnapshotRead" as D1 {
+  role = specialist
+  is_head = true
+  display_name = "Brad Devon"
+  is_active_at_snapshot = true
+}
+object "doc_2 : DoctorSnapshotRead" as D2 {
+  role = resident
+  is_head = false
+  display_name = "Rick Grizzly"
+  is_active_at_snapshot = true
+}
+object "doc_7 : DoctorSnapshotRead" as D7 {
+  role = specialist
+  is_head = true
+  display_name = "Mark Router"
+  is_active_at_snapshot = true
+}
+
+S *-- D1 : doctors[1]
+S *-- D2 : doctors[2]
+S *-- D7 : doctors[7]
+
+@enduml

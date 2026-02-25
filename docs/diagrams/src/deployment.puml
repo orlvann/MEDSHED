@@ -1,0 +1,65 @@
+' run: 
+'cd docs/diagrams/src
+'plantuml -tpng -Ddpi=300 -o ../export deployment.puml
+
+@startuml deployment_diagram
+' --- Common style (keep identical across all PlantUML diagrams) ---
+hide circle
+skinparam Shadowing false
+skinparam RoundCorner 8
+skinparam ClassAttributeIconSize 0
+skinparam DefaultFontName Arial
+skinparam DefaultFontSize 14
+skinparam ArrowColor #333333
+skinparam LineColor #333333
+skinparam PackageBorderColor #333333
+skinparam PackageBackgroundColor #FFFFFF
+skinparam ClassBorderColor #333333
+skinparam ClassBackgroundColor #FFFFFF
+' Make object diagrams black & white as well
+skinparam ObjectBorderColor #333333
+skinparam ObjectBackgroundColor #FFFFFF
+skinparam NoteBackgroundColor #FFFFFF
+skinparam NoteBorderColor #333333
+skinparam BackgroundColor #FFFFFF
+' Force black & white fills for non-class shapes (rectangle/component/etc.)
+skinparam RectangleBackgroundColor #FFFFFF
+skinparam RectangleBorderColor #333333
+skinparam ComponentBackgroundColor #FFFFFF
+skinparam ComponentBorderColor #333333
+
+title Deployment diagram (nodes, placement, protocols)
+
+skinparam shadowing false
+skinparam componentStyle rectangle
+
+node "User Device" as user {
+  artifact "Web Browser\n(React SPA)" as browser
+}
+
+cloud "SMTP Server\n(external)" as smtp
+
+node "Application Server" as app {
+  artifact "ASGI Server\n(Uvicorn/Gunicorn)" as asgi
+  artifact "MedSched Backend API\n(FastAPI)" as api
+  artifact "Core Scheduler\n(Python + OR-Tools CP-SAT)" as core
+}
+
+database "PostgreSQL\n(relational DB)" as db
+
+browser --> api : HTTPS\n(JSON over REST)
+api --> db : SQL over TCP\n(SQLAlchemy)
+api --> core : in-process call\n(Python)
+api --> smtp : SMTP / STARTTLS\n(smtplib)
+
+note right of api
+CORS enabled for UI access:
+ALLOWED_ORIGINS (env)
+end note
+
+note right of smtp
+Email links point to:
+FRONTEND_URL (env)
+end note
+
+@enduml

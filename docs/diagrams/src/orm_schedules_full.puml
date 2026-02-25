@@ -1,0 +1,118 @@
+@startuml orm_schedules_full
+' run:
+' cd docs/diagrams/src
+' plantuml -tpng -Ddpi=300 -o ../export orm_schedules_full.puml
+
+' --- Common style ---
+hide circle
+skinparam Shadowing false
+skinparam RoundCorner 8
+skinparam ClassAttributeIconSize 0
+skinparam DefaultFontName Arial
+skinparam DefaultFontSize 15
+skinparam ArrowColor #333333
+skinparam LineColor #333333
+skinparam PackageBorderColor #333333
+skinparam PackageBackgroundColor #FFFFFF
+skinparam ClassBorderColor #333333
+skinparam ClassBackgroundColor #FFFFFF
+skinparam ObjectBorderColor #333333
+skinparam ObjectBackgroundColor #FFFFFF
+skinparam NoteBackgroundColor #FFFFFF
+skinparam NoteBorderColor #333333
+skinparam BackgroundColor #FFFFFF
+
+' --- Layout tuning (A4 portrait, but wider / less tall) ---
+top to bottom direction
+skinparam linetype ortho
+skinparam ranksep 28
+skinparam nodesep 18
+skinparam padding 8
+skinparam maxMessageSize 40  ' wrap long arrow labels
+
+package "ORM — Schedules (backend/models/orm/schedule.py)" {
+
+  ' ---- Top row (side-by-side) ----
+  together {
+    class ScheduleWorking {
+      +year : int  ' PK
+      +month : int ' PK
+      +payload : JSON
+      +lock_version : int
+      +updated_by_user_id : int?
+      +updated_at : datetime
+    }
+
+    class SchedulePointer {
+      +year : int  ' PK
+      +month : int ' PK
+      +current_draft_version_id : int?
+      +current_published_version_id : int?
+      +updated_at : datetime
+      --
+      +current_draft_version : ScheduleVersion?
+      +current_published_version : ScheduleVersion?
+    }
+  }
+
+  ' ---- Bottom row (side-by-side) ----
+  together {
+    class ScheduleDiagnostics {
+      +id : int
+      +version_id : int  ' UNIQUE
+      +quality : JSON
+      +computed_at : datetime
+      --
+      +version : ScheduleVersion
+    }
+
+    class ScheduleVersion {
+      +id : int
+      +year : int
+      +month : int
+      +payload : JSON
+      +kind : str  ' "draft" | "published"
+      +created_by_user_id : int?
+      +created_by_role : str?
+      +created_at : datetime
+    }
+  }
+}
+
+' =========================
+' External anchor (users) — ONE unified shape
+' =========================
+rectangle "users" as UsersBox {
+  class "users.id" as UsersId {
+    +id : int
+  }
+}
+
+' =========================
+' Relationships (FK / intent)
+' =========================
+
+' Keep labels SHORT so they do not "run away" across the page
+SchedulePointer "1" --> "0..1" ScheduleVersion : current_draft_version_id
+SchedulePointer "1" --> "0..1" ScheduleVersion : current_published_version_id
+ScheduleDiagnostics "1" --> "1" ScheduleVersion : version_id
+
+' External deps (users table) — unified, same UsersId box for both links
+ScheduleVersion -right..> UsersId : created_by_user_id
+ScheduleWorking -right..> UsersId : updated_by_user_id
+
+' =========================
+' Layout helpers (hidden links)
+' =========================
+
+' Force 2x2 grid: Working | Pointer on top, Diagnostics | Version below
+ScheduleWorking -[hidden]right-> SchedulePointer
+ScheduleDiagnostics -[hidden]right-> ScheduleVersion
+
+ScheduleWorking -[hidden]down-> ScheduleDiagnostics
+SchedulePointer -[hidden]down-> ScheduleVersion
+
+' Put users anchor to the RIGHT of ScheduleWorking (stable A4 layout hint)
+ScheduleWorking -[hidden]right-> UsersId
+
+@enduml

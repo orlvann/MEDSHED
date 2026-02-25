@@ -1,0 +1,41 @@
+' run: 
+'cd docs/diagrams/src
+'plantuml -tpng -Ddpi=300 -o ../export versions_pointers_mini_diagram.puml
+
+@startuml versions_pointers_mini_diagram
+' --- Common style (keep identical across all PlantUML diagrams) ---
+hide circle
+skinparam Shadowing false
+skinparam RoundCorner 8
+skinparam ClassAttributeIconSize 0
+skinparam DefaultFontName Arial
+skinparam DefaultFontSize 14
+skinparam ArrowColor #333333
+skinparam LineColor #333333
+skinparam PackageBorderColor #333333
+skinparam PackageBackgroundColor #FFFFFF
+skinparam ClassBorderColor #333333
+skinparam ClassBackgroundColor #FFFFFF
+' Make object diagrams black & white as well
+skinparam ObjectBorderColor #333333
+skinparam ObjectBackgroundColor #FFFFFF
+skinparam NoteBackgroundColor #FFFFFF
+skinparam NoteBorderColor #333333
+' Force black & white fills for non-class shapes (rectangle/component/etc.)
+skinparam RectangleBackgroundColor #FFFFFF
+skinparam RectangleBorderColor #333333
+skinparam ComponentBackgroundColor #FFFFFF
+skinparam ComponentBorderColor #333333
+
+
+
+rectangle "schedule_working\n(year, month)\n- payload\n- lock_version" as w
+rectangle "schedule_versions\n(id)\n- payload\n- kind=draft|published" as v
+rectangle "schedule_pointers\n(year, month)\n- current_draft_version_id\n- current_published_version_id" as p
+rectangle "schedule_diagnostics\n(version_id unique)\n- quality\n- computed_at" as d
+
+w --> v : "checkpoint/publish\n(create immutable version)"
+p --> v : "points to current\nhead versions"
+d --> v : "1:1 analytics cache"
+
+@enduml
