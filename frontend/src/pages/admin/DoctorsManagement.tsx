@@ -516,6 +516,11 @@ export const DoctorsManagement = () => {
                         <p className="text-xs text-muted-foreground truncate">
                           {doctor.email || "-"}
                         </p>
+                        {doctor.phone_number && (
+                          <p className="text-xs text-muted-foreground truncate">
+                            {doctor.phone_number}
+                          </p>
+                        )}
                       </div>
                       <div className="flex items-center gap-0.5 shrink-0">
                         <Button variant="ghost" size="icon" className="h-8 w-8 p-0" onClick={() => openEditModal(doctor)}>
@@ -564,6 +569,7 @@ export const DoctorsManagement = () => {
                       <th className="text-left py-3 px-4">Doctor Role</th>
                       <th className="text-left py-3 px-4">User Role</th>
                       <th className="text-left py-3 px-4">Email</th>
+                      <th className="text-left py-3 px-4">Phone</th>
                       <th className="text-left py-3 px-4">Scheduling</th>
                       <th className="text-left py-3 px-4">Login</th>
                       <th className="text-left py-3 px-4">Head</th>
@@ -612,6 +618,9 @@ export const DoctorsManagement = () => {
                         </td>
                         <td className="py-3 px-4 text-sm text-muted-foreground">
                           {doctor.email || "-"}
+                        </td>
+                        <td className="py-3 px-4 text-sm text-muted-foreground">
+                          {doctor.phone_number || "-"}
                         </td>
                         <td className="py-3 px-4">
                           <span

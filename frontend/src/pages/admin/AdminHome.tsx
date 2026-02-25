@@ -330,62 +330,70 @@ export const AdminHome = () => {
 
         {/* === DESKTOP STAT CARDS (hidden below lg) === */}
         <div className="hidden lg:grid grid-cols-4 gap-6 mb-8">
-          <Card>
+          <Card className="bg-gradient-to-br from-blue-50 to-indigo-50 border-blue-100/80">
             <CardContent className="pt-6">
               <div className="flex items-center justify-between">
                 <div>
-                  <p className="text-3xl font-bold">{stats.totalEmployees}</p>
-                  <p className="text-sm text-muted-foreground mt-1">
+                  <p className="text-3xl font-bold text-slate-800">{stats.totalEmployees}</p>
+                  <p className="text-sm text-slate-500 mt-1">
                     Total Employees
                   </p>
                   <p className="text-xs text-green-600 mt-1">
                     {stats.activeEmployees} active
                   </p>
                 </div>
-                <Users className="h-12 w-12 text-blue-600" />
+                <div className="h-12 w-12 rounded-xl bg-blue-500 flex items-center justify-center shadow-sm">
+                  <Users className="h-6 w-6 text-white" />
+                </div>
               </div>
             </CardContent>
           </Card>
-          <Card>
+          <Card className="bg-gradient-to-br from-amber-50 to-orange-50 border-amber-100/80">
             <CardContent className="pt-6">
               <div className="flex items-center justify-between">
                 <div>
-                  <p className="text-3xl font-bold">
+                  <p className="text-3xl font-bold text-slate-800">
                     {stats.totalEmployees - stats.activeEmployees}
                   </p>
-                  <p className="text-sm text-muted-foreground mt-1">Absent</p>
+                  <p className="text-sm text-slate-500 mt-1">Absent</p>
                 </div>
-                <Users className="h-12 w-12 text-orange-600" />
+                <div className="h-12 w-12 rounded-xl bg-amber-500 flex items-center justify-center shadow-sm">
+                  <Users className="h-6 w-6 text-white" />
+                </div>
               </div>
             </CardContent>
           </Card>
-          <Card>
+          <Card className="bg-gradient-to-br from-sky-50 to-blue-50 border-sky-100/80">
             <CardContent className="pt-6">
               <div className="flex items-center justify-between">
                 <div>
-                  <p className="text-3xl font-bold tabular-nums">
+                  <p className="text-3xl font-bold text-slate-800 tabular-nums">
                     {formatTime(currentTime)}
                   </p>
-                  <p className="text-sm text-muted-foreground mt-1">
+                  <p className="text-sm text-slate-500 mt-1">
                     {formatDate(currentTime)}
                   </p>
                 </div>
-                <Clock className="h-12 w-12 text-gray-600" />
+                <div className="h-12 w-12 rounded-xl bg-sky-500 flex items-center justify-center shadow-sm">
+                  <Clock className="h-6 w-6 text-white" />
+                </div>
               </div>
             </CardContent>
           </Card>
-          <Card>
+          <Card className="bg-gradient-to-br from-emerald-50 to-green-50 border-emerald-100/80">
             <CardContent className="pt-6">
               <div className="flex items-center justify-between">
                 <div>
-                  <p className="text-3xl font-bold">
+                  <p className="text-3xl font-bold text-slate-800">
                     {stats.schedulesSubmitted}/{stats.totalSchedules}
                   </p>
-                  <p className="text-sm text-muted-foreground mt-1">
+                  <p className="text-sm text-slate-500 mt-1">
                     Schedule submitted
                   </p>
                 </div>
-                <ClipboardCheck className="h-12 w-12 text-green-600" />
+                <div className="h-12 w-12 rounded-xl bg-emerald-500 flex items-center justify-center shadow-sm">
+                  <ClipboardCheck className="h-6 w-6 text-white" />
+                </div>
               </div>
             </CardContent>
           </Card>
