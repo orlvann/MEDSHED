@@ -84,6 +84,7 @@ def map_year_for_seed(raw_year: int) -> int:
         2023: 2025,
         2024: 2026,
         2025: 2027,
+        2026: 2028,
     }
     if raw_year not in mapping:
         raise ValueError(f"Unsupported source year {raw_year} in Excel file – expected 2023–2025.")
