@@ -1,3 +1,4 @@
+# .pre-commit-config.yaml
 # Run code quality checks automatically before each commit.
 repos:
   - repo: https://github.com/psf/black

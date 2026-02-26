@@ -1,0 +1,85 @@
+@startuml dto_classes
+' run:
+' cd docs/diagrams/src
+' plantuml -tpng -Ddpi=300 -o ../export dto_classes.puml
+
+' --- Common style (keep identical across all PlantUML diagrams) ---
+hide circle
+skinparam Shadowing false
+skinparam RoundCorner 8
+skinparam ClassAttributeIconSize 0
+skinparam DefaultFontName Arial
+skinparam DefaultFontSize 14
+skinparam ArrowColor #333333
+skinparam LineColor #333333
+skinparam PackageBorderColor #333333
+skinparam PackageBackgroundColor #FFFFFF
+skinparam ClassBorderColor #333333
+skinparam ClassBackgroundColor #FFFFFF
+skinparam ObjectBorderColor #333333
+skinparam ObjectBackgroundColor #FFFFFF
+skinparam NoteBackgroundColor #FFFFFF
+skinparam NoteBorderColor #333333
+skinparam BackgroundColor #FFFFFF
+skinparam RectangleBackgroundColor #FFFFFF
+skinparam RectangleBorderColor #333333
+
+' Layout: vertical for A4 portrait readability
+top to bottom direction
+skinparam linetype ortho
+
+package "DTO (Pydantic schemas) — key payload shapes" {
+
+  class SchedulePayload {
+    +participant_doctor_ids: List[int]
+    +assignments: List[Assignment]
+    +inputs_snapshot: InputsSnapshotRead?
+    +meta: dict[str, Any]
+  }
+
+  class Assignment {
+    +day: int
+    +shift_type: ShiftType
+    +doctor_id: int
+  }
+
+  class InputsSnapshotRead {
+    +doctors: Dict[int, DoctorSnapshotRead]
+    +preference_version_id_by_doctor: Dict[int, int?]
+  }
+
+  class DoctorSnapshotRead {
+    +role: DoctorRole
+    +is_head: bool
+    +display_name: str
+    +is_active_at_snapshot: bool
+  }
+
+  class ScheduleGenerateRequest {
+    +year: int
+    +month: int
+    +participant_doctor_ids: List[int]
+    +ignore_slots: List[IgnoreSlot]
+    +justification: str?
+  }
+
+  class IgnoreSlot {
+    +day: int
+    +shift_type: ShiftType
+  }
+}
+
+' Relationships (keep minimal + readable)
+SchedulePayload *-- "0..*" Assignment
+SchedulePayload o-- "0..1" InputsSnapshotRead
+InputsSnapshotRead *-- "0..*" DoctorSnapshotRead
+
+ScheduleGenerateRequest *-- "0..*" IgnoreSlot
+
+note bottom
+For readability, attributes are intentionally reduced.
+Only fields most important for understanding DTO flow are shown.
+Full DTO definitions are available in backend/models/schemas/schedule.py.
+end note
+
+@enduml

@@ -1,0 +1,193 @@
+@startuml orm_preferences_identity_full
+' run:
+' cd docs/diagrams/src
+' plantuml -tpng -Ddpi=300 -o ../export orm_preferences_identity_full.puml
+
+' --- Common style ---
+hide circle
+skinparam Shadowing false
+skinparam RoundCorner 8
+skinparam ClassAttributeIconSize 0
+skinparam DefaultFontName Arial
+skinparam DefaultFontSize 16
+skinparam ArrowColor #333333
+skinparam LineColor #333333
+skinparam PackageBorderColor #333333
+skinparam PackageBackgroundColor #FFFFFF
+skinparam ClassBorderColor #333333
+skinparam ClassBackgroundColor #FFFFFF
+skinparam ObjectBorderColor #333333
+skinparam ObjectBackgroundColor #FFFFFF
+skinparam NoteBackgroundColor #FFFFFF
+skinparam NoteBorderColor #333333
+skinparam BackgroundColor #FFFFFF
+skinparam RectangleBackgroundColor #FFFFFF
+skinparam RectangleBorderColor #333333
+skinparam ComponentBackgroundColor #FFFFFF
+skinparam ComponentBorderColor #333333
+
+' --- Layout tuning for A4 portrait readability ---
+top to bottom direction
+skinparam linetype ortho
+skinparam ranksep 45
+skinparam nodesep 25
+skinparam padding 10
+
+package "ORM — Identity + Preferences (backend/models/orm/*)" {
+
+  ' =========================
+  ' Identity / Auth
+  ' =========================
+  package "Identity / Auth" as P_ID {
+    together {
+      class Doctor {
+        +id : int
+        +first_name : str
+        +last_name : str
+        +role : DoctorRole
+        +is_active : bool
+        +is_head : bool
+        +email : str?
+        +created_at : datetime
+        +updated_at : datetime
+      }
+
+      class User {
+        +id : int
+        +email : str
+        +role : UserRole
+        +password_hash : str
+        +is_active : bool
+        +doctor_id : int?
+        --
+        +doctor : Doctor?  ' relationship(uselist=False)
+        --
+        +created_at : datetime
+        +updated_at : datetime
+      }
+
+      class PasswordResetToken {
+        +id : int
+        +user_id : int
+        +token : str
+        +expires_at : datetime
+        +created_at : datetime
+      }
+    }
+  }
+
+  ' =========================
+  ' Preferences (triad + deadline)
+  ' =========================
+  package "Preferences" as P_PREF {
+    together {
+      class PreferenceWorking {
+        +id : int
+        +doctor_id : int
+        +year : int
+        +month : int
+        +lock_version : int
+        --
+        +unavailable_onsite_days : list[int]?
+        +unavailable_oncall_days : list[int]?
+        +preferred_onsite_days : list[int]?
+        +preferred_oncall_days : list[int]?
+        --
+        +min_onsite_total : int?
+        +max_onsite_total : int?
+        +target_onsite_total : int?
+        +min_oncall_total : int?
+        +max_oncall_total : int?
+        +target_oncall_total : int?
+        --
+        +max_onsite_weekends : int?
+        +target_onsite_weekends : int?
+        +max_oncall_weekends : int?
+        +target_oncall_weekends : int?
+        --
+        +preferred_onsite_weekdays : list[int]?
+        +preferred_oncall_weekdays : list[int]?
+        +avoid_onsite_weekdays : list[int]?
+        +avoid_oncall_weekdays : list[int]?
+        --
+        +allow_weekend_consecutive_onsite_oncall : bool
+        +preferred_partners : list[int]?
+        +comments : str?
+        --
+        +last_saved_at : datetime?
+        +last_saved_by_user_id : int?
+        +last_saved_by_role : str?
+        +last_admin_note : str?
+      }
+
+      class PreferenceVersion {
+        +id : int
+        +doctor_id : int
+        +year : int
+        +month : int
+        +kind : str
+        +payload : JSON
+        +created_at : datetime
+        +created_by_user_id : int
+        +created_by_role : str
+        +note : str?
+      }
+
+      class PreferencePointer {
+        +id : int
+        +doctor_id : int
+        +year : int
+        +month : int
+        +current_version_id : int?
+        +submitted_at : datetime?
+        +submitted_by_user_id : int?
+        +submitted_by_role : str?
+      }
+
+      class PreferenceDeadline {
+        +id : int
+        +year : int
+        +month : int
+        +deadline_utc : datetime
+        +org_timezone : str
+      }
+    }
+  }
+}
+
+' =========================
+' Relationships (FK / intent)
+' =========================
+
+' 1:1 optional link User -> Doctor
+User "0..1" --> "1" Doctor : doctor_id (unique)
+
+' One active reset token per user
+PasswordResetToken "0..1" --> "1" User : user_id (unique)
+
+' Preferences triad references Doctor
+PreferenceWorking "*" --> "1" Doctor : doctor_id
+PreferenceVersion "*" --> "1" Doctor : doctor_id
+PreferencePointer "*" --> "1" Doctor : doctor_id
+
+' Pointer to selected snapshot
+PreferencePointer "0..1" --> "1" PreferenceVersion : current_version_id
+
+' =========================
+' Layout helpers (hidden links)
+' Force two columns: Identity/Auth (left) and Preferences (right)
+' =========================
+
+P_ID -[hidden]right-> P_PREF
+
+' Identity stack
+PasswordResetToken -[hidden]down-> User
+User -[hidden]down-> Doctor
+
+' Preferences stack
+PreferenceDeadline -[hidden]down-> PreferencePointer
+PreferencePointer  -[hidden]down-> PreferenceVersion
+PreferenceVersion  -[hidden]down-> PreferenceWorking
+PreferenceWorking  -[hidden]down-> Doctor
+
+@enduml

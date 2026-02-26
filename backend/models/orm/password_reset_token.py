@@ -55,9 +55,7 @@ class PasswordResetToken(Base):
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
     # Creation timestamp
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False, server_default=func.now()
-    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
     __table_args__ = (
         # Ensure only one active token per user
@@ -70,4 +68,3 @@ class PasswordResetToken(Base):
 
     def __repr__(self) -> str:
         return f"<PasswordResetToken id={self.id} user_id={self.user_id} expires={self.expires_at}>"
-

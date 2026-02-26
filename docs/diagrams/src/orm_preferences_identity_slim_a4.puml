@@ -1,0 +1,154 @@
+@startuml orm_preferences_identity_slim_a4
+' run:
+' cd docs/diagrams/src
+' plantuml -tpng -Ddpi=300 -o ../export orm_preferences_identity_slim_a4.puml
+
+' --- Common style ---
+hide circle
+skinparam Shadowing false
+skinparam RoundCorner 8
+skinparam ClassAttributeIconSize 0
+skinparam DefaultFontName Arial
+skinparam DefaultFontSize 14
+skinparam ArrowColor #333333
+skinparam LineColor #333333
+skinparam PackageBorderColor #333333
+skinparam PackageBackgroundColor #FFFFFF
+skinparam ClassBorderColor #333333
+skinparam ClassBackgroundColor #FFFFFF
+skinparam ObjectBorderColor #333333
+skinparam ObjectBackgroundColor #FFFFFF
+skinparam NoteBackgroundColor #FFFFFF
+skinparam NoteBorderColor #333333
+skinparam BackgroundColor #FFFFFF
+skinparam RectangleBackgroundColor #FFFFFF
+skinparam RectangleBorderColor #333333
+
+' --- Layout tuning for A4 portrait readability (shorter vertically) ---
+top to bottom direction
+skinparam linetype ortho
+skinparam ranksep 30
+skinparam nodesep 15
+skinparam padding 6
+
+package "ORM — Identity + Preferences " {
+
+  package "Preferences" as P_PREF {
+
+    ' --- Row 1 (side-by-side) ---
+    class PreferenceDeadline {
+      +id : int
+      +year : int
+      +month : int
+      +deadline_utc : datetime
+      +org_timezone : str
+    }
+
+    class PreferencePointer {
+      +id : int
+      +doctor_id : int
+      +year : int
+      +month : int
+      +current_version_id : int?
+      +submitted_at : datetime?
+    }
+
+    ' --- Row 2 (side-by-side) ---
+    class PreferenceVersion {
+      +id : int
+      +doctor_id : int
+      +year : int
+      +month : int
+      +kind : str
+      +payload : JSON
+      +created_at : datetime
+      +note : str?
+    }
+
+    class PreferenceWorking {
+      +id : int
+      +doctor_id : int
+      +year : int
+      +month : int
+      +lock_version : int
+      --
+      +unavailable_onsite_days : list[int]?
+      +unavailable_oncall_days : list[int]?
+      +preferred_onsite_days : list[int]?
+      +preferred_oncall_days : list[int]?
+      --
+      +allow_weekend_consecutive_onsite_oncall : bool
+      +preferred_partners : list[int]?
+      +comments : str?
+      +last_saved_at : datetime?
+    }
+  }
+
+  package "Identity / Auth" as P_ID {
+
+    class PasswordResetToken {
+      +id : int
+      +user_id : int
+      +token : str
+      +expires_at : datetime
+    }
+
+    class User {
+      +id : int
+      +email : str
+      +role : UserRole
+      +password_hash : str
+      +is_active : bool
+      +doctor_id : int?
+      +created_at : datetime
+      +updated_at : datetime
+    }
+
+    class Doctor {
+      +id : int
+      +first_name : str
+      +last_name : str
+      +role : DoctorRole
+      +is_active : bool
+      +is_head : bool
+      +email : str?
+    }
+  }
+}
+
+' =========================
+' RELATIONSHIPS (FK / intent)
+' =========================
+
+' Preferences triad
+PreferencePointer "0..1" --> "1" PreferenceVersion : current_version_id
+PreferenceWorking "*" --> "1" Doctor : doctor_id
+PreferenceVersion "*" --> "1" Doctor : doctor_id
+PreferencePointer "*" --> "1" Doctor : doctor_id
+
+' Identity/auth
+PasswordResetToken "0..1" --> "1" User : user_id (unique)
+User "0..1" --> "1" Doctor : doctor_id (unique)
+
+' =========================
+' LAYOUT HELPERS (force 2 rows in Preferences, 1 row in Identity)
+' =========================
+
+' Preferences: row 1
+PreferenceDeadline -[hidden]right-> PreferencePointer
+
+' Preferences: row 2
+PreferenceVersion -[hidden]right-> PreferenceWorking
+
+' Stack rows: row1 above row2
+PreferenceDeadline -[hidden]down-> PreferenceVersion
+PreferencePointer  -[hidden]down-> PreferenceWorking
+
+' Identity: single row (left to right)
+PasswordResetToken -[hidden]right-> User
+User               -[hidden]right-> Doctor
+
+' Place Identity block to the right of Preferences block
+P_PREF -[hidden]right-> P_ID
+
+@enduml
