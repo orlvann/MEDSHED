@@ -34,15 +34,41 @@ def _get_assigned_doctor(solution, *, day: int, shift_type: ShiftType) -> int | 
 
 
 @pytest.mark.unit
-def test_preferred_day_weight_sums_for_head_specialist():
+def test_preferred_day_effective_weight_uses_single_base_and_role_multiplier():
     """
-    Regression test for scoring.preferred_day_miss_weight_for_doctor().
+    Preferred days use ONE shared base weight for everyone,
+    then apply role/head priority via effective_weight(..., category="preferred_days").
+    """
+    base = int(scoring.PREF_DAY_MISS_BASE_WEIGHT)
 
-    We want weights to SUM when a doctor is both head and specialist:
-    head (40) + specialist (30) = 70
-    """
-    w = scoring.preferred_day_miss_weight_for_doctor(is_head=True, role=DoctorRole.specialist)
-    assert w == scoring.PREF_DAY_HEAD_MISS_WEIGHT + scoring.PREF_DAY_SPECIALIST_MISS_WEIGHT
+    # resident, not head => 1.00x
+    w_res = scoring.effective_weight(
+        base_weight=base,
+        category="preferred_days",
+        is_head=False,
+        role=DoctorRole.resident,
+    )
+    assert w_res == base
+
+    # specialist, not head => role multiplier (e.g. 1.20x)
+    w_spec = scoring.effective_weight(
+        base_weight=base,
+        category="preferred_days",
+        is_head=False,
+        role=DoctorRole.specialist,
+    )
+    spec_m = scoring.role_multiplier_milli(is_head=False, role=DoctorRole.specialist)
+    assert w_spec == int((base * spec_m + 500) // 1000)
+
+    # head + specialist => head*role multiplier (e.g. 1.60x * 1.20x = 1.92x)
+    w_head_spec = scoring.effective_weight(
+        base_weight=base,
+        category="preferred_days",
+        is_head=True,
+        role=DoctorRole.specialist,
+    )
+    head_spec_m = scoring.role_multiplier_milli(is_head=True, role=DoctorRole.specialist)
+    assert w_head_spec == int((base * head_spec_m + 500) // 1000)
 
 
 def test_solver_prefers_satisfying_preferred_onsite_day(make_hard_model, make_doctors, make_preferences):

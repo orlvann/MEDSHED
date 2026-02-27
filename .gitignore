@@ -74,8 +74,18 @@ Desktop.ini
 backend/db/*.db
 dump_full.sql
 
-# === Sensitive data for db seed ===
+# === Sensitive data for db seed and solver calibration ===
 data/preferences_excel_raw/
+data/schedules_excel_raw/
 
+# === Solver calibration experiments ===
+scripts/schedules_excel_to_human_json.py
+scripts/calibrate_scoring_against_human.py
+scripts/calibrate_diagnostics_against_human.py
+scripts/run_calibration_grid.py
+data/schedules_human_json
+data/calibration_diagnostics_report.json
+data/calibration_grid.csv
+data/calibration_report.json
 
 /annex/

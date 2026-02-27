@@ -1,4 +1,4 @@
-# tests/core/test_scoring.py
+# tests/solver/test_scoring.py
 """
 Unit tests for backend/core/scoring.py.
 
@@ -15,26 +15,33 @@ from backend.core import scoring
 from backend.models.common_enums import DoctorRole, ShiftType
 
 
-def test_preference_weight_for_doctor_head_is_highest():
-    # Head should always return the dedicated "head" multiplier, regardless of role.
-    assert (
-        scoring.preference_weight_for_doctor(is_head=True, role=DoctorRole.resident)
-        == scoring.ROLE_PREFERENCE_WEIGHTS["head"]
+def test_preference_weight_for_doctor_head_multiplies_on_top_of_role():
+    """
+    Head multiplier multiplies ON TOP of role multiplier.
+    """
+    head_m = int(scoring.ROLE_WEIGHT_MILLI["head"])
+    spec_m = int(scoring.ROLE_WEIGHT_MILLI[DoctorRole.specialist])
+    res_m = int(scoring.ROLE_WEIGHT_MILLI[DoctorRole.resident])
+
+    # resident head => head only (resident is 1.00x)
+    assert scoring.preference_weight_for_doctor(is_head=True, role=DoctorRole.resident) == head_m / 1000.0
+
+    # specialist head => head * specialist
+    assert scoring.preference_weight_for_doctor(is_head=True, role=DoctorRole.specialist) == (
+        (head_m * spec_m) / (1000.0 * 1000.0)
     )
-    assert (
-        scoring.preference_weight_for_doctor(is_head=True, role=DoctorRole.specialist)
-        == scoring.ROLE_PREFERENCE_WEIGHTS["head"]
-    )
+
+    # sanity: not-head values match pure role multipliers
+    assert scoring.preference_weight_for_doctor(is_head=False, role=DoctorRole.resident) == res_m / 1000.0
+    assert scoring.preference_weight_for_doctor(is_head=False, role=DoctorRole.specialist) == spec_m / 1000.0
 
 
 def test_preference_weight_for_doctor_by_role_when_not_head():
-    assert (
-        scoring.preference_weight_for_doctor(is_head=False, role=DoctorRole.specialist)
-        == scoring.ROLE_PREFERENCE_WEIGHTS[DoctorRole.specialist]
+    assert scoring.preference_weight_for_doctor(is_head=False, role=DoctorRole.specialist) == (
+        int(scoring.ROLE_WEIGHT_MILLI[DoctorRole.specialist]) / 1000.0
     )
-    assert (
-        scoring.preference_weight_for_doctor(is_head=False, role=DoctorRole.resident)
-        == scoring.ROLE_PREFERENCE_WEIGHTS[DoctorRole.resident]
+    assert scoring.preference_weight_for_doctor(is_head=False, role=DoctorRole.resident) == (
+        int(scoring.ROLE_WEIGHT_MILLI[DoctorRole.resident]) / 1000.0
     )
 
 
@@ -43,28 +50,42 @@ def test_rest_cross_shift_weight_by_role():
     assert scoring.rest_cross_shift_weight(role=DoctorRole.resident) == scoring.REST_CROSS_SHIFT_RESIDENT_WEIGHT
 
 
-def test_preferred_day_miss_weight_sums_head_plus_role():
-    # Resident, not head
-    assert (
-        scoring.preferred_day_miss_weight_for_doctor(is_head=False, role=DoctorRole.resident)
-        == scoring.PREF_DAY_RESIDENT_MISS_WEIGHT
-    )
+def test_preferred_day_miss_uses_single_base_and_role_multiplier():
+    """
+    Preferred day miss uses ONE shared base weight for everyone,
+    and applies role/head priority via effective_weight(..., category="preferred_days").
+    """
+    base = int(scoring.PREF_DAY_MISS_BASE_WEIGHT)
+    assert base > 0
 
-    # Specialist, not head
-    assert (
-        scoring.preferred_day_miss_weight_for_doctor(is_head=False, role=DoctorRole.specialist)
-        == scoring.PREF_DAY_SPECIALIST_MISS_WEIGHT
+    # resident not head => 1.00x
+    w_res = scoring.effective_weight(
+        base_weight=base,
+        category="preferred_days",
+        is_head=False,
+        role=DoctorRole.resident,
     )
+    assert w_res == base
 
-    # Resident + head -> sum
-    assert scoring.preferred_day_miss_weight_for_doctor(is_head=True, role=DoctorRole.resident) == (
-        scoring.PREF_DAY_RESIDENT_MISS_WEIGHT + scoring.PREF_DAY_HEAD_MISS_WEIGHT
+    # specialist not head => scaled by role multiplier
+    m_spec = scoring.role_multiplier_milli(is_head=False, role=DoctorRole.specialist)
+    w_spec = scoring.effective_weight(
+        base_weight=base,
+        category="preferred_days",
+        is_head=False,
+        role=DoctorRole.specialist,
     )
+    assert w_spec == int((base * m_spec + 500) // 1000)
 
-    # Specialist + head -> sum
-    assert scoring.preferred_day_miss_weight_for_doctor(is_head=True, role=DoctorRole.specialist) == (
-        scoring.PREF_DAY_SPECIALIST_MISS_WEIGHT + scoring.PREF_DAY_HEAD_MISS_WEIGHT
+    # head specialist => scaled by head*role multiplier
+    m_head_spec = scoring.role_multiplier_milli(is_head=True, role=DoctorRole.specialist)
+    w_head_spec = scoring.effective_weight(
+        base_weight=base,
+        category="preferred_days",
+        is_head=True,
+        role=DoctorRole.specialist,
     )
+    assert w_head_spec == int((base * m_head_spec + 500) // 1000)
 
 
 def test_fairness_weight_mapping():

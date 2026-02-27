@@ -68,7 +68,13 @@ def attach_preferred_days_objective(
         # Decide weight for missing preferred concrete days (head + role combined in scoring).
         is_head = bool(doctor.is_head) if doctor else False
         role = doctor.role if doctor else DoctorRole.resident
-        miss_weight = scoring.preferred_day_miss_weight_for_doctor(is_head=is_head, role=role)
+        base_miss_weight = int(scoring.PREF_DAY_MISS_BASE_WEIGHT)
+        miss_weight = scoring.effective_weight(
+            base_weight=int(base_miss_weight),
+            category="preferred_days",
+            is_head=is_head,
+            role=role,
+        )
 
         # Preferred onsite days
         for day in prefs.preferred_onsite_days:
@@ -134,6 +140,8 @@ def attach_totals_objective(
 
     max_dev = len(model.days)
     max_w_dev = len(weekend_days)
+    base_target_total_w = int(scoring.TARGET_TOTAL_DEVIATION_WEIGHT)
+    base_target_weekend_w = int(scoring.TARGET_WEEKEND_DEVIATION_WEIGHT)
 
     for doc_id in model.participant_doctor_ids:
         prefs = problem.preferences.get(doc_id)
@@ -141,6 +149,22 @@ def attach_totals_objective(
         # If preferences are missing, treat as empty (no soft penalties added).
         if prefs is None:
             continue
+        doctor = model.doctors.get(doc_id)
+        is_head = bool(doctor.is_head) if doctor else False
+        role = doctor.role if doctor else DoctorRole.resident
+
+        target_w = scoring.effective_weight(
+            base_weight=int(base_target_total_w),
+            category="totals_target",
+            is_head=is_head,
+            role=role,
+        )
+        target_weekend_w = scoring.effective_weight(
+            base_weight=int(base_target_weekend_w),
+            category="totals_target",
+            is_head=is_head,
+            role=role,
+        )
 
         # -----------------------------
         # 1) Monthly totals (onsite/oncall)
@@ -203,9 +227,9 @@ def attach_totals_objective(
             cp.AddMultiplicationEquality(over_sq, over, over)
             cp.AddMultiplicationEquality(under_sq, under, under)
 
-            penalty_terms.append(int(scoring.TARGET_TOTAL_DEVIATION_WEIGHT) * over_sq)
-            penalty_terms.append(int(scoring.TARGET_TOTAL_DEVIATION_WEIGHT) * under_sq)
-            ub += int(scoring.TARGET_TOTAL_DEVIATION_WEIGHT) * (max_dev * max_dev) * 2
+            penalty_terms.append(int(target_w) * over_sq)
+            penalty_terms.append(int(target_w) * under_sq)
+            ub += int(target_w) * (max_dev * max_dev) * 2
 
         if prefs.target_oncall_total is not None:
             tgt_onc = int(prefs.target_oncall_total)
@@ -223,9 +247,9 @@ def attach_totals_objective(
             cp.AddMultiplicationEquality(over_sq, over, over)
             cp.AddMultiplicationEquality(under_sq, under, under)
 
-            penalty_terms.append(int(scoring.TARGET_TOTAL_DEVIATION_WEIGHT) * over_sq)
-            penalty_terms.append(int(scoring.TARGET_TOTAL_DEVIATION_WEIGHT) * under_sq)
-            ub += int(scoring.TARGET_TOTAL_DEVIATION_WEIGHT) * (max_dev * max_dev) * 2
+            penalty_terms.append(int(target_w) * over_sq)
+            penalty_terms.append(int(target_w) * under_sq)
+            ub += int(target_w) * (max_dev * max_dev) * 2
 
         # -----------------------------
         # 2) Weekend totals (onsite/oncall)
@@ -286,9 +310,9 @@ def attach_totals_objective(
             cp.AddMultiplicationEquality(over_sq, over, over)
             cp.AddMultiplicationEquality(under_sq, under, under)
 
-            penalty_terms.append(int(scoring.TARGET_WEEKEND_DEVIATION_WEIGHT) * over_sq)
-            penalty_terms.append(int(scoring.TARGET_WEEKEND_DEVIATION_WEIGHT) * under_sq)
-            ub += int(scoring.TARGET_WEEKEND_DEVIATION_WEIGHT) * (max_w_dev * max_w_dev) * 2
+            penalty_terms.append(int(target_weekend_w) * over_sq)
+            penalty_terms.append(int(target_weekend_w) * under_sq)
+            ub += int(target_weekend_w) * (max_w_dev * max_w_dev) * 2
 
         if prefs.target_oncall_weekends is not None:
             tgt_onc_w = int(prefs.target_oncall_weekends)
@@ -306,9 +330,9 @@ def attach_totals_objective(
             cp.AddMultiplicationEquality(over_sq, over, over)
             cp.AddMultiplicationEquality(under_sq, under, under)
 
-            penalty_terms.append(int(scoring.TARGET_WEEKEND_DEVIATION_WEIGHT) * over_sq)
-            penalty_terms.append(int(scoring.TARGET_WEEKEND_DEVIATION_WEIGHT) * under_sq)
-            ub += int(scoring.TARGET_WEEKEND_DEVIATION_WEIGHT) * (max_w_dev * max_w_dev) * 2
+            penalty_terms.append(int(target_weekend_w) * over_sq)
+            penalty_terms.append(int(target_weekend_w) * under_sq)
+            ub += int(target_weekend_w) * (max_w_dev * max_w_dev) * 2
 
     if penalty_terms:
         total_penalty = cp.NewIntVar(0, int(ub), "total_totals_penalty")
@@ -696,13 +720,30 @@ def attach_weekday_patterns_objective(
     ub_penalty: int = 0  # sum of all possible avoid penalties
     ub_bonus: int = 0  # sum of all possible preferred bonuses
 
-    preferred_w = int(scoring.weekday_pattern_weight(kind="preferred"))
-    avoid_w = int(scoring.weekday_pattern_weight(kind="avoid"))
+    base_preferred_w = int(scoring.weekday_pattern_weight(kind="preferred"))
+    base_avoid_w = int(scoring.weekday_pattern_weight(kind="avoid"))
 
     for doc_id in model.participant_doctor_ids:
         prefs = problem.preferences.get(doc_id)
         if prefs is None:
             continue
+
+        doctor = model.doctors.get(doc_id)
+        is_head = bool(doctor.is_head) if doctor else False
+        role = doctor.role if doctor else DoctorRole.resident
+
+        preferred_w = scoring.effective_weight(
+            base_weight=int(base_preferred_w),
+            category="weekday_patterns",
+            is_head=is_head,
+            role=role,
+        )
+        avoid_w = scoring.effective_weight(
+            base_weight=int(base_avoid_w),
+            category="weekday_patterns",
+            is_head=is_head,
+            role=role,
+        )
 
         # Use sets for fast "weekday in list" checks.
         pref_onsite_wd = set(int(v) for v in prefs.preferred_onsite_weekdays)
@@ -762,84 +803,134 @@ def attach_preferred_partners_objective(
     """
     Add lower-priority preferred-partners bonus.
 
-    For each preferred pair (doc, partner) and each day:
-    - bonus if both doctors work that day (any shift).
-    We model the bonus as a NEGATIVE penalty term (so Minimize prefers it).
+    Business meaning (IMPORTANT):
+    - This preference is REQUESTER-BASED (directed), not symmetric.
+      If doctor A selects doctor B, we reward schedules where A and B work on the same day.
+      The bonus is counted from A's perspective only.
+    - If BOTH A->B and B->A are declared, we reward BOTH independently (double bonus),
+      because we satisfied two separate requests.
 
-    Returns:
-        total_preferred_partners_penalty: IntVar (can be negative)
+    Modeling:
+    - For each request (requester, partner) and each day:
+      bonus if both doctors work that day (any shift).
+    - Bonus is a NEGATIVE penalty term (so Minimize prefers it).
+    - Role multiplier (single central knob) is applied ONLY based on the REQUESTER role/head.
     """
     terms: List[cp_model.LinearExpr] = []
 
-    bonus_w = int(scoring.preferred_partner_bonus_weight())
+    base_bonus_w = int(scoring.preferred_partner_bonus_weight())
 
-    # Collect unique pairs (doc_id < partner_id) to avoid double-counting.
-    pairs: List[Tuple[int, int]] = []
-    participants = set(model.participant_doctor_ids)
+    participants = set(int(d) for d in model.participant_doctor_ids)
 
-    for doc_id in sorted(model.participant_doctor_ids):
-        prefs = problem.preferences.get(doc_id)
+    # Directed requests: (requester -> partner)
+    requests: List[Tuple[int, int]] = []
+
+    for requester_id in sorted(participants):
+        prefs = problem.preferences.get(int(requester_id))
         if prefs is None:
             continue
 
         partners = list(prefs.preferred_partners or [])
         for partner_id in partners:
             partner_id = int(partner_id)
+
+            # Defensive: partner must be in current participants (month scope).
             if partner_id not in participants:
                 continue
-            if doc_id >= partner_id:
-                continue
-            pairs.append((int(doc_id), int(partner_id)))
 
-    if not pairs or not model.days:
+            # Optional defensive: ignore self-pairing if it appears.
+            if partner_id == int(requester_id):
+                continue
+
+            # Keep direction: requester -> partner
+            requests.append((int(requester_id), int(partner_id)))
+
+    if not requests or not model.days:
         total_penalty = cp.NewIntVar(0, 0, "total_preferred_partners_penalty")
         cp.Add(total_penalty == 0)
         return total_penalty
-
-    # Upper/lower bounds:
-    # - only bonuses (negative), so ub = 0
-    # - most negative happens when "together" is 1 for every (pair, day)
-    max_together_count = len(pairs) * len(model.days)
-    lb = -int(bonus_w) * int(max_together_count)
-    ub = 0
+    # Cache "works on day" vars to:
+    # - avoid creating duplicate identical variables,
+    # - reduce model size,
+    # - keep naming deterministic.
+    works_cache: Dict[Tuple[int, int], cp_model.IntVar] = {}
 
     def _works_on_day(*, day: int, doc_id: int) -> cp_model.IntVar:
         """
-        Return BoolVar == 1 if doctor works ANY shift that day.
+        Return BoolVar == 1 if doctor works ANY shift that day (onsite OR oncall).
 
         Defensive:
         - if x vars are missing (forbidden slots), works == 0
         - does NOT assume sum(terms) <= 1 (we encode OR logic)
+
+        Cached to avoid creating multiple identical vars across many requests.
         """
-        doc_terms: List[cp_model.IntVar] = []
-        v1 = x.get((day, ShiftType.onsite, doc_id))
-        v2 = x.get((day, ShiftType.oncall, doc_id))
+        key = (int(day), int(doc_id))
+        cached = works_cache.get(key)
+        if cached is not None:
+            return cached
+
+        day_terms: List[cp_model.IntVar] = []
+        v1 = x.get((int(day), ShiftType.onsite, int(doc_id)))
+        v2 = x.get((int(day), ShiftType.oncall, int(doc_id)))
         if v1 is not None:
-            doc_terms.append(v1)
+            day_terms.append(v1)
         if v2 is not None:
-            doc_terms.append(v2)
+            day_terms.append(v2)
 
         works = cp.NewBoolVar(f"works_d{int(day)}_doc{int(doc_id)}")
-        if not doc_terms:
+        if not day_terms:
             cp.Add(works == 0)
+            works_cache[key] = works
             return works
 
-        s = sum(doc_terms)
+        s = sum(day_terms)
         # works = 1 if any term == 1, else 0
         cp.Add(s >= works)
-        cp.Add(s <= len(doc_terms) * works)
+        cp.Add(s <= len(day_terms) * works)
+
+        works_cache[key] = works
         return works
 
-    for doc_id, partner_id in pairs:
+    # We compute a safe exact lower bound: sum of max possible bonuses per request per day.
+    # Since each request has a requester-based effective weight, LB depends on requester roles.
+    lb = 0  # will become negative (only bonuses -> negative terms)
+    ub = 0  # upper bound is 0 because we never add positive terms here
+
+    # Precompute effective bonus weight PER requester (single knob applied here).
+    requester_effective_w: Dict[int, int] = {}
+    for requester_id, _partner_id in requests:
+        if requester_id in requester_effective_w:
+            continue
+
+        doctor = model.doctors.get(int(requester_id))
+        is_head = bool(doctor.is_head) if doctor else False
+        role = doctor.role if doctor else DoctorRole.resident
+
+        effective_w = scoring.effective_weight(
+            base_weight=int(base_bonus_w),
+            category="preferred_partners",
+            is_head=is_head,
+            role=role,
+        )
+        requester_effective_w[int(requester_id)] = int(effective_w)
+
+    # Build objective terms
+    for requester_id, partner_id in requests:
+        eff_w = int(requester_effective_w.get(int(requester_id), int(base_bonus_w)))
+
+        # Each (request, day) can contribute at most (-eff_w)
+        lb -= int(eff_w) * int(len(model.days))
+
         for d in model.days:
-            works_doc = _works_on_day(day=int(d), doc_id=int(doc_id))
+            works_req = _works_on_day(day=int(d), doc_id=int(requester_id))
             works_partner = _works_on_day(day=int(d), doc_id=int(partner_id))
 
-            together = cp.NewBoolVar(f"together_d{int(d)}_doc{int(doc_id)}_p{int(partner_id)}")
-            cp.AddMultiplicationEquality(together, [works_doc, works_partner])
+            together = cp.NewBoolVar(f"together_d{int(d)}_req{int(requester_id)}_p{int(partner_id)}")
+            cp.AddMultiplicationEquality(together, [works_req, works_partner])
 
-            # Bonus as negative penalty term.
-            terms.append((-bonus_w) * together)
+            # Bonus as negative penalty term (requester-based weight).
+            terms.append((-int(eff_w)) * together)
 
     if terms:
         total_penalty = cp.NewIntVar(int(lb), int(ub), "total_preferred_partners_penalty")
@@ -872,7 +963,7 @@ def attach_avoid_friday_if_weekend_off_objective(
     terms: List[cp_model.LinearExpr] = []
     ub: int = 0
 
-    weight = int(scoring.friday_with_free_weekend_weight())
+    base_weight = int(scoring.friday_with_free_weekend_weight())
 
     days_set: Set[int] = set(int(d) for d in model.days)
 
@@ -957,6 +1048,17 @@ def attach_avoid_friday_if_weekend_off_objective(
             # fri_with_free_weekend = works_fri AND weekend_off
             fri_with_free_weekend = cp.NewBoolVar(f"fri_free_weekend_d{int(fri)}_doc{int(doc_id)}")
             cp.AddMultiplicationEquality(fri_with_free_weekend, [works_fri, weekend_off])
+
+            doctor = model.doctors.get(int(doc_id))
+            is_head = bool(doctor.is_head) if doctor else False
+            role = doctor.role if doctor else DoctorRole.resident
+
+            weight = scoring.effective_weight(
+                base_weight=int(base_weight),
+                category="friday_free_weekend",
+                is_head=is_head,
+                role=role,
+            )
 
             terms.append(int(weight) * fri_with_free_weekend)
             ub += int(weight)
