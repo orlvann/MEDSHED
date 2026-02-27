@@ -3,38 +3,94 @@
 Shared scoring helpers and weights for the solver.
 
 This module defines:
-- role-based weights (head vs specialist vs resident),
-- central constants for penalties and bonuses,
-- small helper functions to keep objective_builder readable.
+- one central role multiplier knob (head/specialist/resident),
+- base constants for penalties and bonuses,
+- helpers that apply role multipliers to selected objective categories.
 """
 
 from backend.models.common_enums import DoctorRole, ShiftType
 
 # ---------------------------------------------------------------------------
-# Preference weights (generic "priority multipliers")
+# Role multipliers (ONE central knob)
 # ---------------------------------------------------------------------------
-# These are generic multipliers for "strong preferences" (preferred_*_days).
-# Heads have the highest priority, then specialists, then residents.
+# We keep role multipliers in "milli-units" (1000 = 1.00x) to avoid floats in CP-SAT.
+#
+# Design goal:
+# - Base weights define "how important a rule is in general".
+# - Role multipliers define "for whom it matters more".
+#
+# IMPORTANT:
+# - We do NOT apply role multipliers to safety/global rules like rest or fairness.
+# - We apply them mostly to preference/comfort-like objectives.
 
-ROLE_PREFERENCE_WEIGHTS = {
-    "head": 3.0,  # department heads (doctor.is_head == True)
-    DoctorRole.specialist: 2.0,
-    DoctorRole.resident: 1.0,
+ROLE_WEIGHT_MILLI = {
+    "head": 2000,  # 1.60x
+    DoctorRole.specialist: 1200,  # 1.20x
+    DoctorRole.resident: 1000,  # 1.00x
 }
+
+
+def role_multiplier_milli(*, is_head: bool, role: DoctorRole) -> int:
+    """
+    Return a role multiplier in milli-units (1000 = 1.00x).
+
+    Rule:
+    - specialist/resident provides the base role factor
+    - head multiplies ON TOP of that (head & specialist => both multipliers)
+      e.g. 1.60 * 1.20 = 1.92  => 1920 milli
+    """
+    role_m = int(ROLE_WEIGHT_MILLI.get(role, 1000))
+    head_m = int(ROLE_WEIGHT_MILLI["head"]) if is_head else 1000
+
+    # Combine multiplicatively but keep milli-scale:
+    # (role_m/1000) * (head_m/1000) = (role_m * head_m) / 1_000_000
+    # We want result also in milli: multiply by 1000 => / 1000_000
+    combined = (role_m * head_m) // 1000
+    return int(max(1, combined))
+
+
+# ---------------------------------------------------------------------------
+# Role-aware categories policy
+# ---------------------------------------------------------------------------
+
+ROLE_AWARE_CATEGORIES = {
+    "preferred_days",  # missing preferred concrete day
+    "weekday_patterns",  # preferred/avoid weekdays
+    "preferred_partners",  # requester-only weighting
+    "friday_free_weekend",  # penalty
+    "totals_target",  # deviation from target totals
+}
+
+
+def effective_weight(
+    *,
+    base_weight: int,
+    category: str,
+    is_head: bool,
+    role: DoctorRole,
+) -> int:
+    """
+    Compute an integer weight used in CP-SAT objective.
+
+    - If category is role-aware -> multiply by role multiplier (milli) and scale back.
+    - If category is role-neutral -> return base weight as-is.
+    """
+    if category not in ROLE_AWARE_CATEGORIES:
+        return int(base_weight)
+
+    m = role_multiplier_milli(is_head=is_head, role=role)  # e.g. 1920
+    # base_weight * (m/1000)
+    return int((int(base_weight) * int(m) + 500) // 1000)  # +500 for rounding
 
 
 def preference_weight_for_doctor(*, is_head: bool, role: DoctorRole) -> float:
     """
-    Return a numeric multiplier for satisfying a strong preference
-    (preferred_onsite_days / preferred_oncall_days) of a given doctor.
+    Human-friendly helper returning the role multiplier as a float.
 
-    Rules:
-    - Heads get the highest priority.
-    - Specialists rank above residents.
+    This is mainly for tests/debugging/docs.
+    Solver code should prefer role_multiplier_milli() / effective_weight() (integer math).
     """
-    if is_head:
-        return ROLE_PREFERENCE_WEIGHTS["head"]
-    return ROLE_PREFERENCE_WEIGHTS[role]
+    return float(role_multiplier_milli(is_head=is_head, role=role)) / 1000.0
 
 
 # ---------------------------------------------------------------------------
@@ -63,51 +119,19 @@ def rest_cross_shift_weight(*, role: DoctorRole) -> int:
 # ---------------------------------------------------------------------------
 
 # Preferred concrete day missing penalty (per preferred day that is not assigned).
-# NOTE: We want head+specialist to SUM, so head is an "extra" added on top.
+# IMPORTANT:
+# - This is a single BASE weight for everyone.
+# - Role/head priority is applied via effective_weight(..., category="preferred_days").
 
-PREF_DAY_HEAD_MISS_WEIGHT = 180  # 40 # 80
-PREF_DAY_SPECIALIST_MISS_WEIGHT = 140  # 30 # 40
-PREF_DAY_RESIDENT_MISS_WEIGHT = 100  # 20
+PREF_DAY_MISS_BASE_WEIGHT = 2000  # 10000  # 3000  # 2000  # 1000  # 200  # 120
 
 # Exceeding max totals (per 1 shift above max).
-MAX_TOTAL_EXCESS_WEIGHT = 40
-MAX_WEEKEND_EXCESS_WEIGHT = 50  # weekends a bit more important
+MAX_TOTAL_EXCESS_WEIGHT = 500  # 40
+MAX_WEEKEND_EXCESS_WEIGHT = 700  # 50  # weekends a bit more important
 
 # Deviation from target totals (per 1 shift away from target; over and under counted separately).
 TARGET_TOTAL_DEVIATION_WEIGHT = 10
 TARGET_WEEKEND_DEVIATION_WEIGHT = 15
-
-
-def preferred_day_miss_weight_for_doctor(*, is_head: bool, role: DoctorRole) -> int:
-    """
-    Return the penalty weight for missing a preferred concrete day
-    (preferred_onsite_days / preferred_oncall_days) for a given doctor.
-
-    Rules:
-    - base part depends on role:
-        * specialist -> PREF_DAY_SPECIALIST_MISS_WEIGHT
-        * resident   -> PREF_DAY_RESIDENT_MISS_WEIGHT
-    - if is_head=True, add PREF_DAY_HEAD_MISS_WEIGHT on top
-
-    Examples:
-    - resident (not head)          -> 20
-    - specialist (not head)        -> 30
-    - resident + head              -> 20 + 40 = 60
-    - specialist + head            -> 30 + 40 = 70
-    """
-    weight = 0
-
-    # Role part
-    if role == DoctorRole.specialist:
-        weight += PREF_DAY_SPECIALIST_MISS_WEIGHT
-    else:
-        weight += PREF_DAY_RESIDENT_MISS_WEIGHT
-
-    # Head part (adds on top)
-    if is_head:
-        weight += PREF_DAY_HEAD_MISS_WEIGHT
-
-    return weight
 
 
 # ---------------------------------------------------------------------------

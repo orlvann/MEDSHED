@@ -1473,8 +1473,16 @@ def _compute_preferred_days_penalty_per_doctor(
 
         is_head = bool(doctor.is_head) if doctor else False
         role = doctor.role if doctor else DoctorRole.resident
-        miss_w = int(scoring.preferred_day_miss_weight_for_doctor(is_head=is_head, role=role))
 
+        base_miss_w = int(scoring.PREF_DAY_MISS_BASE_WEIGHT)
+        miss_w = int(
+            scoring.effective_weight(
+                base_weight=int(base_miss_w),
+                category="preferred_days",
+                is_head=is_head,
+                role=role,
+            )
+        )
         p = 0
         for d_raw in prefs.preferred_onsite_days:
             d = int(d_raw)
