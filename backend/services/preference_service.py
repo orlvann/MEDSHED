@@ -25,8 +25,8 @@ from zoneinfo import ZoneInfo
 
 from backend.db.session import SessionLocal
 from backend.models.common_enums import DeadlineStatus, PeriodStatus, PreferenceStatus
-from backend.models.orm.doctor import Doctor
 from backend.models.orm.deadline_reminder import DeadlineReminderSent
+from backend.models.orm.doctor import Doctor
 from backend.models.orm.preference import (
     PreferenceDeadline,
     PreferencePointer,
@@ -43,6 +43,7 @@ from backend.models.schemas import (
     PreferenceWorkingPut,
     PreferenceWorkingRead,
 )
+from backend.services.errors import DomainError
 
 if TYPE_CHECKING:
     from backend.routers.deps import UserCtx
@@ -563,6 +564,45 @@ def read_summary(*, year: int, month: int, actor: UserCtx) -> PreferencesSummary
 # ------------------------------------------------------------------------------
 # Autosave / Checkpoint
 # ------------------------------------------------------------------------------
+def _validate_totals_subset_rule(payload: PreferenceWorkingPut) -> None:
+    """
+    Business validation for preference totals.
+
+    Rule:
+    - weekend totals are a subset of monthly totals
+      (weekends <= total), for both max and target.
+    """
+    if payload.max_onsite_weekends is not None and payload.max_onsite_total is not None:
+        if int(payload.max_onsite_weekends) > int(payload.max_onsite_total):
+            raise DomainError(
+                "invalid_preference_totals",
+                detail="max_onsite_weekends cannot be greater than max_onsite_total",
+                context={"field": "max_onsite_weekends"},
+            )
+
+    if payload.max_oncall_weekends is not None and payload.max_oncall_total is not None:
+        if int(payload.max_oncall_weekends) > int(payload.max_oncall_total):
+            raise DomainError(
+                "invalid_preference_totals",
+                detail="max_oncall_weekends cannot be greater than max_oncall_total",
+                context={"field": "max_oncall_weekends"},
+            )
+
+    if payload.target_onsite_weekends is not None and payload.target_onsite_total is not None:
+        if int(payload.target_onsite_weekends) > int(payload.target_onsite_total):
+            raise DomainError(
+                "invalid_preference_totals",
+                detail="target_onsite_weekends cannot be greater than target_onsite_total",
+                context={"field": "target_onsite_weekends"},
+            )
+
+    if payload.target_oncall_weekends is not None and payload.target_oncall_total is not None:
+        if int(payload.target_oncall_weekends) > int(payload.target_oncall_total):
+            raise DomainError(
+                "invalid_preference_totals",
+                detail="target_oncall_weekends cannot be greater than target_oncall_total",
+                context={"field": "target_oncall_weekends"},
+            )
 
 
 def save_working_autosave(
@@ -583,6 +623,7 @@ def save_working_autosave(
     - Return hints from PreferencePointer (status, version_id, can_undo/can_redo later).
     """
     now = now_utc()
+    _validate_totals_subset_rule(payload)
 
     with SessionLocal() as session:
         # 1) Get or create working row.

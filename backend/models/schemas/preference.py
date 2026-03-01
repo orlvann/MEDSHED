@@ -30,6 +30,24 @@ def _validate_min_le_max(min_v: Optional[int], max_v: Optional[int], name_min: s
         raise ValueError(f"{name_min} cannot be greater than {name_max}")
 
 
+def _validate_weekends_le_total(
+    weekend_v: Optional[int],
+    total_v: Optional[int],
+    name_weekend: str,
+    name_total: str,
+) -> None:
+    """
+    Business rule:
+    weekend totals are a subset of monthly totals.
+
+    Example:
+    - max_onsite_weekends must be <= max_onsite_total (when both are set)
+    - target_onsite_weekends must be <= target_onsite_total (when both are set)
+    """
+    if weekend_v is not None and total_v is not None and weekend_v > total_v:
+        raise ValueError(f"{name_weekend} cannot be greater than {name_total}")
+
+
 # ---- DTOs -----------------------------------------------------------------
 
 
@@ -85,12 +103,16 @@ class _PreferenceEditableMixin(BaseModel):
         "max_oncall_total",
         "max_onsite_weekends",
         "max_oncall_weekends",
+        "target_onsite_total",
+        "target_oncall_total",
+        "target_onsite_weekends",
+        "target_oncall_weekends",
         mode="before",
     )
     @classmethod
     def _none_or_nonnegative(cls, v):
         if v is not None and int(v) < 0:
-            raise ValueError("max values must be non-negative or null")
+            raise ValueError("values must be non-negative or null")
         return v
 
     @model_validator(mode="after")
@@ -107,6 +129,31 @@ class _PreferenceEditableMixin(BaseModel):
             self.max_oncall_total,
             "min_oncall_total",
             "max_oncall_total",
+        )
+        # Weekend totals must be within monthly totals (subset rule).
+        _validate_weekends_le_total(
+            self.max_onsite_weekends,
+            self.max_onsite_total,
+            "max_onsite_weekends",
+            "max_onsite_total",
+        )
+        _validate_weekends_le_total(
+            self.max_oncall_weekends,
+            self.max_oncall_total,
+            "max_oncall_weekends",
+            "max_oncall_total",
+        )
+        _validate_weekends_le_total(
+            self.target_onsite_weekends,
+            self.target_onsite_total,
+            "target_onsite_weekends",
+            "target_onsite_total",
+        )
+        _validate_weekends_le_total(
+            self.target_oncall_weekends,
+            self.target_oncall_total,
+            "target_oncall_weekends",
+            "target_oncall_total",
         )
         # No overlap between unavailable* and preferred* for the same shift type
         if set(self.unavailable_onsite_days) & set(self.preferred_onsite_days):
