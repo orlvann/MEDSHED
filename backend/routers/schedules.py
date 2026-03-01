@@ -30,9 +30,12 @@ IMPORTANT ABOUT ERROR SHAPE:
 
 from __future__ import annotations
 
+from io import BytesIO
 from typing import Literal, Optional, cast
+from typing import Literal as LiteralType
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Path, Query, status
+from fastapi.responses import StreamingResponse
 
 from backend.core import issues
 from backend.models.schemas.diagnostics import DiagnosticsRead, MyDoctorDiagnosticsRead
@@ -56,6 +59,8 @@ from backend.models.schemas.schedule import (
 from backend.routers.deps import UserCtx, require_admin, require_doctor
 from backend.services import SchedulingService
 from backend.services.errors import DomainError
+from backend.services.export_service import ExportService
+from backend.services.export_service import ExportService as _CalExportService
 
 router = APIRouter(prefix="/api/v1/schedules")
 svc = SchedulingService()
@@ -582,7 +587,6 @@ def generate_schedule(
 # IMPORTANT: these /me/* routes MUST be registered before any /{year}/{month}
 # routes, otherwise FastAPI tries to parse "me" as an integer and returns 422.
 
-from backend.services.export_service import ExportService as _CalExportService
 
 _cal_export_svc = _CalExportService()
 
@@ -2616,12 +2620,6 @@ def schedules_my_assignments(
 
 # ---------------------- DOCTOR: my export -----------------------
 
-from io import BytesIO
-from typing import Literal as LiteralType
-
-from fastapi.responses import StreamingResponse
-
-from backend.services.export_service import ExportService
 
 export_svc = ExportService()
 
@@ -2746,7 +2744,6 @@ def schedules_team_export(
     except ValueError as e:
         _raise(e)
         assert False
-
 
 
 # ---------------------- DOCTOR: my diagnostics -------------------

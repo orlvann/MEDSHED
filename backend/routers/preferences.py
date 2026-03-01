@@ -19,7 +19,7 @@ from backend.models.schemas import (
 from backend.models.schemas.dto_common import MonthInt, YearInt, make_error
 from backend.routers.deps import UserCtx, require_admin, require_doctor, require_user
 from backend.services.email_service import send_deadline_changed_email
-from backend.services.sms_service import send_deadline_changed_sms
+from backend.services.errors import DomainError
 from backend.services.preference_service import (
     create_checkpoint,
     get_deadline,
@@ -31,9 +31,39 @@ from backend.services.preference_service import (
     save_working_autosave,
     upsert_deadline,
 )
+from backend.services.sms_service import send_deadline_changed_sms
 from backend.utils.timez import is_period_closed
 
 router: APIRouter = APIRouter()
+
+
+def _err_example(code: str, *, detail: str | None = None, context: dict | None = None) -> dict:
+    """
+    Helper for OpenAPI examples.
+
+    Our runtime error shape is:
+      {"detail": {"code": str, "detail": str, "context": dict}}
+    """
+    safe_context = context if isinstance(context, dict) else {}
+    return {"detail": make_error(code, detail=detail or code, context=safe_context)}
+
+
+_OPENAPI_422_PYDANTIC_WEEKEND_SUBSET = {
+    "detail": [
+        {
+            "type": "value_error",
+            "loc": ["body"],
+            "msg": "max_onsite_weekends cannot be greater than max_onsite_total",
+            "input": {"max_onsite_total": 2, "max_onsite_weekends": 5},
+        }
+    ]
+}
+
+_OPENAPI_422_DOMAIN_INVALID_TOTALS = _err_example(
+    "invalid_preference_totals",
+    detail="max_onsite_weekends cannot be greater than max_onsite_total",
+    context={"field": "max_onsite_weekends"},
+)
 
 
 def _guard_period_closed(year: int, month: int) -> None:
@@ -93,6 +123,15 @@ def _map_preference_error(exc: ValueError, *, year: int, month: int, doctor_id: 
 
     We wrap them in our standard error shape via make_error().
     """
+    if isinstance(exc, DomainError):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=make_error(
+                exc.code,
+                detail=exc.detail or exc.code,
+                context=exc.context or {"year": year, "month": month, "doctor_id": doctor_id},
+            ),
+        )
     code = str(exc)
 
     if code == "cannot_undo":
@@ -233,6 +272,41 @@ def me_read_working(
     tags=["preferences:doctor"],
     summary="Autosave my working (no checkpoint)",
     operation_id="preferences_doctor_me_working_put",
+    responses={
+        409: {
+            "description": "Preferences locked for doctor (past period or deadline passed).",
+            "content": {
+                "application/json": {
+                    "examples": {
+                        "period_closed": {
+                            "value": _err_example(
+                                "period_closed",
+                                detail="preferences for this period are locked for doctor",
+                                context={"year": 2026, "month": 1},
+                            )
+                        }
+                    }
+                }
+            },
+        },
+        422: {
+            "description": "Validation error (Pydantic) or domain error.",
+            "content": {
+                "application/json": {
+                    "examples": {
+                        "pydantic_validation_error": {
+                            "summary": "Schema validation error (e.g., weekend totals exceed monthly totals).",
+                            "value": _OPENAPI_422_PYDANTIC_WEEKEND_SUBSET,
+                        },
+                        "domain_invalid_preference_totals": {
+                            "summary": "Domain validation error (service-level guard).",
+                            "value": _OPENAPI_422_DOMAIN_INVALID_TOTALS,
+                        },
+                    }
+                }
+            },
+        },
+    },
 )
 def me_put_working(
     user: UserCtx = Depends(require_doctor),
@@ -243,7 +317,10 @@ def me_put_working(
     _guard_doctor_preferences_locked(year, month, user)
     doctor_id = user.doctor_id
     assert doctor_id is not None
-    return save_working_autosave(year=year, month=month, doctor_id=doctor_id, payload=payload, actor=user)
+    try:
+        return save_working_autosave(year=year, month=month, doctor_id=doctor_id, payload=payload, actor=user)
+    except ValueError as exc:
+        _map_preference_error(exc, year=year, month=month, doctor_id=doctor_id)
 
 
 @router.post(
@@ -333,6 +410,41 @@ def admin_read_working(
     tags=["preferences:admin"],
     summary="Autosave doctor form into working copy only (no checkpoint)",
     operation_id="preferences_admin_working_put",
+    responses={
+        409: {
+            "description": "Past periods are closed for edits.",
+            "content": {
+                "application/json": {
+                    "examples": {
+                        "period_closed": {
+                            "value": _err_example(
+                                "period_closed",
+                                detail="preferences for this past period are closed",
+                                context={"year": 2026, "month": 1},
+                            )
+                        }
+                    }
+                }
+            },
+        },
+        422: {
+            "description": "Validation error (Pydantic) or domain error.",
+            "content": {
+                "application/json": {
+                    "examples": {
+                        "pydantic_validation_error": {
+                            "summary": "Schema validation error (e.g., weekend totals exceed monthly totals).",
+                            "value": _OPENAPI_422_PYDANTIC_WEEKEND_SUBSET,
+                        },
+                        "domain_invalid_preference_totals": {
+                            "summary": "Domain validation error (service-level guard).",
+                            "value": _OPENAPI_422_DOMAIN_INVALID_TOTALS,
+                        },
+                    }
+                }
+            },
+        },
+    },
 )
 def admin_put_working(
     user: UserCtx = Depends(require_admin),
@@ -342,7 +454,10 @@ def admin_put_working(
     payload: PreferenceWorkingPut = Body(...),
 ):
     _guard_period_closed(year, month)
-    return save_working_autosave(year=year, month=month, doctor_id=doctor_id, payload=payload, actor=user)
+    try:
+        return save_working_autosave(year=year, month=month, doctor_id=doctor_id, payload=payload, actor=user)
+    except ValueError as exc:
+        _map_preference_error(exc, year=year, month=month, doctor_id=doctor_id)
 
 
 @router.post(
