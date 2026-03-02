@@ -39,48 +39,39 @@ package "Core — solver input & output (backend/core/types.py)" {
 
   class PreferencesInput {
     +doctor_id: int
-    --
     +unavailable_onsite_days: List[int]
     +unavailable_oncall_days: List[int]
     +preferred_onsite_days: List[int]
     +preferred_oncall_days: List[int]
-    --
-    +min_onsite_total: int?
-    +max_onsite_total: int?
-    +target_onsite_total: int?
-    +min_oncall_total: int?
-    +max_oncall_total: int?
-    +target_oncall_total: int?
-    --
-    +max_onsite_weekends: int?
-    +target_onsite_weekends: int?
-    +max_oncall_weekends: int?
-    +target_oncall_weekends: int?
-    --
+    +min_onsite_total: int
+    +max_onsite_total: int
+    +target_onsite_total: int
+    +min_oncall_total: int
+    +max_oncall_total: int
+    +target_oncall_total: int
+    +max_onsite_weekends: int
+    +target_onsite_weekends: int
+    +max_oncall_weekends: int
+    +target_oncall_weekends: int
     +preferred_onsite_weekdays: List[int]
     +preferred_oncall_weekdays: List[int]
     +avoid_onsite_weekdays: List[int]
     +avoid_oncall_weekdays: List[int]
-    --
-    +allow_weekend_consecutive_onsite_oncall: bool = False
+    +allow_weekend_consecutive_onsite_oncall: bool
     +preferred_partners: List[int]
-    +comments: str?
+    +comments: str
   }
 
   class ProblemData {
     +year: int
     +month: int
-    --
     +days: List[int]
     +weekdays: Dict[int, int]
-    --
     +doctors: Dict[int, DoctorInput]
     +preferences: Dict[int, PreferencesInput]
-    --
     +participant_doctor_ids: Set[int]
     +ignore_slots: Set[Tuple[int, ShiftType]]
-    --
-    +carryover: MonthCarryover?
+    +carryover: MonthCarryover
   }
 
   class MonthCarryover {
@@ -92,20 +83,15 @@ package "Core — solver input & output (backend/core/types.py)" {
   class HardModel {
     +year: int
     +month: int
-    --
     +days: List[int]
     +active_days: List[int]
-    --
     +doctors: Dict[int, DoctorInput]
     +preferences: Dict[int, PreferencesInput]
-    --
     +participant_doctor_ids: Set[int]
     +ignore_slots: Set[Tuple[int, ShiftType]]
-    --
-    +carryover: MonthCarryover?
-    --
+    +carryover: MonthCarryover
     +allowed_slots: Dict[Tuple[int, ShiftType], List[int]]
-    +seed_hints: Any?
+    +seed_hints: Any
   }
 
   together {
@@ -134,10 +120,10 @@ ProblemData o-- "0..1" MonthCarryover
 ' - and the relation enters ProblemData from the left side
 ProblemData "1" *--left-- "0..*" DoctorInput
 
-ProblemData *-- "0..*" PreferencesInput
+ProblemData "1" *-- "0..*" PreferencesInput
 
 HardModel o-- "0..1" MonthCarryover
-ProblemData ..> HardModel : build_hard_model()
+ProblemData "1" --> "1" HardModel : builds
 
 SolverSolution *-- "0..*" SolverAssignment
 
@@ -147,6 +133,7 @@ SolverSolution *-- "0..*" SolverAssignment
 
 ' Force DoctorInput to the LEFT of ProblemData
 DoctorInput -[hidden]right-> ProblemData
+DoctorInput -[hidden]right-> DoctorInput
 
 ' Main vertical flow
 ProblemData -[hidden]down-> HardModel
@@ -154,5 +141,6 @@ HardModel  -[hidden]down-> SolverSolution
 
 ' Output row side-by-side
 SolverSolution -[hidden]right-> SolverAssignment
+SolverAssignment -[hidden]right-> SolverAssignment
 
 @enduml

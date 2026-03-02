@@ -1,0 +1,56 @@
+@startuml erd_preferences_deadlines
+' run:
+' cd docs/diagrams/src
+' plantuml -tpng -Ddpi=300 -o ../export erd_preferences_deadlines.puml
+
+hide circle
+skinparam shadowing false
+skinparam linetype ortho
+skinparam dpi 300
+skinparam monochrome true
+skinparam pageSize A4
+skinparam DefaultFontName Arial
+skinparam DefaultFontSize 12
+skinparam entityAttributeIconSize 0
+
+top to bottom direction
+skinparam nodesep 30
+skinparam ranksep 50
+
+title ERD — Preferences (Deadlines + Reminders)
+
+entity "preferences_deadlines" as deadlines {
+  [#] id : INTEGER <<PK>> <<NOT NULL>>
+  --
+  year         : INTEGER <<NOT NULL>>
+  month        : INTEGER <<NOT NULL>>
+  deadline_utc : DATETIME(TZ) <<NOT NULL>>
+  org_timezone : VARCHAR(64) <<NOT NULL>> [DEFAULT Europe/Warsaw]
+  --
+  {unique} uq_deadline_period (year, month)
+  {check}  ck_deadline_month_range : month >= 1 AND month <= 12
+  {check}  ck_deadline_year_range  : year >= 1900 AND year <= 2100
+}
+
+entity "deadline_reminders_sent" as reminders {
+  [#] id : INTEGER <<PK>> <<NOT NULL>>
+  --
+  deadline_id   : INTEGER <<NOT NULL>> <<FK preferences_deadlines.id>>
+  reminder_type : VARCHAR(10) <<NOT NULL>>
+  sent_at       : DATETIME(TZ) <<NOT NULL>> [DEFAULT CURRENT_TIMESTAMP]
+  --
+  {unique} uq_deadline_reminder (deadline_id, reminder_type)
+}
+
+' -----------------------
+' Layout control (portable)
+' Goal: show the pair side-by-side (not too tall)
+' -----------------------
+deadlines -[hidden]-> reminders
+
+' -----------------------
+' Relationship (real FK)
+' -----------------------
+deadlines ||--o{ reminders
+
+@enduml

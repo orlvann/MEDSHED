@@ -1,0 +1,99 @@
+@startuml erd_schedules
+' run:
+' cd docs/diagrams/src
+' plantuml -tpng -Ddpi=300 -o ../export erd_schedules.puml
+
+hide circle
+skinparam shadowing false
+skinparam linetype ortho
+skinparam dpi 300
+skinparam monochrome true
+skinparam pageSize A4
+skinparam DefaultFontName Arial
+skinparam DefaultFontSize 12
+skinparam entityAttributeIconSize 0
+
+top to bottom direction
+skinparam nodesep 30
+skinparam ranksep 50
+
+title ERD — Schedules + Diagnostics
+
+entity "users" as users {
+  [#] id    : INTEGER <<PK>> <<NOT NULL>>
+  --
+  email  : VARCHAR(320) <<NOT NULL>> <<UNIQUE uq_users_email>>
+}
+
+entity "schedule_versions" as sched_versions {
+  [#] id    : INTEGER <<PK>> <<NOT NULL>> [AI]
+  --
+  year   : INTEGER <<NOT NULL>>
+  month  : INTEGER <<NOT NULL>>
+  payload: JSON <<NOT NULL>>
+  kind   : VARCHAR(16) <<NOT NULL>>
+  created_by_user_id : INTEGER <<NULL>> <<FK users.id>>
+  created_by_role    : VARCHAR(32) <<NULL>>
+  created_at         : DATETIME(TZ) <<NOT NULL>> [DEFAULT now()]
+  --
+  {check} ck_schedule_versions_kind : kind in ('draft','published')
+}
+
+entity "schedule_working" as sched_working {
+  [#] year  : INTEGER <<PK>> <<NOT NULL>>
+  [#] month : INTEGER <<PK>> <<NOT NULL>>
+  --
+  payload      : JSON <<NOT NULL>>
+  lock_version : INTEGER <<NOT NULL>> [DEFAULT 0]
+  updated_by_user_id : INTEGER <<NULL>> <<FK users.id>>
+  updated_at   : DATETIME(TZ) <<NOT NULL>> [DEFAULT now()]
+  --
+  {unique} uq_schedule_working_year_month (year, month)
+}
+
+entity "schedule_pointers" as sched_pointers {
+  [#] year  : INTEGER <<PK>> <<NOT NULL>>
+  [#] month : INTEGER <<PK>> <<NOT NULL>>
+  --
+  current_draft_version_id     : INTEGER <<NULL>> <<FK schedule_versions.id>>
+  current_published_version_id : INTEGER <<NULL>> <<FK schedule_versions.id>>
+  updated_at : DATETIME(TZ) <<NOT NULL>> [DEFAULT now()]
+}
+
+entity "schedule_diagnostics" as sched_diag {
+  [#] id : INTEGER <<PK>> <<NOT NULL>> [AI]
+  --
+  version_id  : INTEGER <<NOT NULL>> <<FK schedule_versions.id>> <<UNIQUE (version_id)>>
+  quality     : JSON <<NOT NULL>>
+  computed_at : DATETIME(TZ) <<NOT NULL>> [DEFAULT now()]
+}
+
+' -----------------------
+' Layout control (portable)
+' -----------------------
+users -[hidden]-> sched_versions
+sched_versions -[hidden]-> sched_working
+sched_versions -[hidden]-> sched_pointers
+sched_pointers -[hidden]-> sched_diag
+
+' -----------------------
+' Relationships (real FKs)
+' Labels are verb-based (meaningful in plain English)
+' -----------------------
+
+' schedule_versions.created_by_user_id -> users.id (nullable)
+users ||--o{ sched_versions
+
+' schedule_working.updated_by_user_id -> users.id (nullable)
+users ||--o{ sched_working
+
+' schedule_pointers.current_draft_version_id -> schedule_versions.id (nullable)
+sched_versions ||--o{ sched_pointers : "is selected\nas draft by"
+
+' schedule_pointers.current_published_version_id -> schedule_versions.id (nullable)
+sched_versions ||--o{ sched_pointers : "is selected\nas published by"
+
+' schedule_diagnostics.version_id -> schedule_versions.id (NOT NULL + UNIQUE)
+sched_versions ||--o| sched_diag
+
+@enduml

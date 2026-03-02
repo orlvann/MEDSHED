@@ -1,5 +1,3 @@
-Jasne — poniżej masz **gotowy, kompletny README** do wklejenia (Twoja wersja + dopisane sekcje o nowych testach + poprawiony opis `no_specialist`).
-
 ````md
 # Tests
 

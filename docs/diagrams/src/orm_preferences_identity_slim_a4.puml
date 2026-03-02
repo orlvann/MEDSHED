@@ -49,8 +49,8 @@ package "ORM — Identity + Preferences " {
       +doctor_id : int
       +year : int
       +month : int
-      +current_version_id : int?
-      +submitted_at : datetime?
+      +current_version_id : int
+      +submitted_at : datetime
     }
 
     ' --- Row 2 (side-by-side) ---
@@ -62,7 +62,7 @@ package "ORM — Identity + Preferences " {
       +kind : str
       +payload : JSON
       +created_at : datetime
-      +note : str?
+      +note : str
     }
 
     class PreferenceWorking {
@@ -71,16 +71,14 @@ package "ORM — Identity + Preferences " {
       +year : int
       +month : int
       +lock_version : int
-      --
-      +unavailable_onsite_days : list[int]?
-      +unavailable_oncall_days : list[int]?
-      +preferred_onsite_days : list[int]?
-      +preferred_oncall_days : list[int]?
-      --
+      +unavailable_onsite_days : list[int]
+      +unavailable_oncall_days : list[int]
+      +preferred_onsite_days : list[int]
+      +preferred_oncall_days : list[int]
       +allow_weekend_consecutive_onsite_oncall : bool
-      +preferred_partners : list[int]?
-      +comments : str?
-      +last_saved_at : datetime?
+      +preferred_partners : list[int]
+      +comments : str
+      +last_saved_at : datetime
     }
   }
 
@@ -99,7 +97,7 @@ package "ORM — Identity + Preferences " {
       +role : UserRole
       +password_hash : str
       +is_active : bool
-      +doctor_id : int?
+      +doctor_id : int
       +created_at : datetime
       +updated_at : datetime
     }
@@ -111,24 +109,24 @@ package "ORM — Identity + Preferences " {
       +role : DoctorRole
       +is_active : bool
       +is_head : bool
-      +email : str?
+      +email : str
     }
   }
 }
 
 ' =========================
-' RELATIONSHIPS (FK / intent)
+' Associations (UML)
 ' =========================
 
 ' Preferences triad
-PreferencePointer "0..1" --> "1" PreferenceVersion : current_version_id
-PreferenceWorking "*" --> "1" Doctor : doctor_id
-PreferenceVersion "*" --> "1" Doctor : doctor_id
-PreferencePointer "*" --> "1" Doctor : doctor_id
+PreferencePointer "1" --> "0..1" PreferenceVersion
+PreferenceWorking "0..*" --> "1" Doctor
+PreferenceVersion "0..*" --> "1" Doctor
+PreferencePointer "0..*" --> "1" Doctor
 
 ' Identity/auth
-PasswordResetToken "0..1" --> "1" User : user_id (unique)
-User "0..1" --> "1" Doctor : doctor_id (unique)
+PasswordResetToken "0..*" --> "1" User : user_id
+User "0..1" --> "0..1" Doctor : doctor_id
 
 ' =========================
 ' LAYOUT HELPERS (force 2 rows in Preferences, 1 row in Identity)
