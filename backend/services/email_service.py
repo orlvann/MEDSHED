@@ -185,6 +185,122 @@ The MedShed Team
         # In production, you might want to queue this for retry
 
 
+def send_rejection_email(
+    *,
+    to_email: str,
+    first_name: str,
+    last_name: str,
+) -> None:
+    """
+    Send a rejection notification email to a doctor whose registration was rejected.
+
+    Args:
+        to_email: Recipient email address
+        first_name: Doctor's first name
+        last_name: Doctor's last name
+
+    Notes:
+        - Sent when admin rejects a pending doctor registration
+        - Email failures are logged but don't raise (non-blocking)
+    """
+    try:
+        msg = MIMEMultipart("alternative")
+        msg["Subject"] = "MedShed Registration Update"
+        msg["From"] = f"{settings.SMTP_FROM_NAME} <{settings.SMTP_FROM_EMAIL}>"
+        msg["To"] = to_email
+
+        text_body = f"""
+Hello {first_name} {last_name},
+
+Thank you for your interest in joining MedShed.
+
+After reviewing your registration request, we regret to inform you that your application has not been approved at this time.
+
+If you believe this was a mistake or have questions, please contact your department administrator.
+
+Best regards,
+The MedShed Team
+        """.strip()
+
+        html_body = f"""
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <style>
+        body {{
+            font-family: Arial, sans-serif;
+            line-height: 1.6;
+            color: #333;
+        }}
+        .container {{
+            max-width: 600px;
+            margin: 0 auto;
+            padding: 20px;
+        }}
+        .header {{
+            background-color: #6b7280;
+            color: white;
+            padding: 20px;
+            text-align: center;
+            border-radius: 5px 5px 0 0;
+        }}
+        .content {{
+            background-color: #f9fafb;
+            padding: 30px;
+            border: 1px solid #e5e7eb;
+        }}
+        .footer {{
+            color: #6b7280;
+            font-size: 0.875rem;
+            margin-top: 20px;
+            padding-top: 20px;
+            border-top: 1px solid #e5e7eb;
+        }}
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>Registration Update</h1>
+        </div>
+        <div class="content">
+            <p>Hello <strong>{first_name} {last_name}</strong>,</p>
+
+            <p>Thank you for your interest in joining MedShed.</p>
+
+            <p>After reviewing your registration request, we regret to inform you that your application has not been approved at this time.</p>
+
+            <p>If you believe this was a mistake or have questions, please contact your department administrator.</p>
+
+            <div class="footer">
+                <p>Best regards,<br>The MedShed Team</p>
+            </div>
+        </div>
+    </div>
+</body>
+</html>
+        """.strip()
+
+        part1 = MIMEText(text_body, "plain")
+        part2 = MIMEText(html_body, "html")
+        msg.attach(part1)
+        msg.attach(part2)
+
+        with smtplib.SMTP(settings.SMTP_HOST, settings.SMTP_PORT) as server:
+            if settings.SMTP_HOST not in ["localhost", "127.0.0.1", "mailhog", "maildev"]:
+                server.starttls()
+            if settings.SMTP_USER and settings.SMTP_PASSWORD:
+                server.login(settings.SMTP_USER, settings.SMTP_PASSWORD)
+            server.sendmail(settings.SMTP_FROM_EMAIL, to_email, msg.as_string())
+
+        logger.info(f"Rejection email sent to {to_email}")
+
+    except Exception as e:
+        logger.error(f"Failed to send rejection email to {to_email}: {e}")
+        # Don't raise - email failures shouldn't block rejection
+
+
 def send_admin_created_email(
     *,
     email: str,

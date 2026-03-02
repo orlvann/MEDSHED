@@ -69,6 +69,7 @@ export const DoctorPreferences = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [saveLoading, setSaveLoading] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
   const [validationErrors, setValidationErrors] = useState<ValidationError[]>(
     []
   );
@@ -212,15 +213,17 @@ export const DoctorPreferences = () => {
   const handleSaveCheckpoint = async () => {
     if (!preferenceData) return;
 
+    setSaveError(null);
+
     // Block save if deadline has passed (locked)
     if (deadline?.status === "locked") {
-      alert("Cannot save: deadline has passed");
+      setSaveError("Cannot save: deadline has passed");
       return;
     }
 
     // Block save if validation errors
     if (validationErrors.length > 0) {
-      alert("Please fix validation errors before saving");
+      setSaveError("Please fix validation errors before saving");
       return;
     }
 
@@ -247,7 +250,20 @@ export const DoctorPreferences = () => {
       draft.clearDraft(preferenceData.doctor_id);
       draft.setRestoredFromDraft(false);
     } catch (err: any) {
-      alert(err.response?.data?.detail?.detail || "Failed to save");
+      const detail = err.response?.data?.detail;
+      let msg = "Failed to save";
+      if (Array.isArray(detail)) {
+        msg = detail[0]?.msg || msg;
+      } else if (detail?.code) {
+        msg = detail.detail || detail.code;
+        if (detail.context?.field) {
+          setValidationErrors((prev) => [
+            ...prev.filter((e) => e.field !== detail.context.field),
+            { field: detail.context.field, message: msg },
+          ]);
+        }
+      }
+      setSaveError(msg);
     } finally {
       setSaveLoading(false);
     }
@@ -488,6 +504,8 @@ export const DoctorPreferences = () => {
                 status={preferenceData.status}
                 periodStatus={preferenceData.period_status}
                 validationErrors={validationErrors}
+                saveError={saveError}
+                onClearSaveError={() => setSaveError(null)}
                 isSaving={saveLoading}
               />
             ) : null}

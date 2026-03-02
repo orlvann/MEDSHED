@@ -1,4 +1,4 @@
-import { ChevronLeft, ChevronRight, Flag } from "lucide-react";
+import { ChevronLeft, ChevronRight } from "lucide-react";
 import { Button } from "../ui/button";
 import { InfoTooltip } from "./InfoTooltip";
 import {
@@ -69,7 +69,7 @@ export const IntegratedCalendar = ({
 
   const getDayCellStyle = (state: DayState, isVacation: boolean) => {
     if (isVacation) {
-      return "bg-purple-100 text-purple-700 border-purple-200";
+      return "bg-red-100 text-red-700 border-red-200";
     }
     switch (state) {
       case "want":
@@ -182,7 +182,7 @@ export const IntegratedCalendar = ({
                       !isClickable ? "cursor-not-allowed" : "cursor-pointer"
                     }`}
                   >
-                    {isVacation && <Flag className="h-3 w-3" />}
+                    {null}
                   </button>
                 );
               })}
@@ -224,7 +224,7 @@ export const IntegratedCalendar = ({
                       !isClickable ? "cursor-not-allowed" : "cursor-pointer"
                     }`}
                   >
-                    {isVacation && <Flag className="h-3 w-3" />}
+                    {null}
                   </button>
                 );
               })}

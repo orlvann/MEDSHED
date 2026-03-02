@@ -17,29 +17,29 @@ from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, Tabl
 
 from backend.utils.exporters import DoctorExportData, TeamExportData
 
-_MONTH_NAMES_PL = {
-    1: "STYCZE\u0143",
-    2: "LUTY",
-    3: "MARZEC",
-    4: "KWIECIE\u0143",
-    5: "MAJ",
-    6: "CZERWIEC",
-    7: "LIPIEC",
-    8: "SIERPIE\u0143",
-    9: "WRZESIE\u0143",
-    10: "PA\u0179DZIERNIK",
-    11: "LISTOPAD",
-    12: "GRUDZIE\u0143",
+_MONTH_NAMES = {
+    1: "JANUARY",
+    2: "FEBRUARY",
+    3: "MARCH",
+    4: "APRIL",
+    5: "MAY",
+    6: "JUNE",
+    7: "JULY",
+    8: "AUGUST",
+    9: "SEPTEMBER",
+    10: "OCTOBER",
+    11: "NOVEMBER",
+    12: "DECEMBER",
 }
 
-_DAY_NAMES_PL_FULL = {
-    0: "poniedzia\u0142ek",
-    1: "wtorek",
-    2: "\u015broda",
-    3: "czwartek",
-    4: "pi\u0105tek",
-    5: "sobota",
-    6: "niedziela",
+_DAY_NAMES_FULL = {
+    0: "Monday",
+    1: "Tuesday",
+    2: "Wednesday",
+    3: "Thursday",
+    4: "Friday",
+    5: "Saturday",
+    6: "Sunday",
 }
 
 _WEEKEND_DAYS = {5, 6}  # Saturday, Sunday
@@ -47,7 +47,7 @@ _WEEKEND_DAYS = {5, 6}  # Saturday, Sunday
 _HEADER_BG = colors.HexColor("#2F5496")
 _WEEKEND_BG = colors.HexColor("#FFF2CC")
 
-# Candidate paths for a Unicode-capable TTF font (supports Polish diacritics).
+# Candidate paths for a Unicode-capable TTF font.
 _FONT_CANDIDATES = [
     # reportlab bundled
     "{rl}/fonts/DejaVuSans.ttf",
@@ -68,10 +68,7 @@ _FONT_CANDIDATES = [
 
 
 def _register_font() -> str:
-    """Register a Unicode-capable font; return its name.
-
-    Searches multiple system paths so Polish diacritics render correctly.
-    """
+    """Register a Unicode-capable font; return its name."""
     import reportlab as _rl
 
     rl_dir = os.path.dirname(_rl.__file__)
@@ -124,13 +121,13 @@ def build_pdf(data: DoctorExportData) -> bytes:
     story: list = []
 
     # ---- title ------------------------------------------------------------
-    month_pl = _MONTH_NAMES_PL.get(data.month, str(data.month))
-    story.append(Paragraph(f"{month_pl}_{data.year}", title_style))
+    month_en = _MONTH_NAMES.get(data.month, str(data.month))
+    story.append(Paragraph(f"{month_en}_{data.year}", title_style))
     story.append(Paragraph(data.last_name, subtitle_style))
     story.append(Spacer(1, 6 * mm))
 
     # ---- table ------------------------------------------------------------
-    table_data = [["", "DY\u017bUR / PODDY\u017bUR"]]
+    table_data = [["", "ON-SITE / ON-CALL"]]
 
     # Build lookup: day -> list of shift types
     shift_by_day: dict[int, list[str]] = {}
@@ -142,11 +139,11 @@ def build_pdf(data: DoctorExportData) -> bytes:
     for day in sorted(shift_by_day.keys()):
         d = date(data.year, data.month, day)
         weekday = d.weekday()
-        day_name = _DAY_NAMES_PL_FULL.get(weekday, "")
+        day_name = _DAY_NAMES_FULL.get(weekday, "")
 
         labels = []
         for s in sorted(shift_by_day[day]):
-            labels.append("DY\u017bUR" if s == "onsite" else "PODDY\u017bUR")
+            labels.append("On-site" if s == "onsite" else "On-call")
         shift_label = ", ".join(labels)
 
         table_data.append([f"{day} {day_name}", shift_label])
@@ -188,7 +185,7 @@ def build_pdf(data: DoctorExportData) -> bytes:
 
 
 def build_team_pdf(data: TeamExportData) -> bytes:
-    """Team schedule PDF: MONTH_YEAR, day+weekday / DYŻUR / PODDYŻUR columns.
+    """Team schedule PDF: MONTH_YEAR, day+weekday / On-site / On-call columns.
 
     When shift_type_filter is set, only the matching column is included.
     """
@@ -217,8 +214,8 @@ def build_team_pdf(data: TeamExportData) -> bytes:
     story: list = []
 
     # ---- title ------------------------------------------------------------
-    month_pl = _MONTH_NAMES_PL.get(data.month, str(data.month))
-    story.append(Paragraph(f"{month_pl}_{data.year}", title_style))
+    month_en = _MONTH_NAMES.get(data.month, str(data.month))
+    story.append(Paragraph(f"{month_en}_{data.year}", title_style))
     story.append(Spacer(1, 4 * mm))
 
     # ---- build lookup: day -> {onsite: [names], oncall: [names]} ----------
@@ -241,9 +238,9 @@ def build_team_pdf(data: TeamExportData) -> bytes:
     # ---- table header -----------------------------------------------------
     header_row: list[str] = [""]
     if show_onsite:
-        header_row.append("DY\u017bUR")
+        header_row.append("ON-SITE")
     if show_oncall:
-        header_row.append("PODDY\u017bUR")
+        header_row.append("ON-CALL")
 
     table_data: list[list[str]] = [header_row]
     weekend_rows: list[int] = []
@@ -251,7 +248,7 @@ def build_team_pdf(data: TeamExportData) -> bytes:
     for day_num in range(1, num_days + 1):
         d = date(data.year, data.month, day_num)
         weekday = d.weekday()
-        day_name = _DAY_NAMES_PL_FULL.get(weekday, "")
+        day_name = _DAY_NAMES_FULL.get(weekday, "")
 
         row: list[str] = [f"{day_num} {day_name}"]
         if show_onsite:

@@ -39,6 +39,7 @@ import type {
   SchedulePublishCreated,
   SchedulePublishedRevertRead,
   DiagnosticsRead,
+  MyDoctorDiagnosticsRead,
 } from "../types";
 
 // Base API URL - can be overridden by environment variable
@@ -138,6 +139,9 @@ export const doctorsApi = {
     role?: string;
     search?: string;
     is_active?: "true" | "false" | "all";
+    is_head?: string;
+    user_role?: string;
+    user_is_active?: string;
   }): Promise<DoctorList> => {
     const response = await api.get<DoctorList>("/api/v1/doctors", { params });
     return response.data;
@@ -539,6 +543,33 @@ export const schedulesApi = {
   ): Promise<SchedulePublishedRevertRead> => {
     const response = await api.post<SchedulePublishedRevertRead>(
       `/api/v1/schedules/${year}/${month}/revert-next-published`,
+    );
+    return response.data;
+  },
+
+  // Admin export
+  adminExport: async (
+    year: number,
+    month: number,
+    format: "xlsx" | "pdf",
+    doctorIds?: number[],
+  ): Promise<Blob> => {
+    const params: Record<string, any> = { year, month, format };
+    if (doctorIds && doctorIds.length > 0) params.doctor_ids = doctorIds.join(",");
+    const response = await api.get("/api/v1/schedules/export", {
+      params,
+      responseType: "blob",
+    });
+    return response.data;
+  },
+
+  // Doctor-facing diagnostics (privacy-safe)
+  getMyDiagnostics: async (
+    year: number,
+    month: number,
+  ): Promise<MyDoctorDiagnosticsRead> => {
+    const response = await api.get<MyDoctorDiagnosticsRead>(
+      `/api/v1/schedules/${year}/${month}/published/diagnostics/me`,
     );
     return response.data;
   },

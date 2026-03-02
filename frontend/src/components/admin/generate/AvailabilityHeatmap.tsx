@@ -18,7 +18,7 @@ const getRiskColor = (risk: RiskLevel): string => {
     case "ok":
       return "bg-green-50/70 hover:bg-green-100/70 border-green-200";
     case "alert":
-      return "bg-yellow-50 hover:bg-yellow-100 border-yellow-200";
+      return "bg-red-50 hover:bg-red-100 border-red-200";
     case "critical":
       return "bg-red-50 hover:bg-red-100 border-red-200";
     default:
@@ -31,7 +31,7 @@ const getRiskTextColor = (risk: RiskLevel): string => {
     case "ok":
       return "text-green-800";
     case "alert":
-      return "text-yellow-800";
+      return "text-red-800";
     case "critical":
       return "text-red-800";
     default:
@@ -106,12 +106,8 @@ export const AvailabilityHeatmap = ({
                 <span>OK</span>
               </div>
               <div className="flex items-center gap-1">
-                <div className="w-3 h-3 sm:w-4 sm:h-4 rounded bg-yellow-50 border border-yellow-200" />
-                <span>Alert</span>
-              </div>
-              <div className="flex items-center gap-1">
                 <div className="w-3 h-3 sm:w-4 sm:h-4 rounded bg-red-50 border border-red-200" />
-                <span>Critical</span>
+                <span>Problem</span>
               </div>
             </div>
 

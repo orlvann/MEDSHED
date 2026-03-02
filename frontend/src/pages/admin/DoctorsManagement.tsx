@@ -533,7 +533,7 @@ export const DoctorsManagement = () => {
                     </div>
                     <div className="flex flex-wrap gap-1">
                       <span className={`px-1.5 py-0.5 text-[11px] rounded ${
-                        doctor.role === "specialist" ? "bg-blue-100 text-blue-700" : "bg-green-100 text-green-700"
+                        doctor.role === "specialist" ? "bg-violet-100 text-violet-700" : "bg-emerald-100 text-emerald-700"
                       }`}>
                         {doctor.role}
                       </span>
@@ -590,8 +590,8 @@ export const DoctorsManagement = () => {
                           <span
                             className={`px-2 py-1 text-xs rounded ${
                               doctor.role === "specialist"
-                                ? "bg-blue-100 text-blue-700"
-                                : "bg-green-100 text-green-700"
+                                ? "bg-violet-100 text-violet-700"
+                                : "bg-emerald-100 text-emerald-700"
                             }`}
                           >
                             {doctor.role}

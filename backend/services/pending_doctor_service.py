@@ -311,12 +311,12 @@ def approve_doctor(*, pending_id: int, approval_data: PendingDoctorApprove) -> N
 def reject_doctor(*, pending_id: int) -> None:
     """
     Reject a pending doctor registration (admin only).
-    
-    Simply deletes the pending record.
-    
+
+    Deletes the pending record and sends a rejection notification email.
+
     Args:
         pending_id: ID of pending doctor
-        
+
     Raises:
         HTTPException 404: If pending doctor not found
     """
@@ -328,9 +328,25 @@ def reject_doctor(*, pending_id: int) -> None:
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=make_error("not_found", detail="Pending doctor not found", context={"id": pending_id}),
             )
-        
+
+        # Capture info before deleting
+        rejected_email = pending.email
+        rejected_first = pending.first_name
+        rejected_last = pending.last_name
+
         db.delete(pending)
         db.commit()
+
+        # Send rejection email after successful commit
+        try:
+            email_service.send_rejection_email(
+                to_email=rejected_email,
+                first_name=rejected_first,
+                last_name=rejected_last,
+            )
+        except Exception as e:
+            import logging
+            logging.warning(f"Failed to send rejection email to {rejected_email}: {e}")
     except HTTPException:
         db.rollback()
         raise

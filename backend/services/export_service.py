@@ -149,14 +149,14 @@ class ExportService:
         month: int,
         *,
         fmt: Literal["xlsx", "pdf", "ics"],
-        doctor_id: int | None = None,
+        doctor_ids: list[int] | None = None,
         shift_type: str | None = None,
         role: str | None = None,
     ) -> ExportResult:
         """Build an export file for the team's published schedule.
 
         Optional filters narrow down the exported assignments:
-        - doctor_id: single doctor only
+        - doctor_ids: list of doctor IDs to include (None = all)
         - shift_type: "onsite" | "oncall"
         - role: "specialist" | "resident"
         """
@@ -188,6 +188,11 @@ class ExportService:
 
             # 2. Parse payload — all assignments, resolve doctor info
             payload = SchedulePayload.model_validate(ver.payload)
+            snapshot_doctors = (
+                payload.inputs_snapshot.doctors
+                if payload.inputs_snapshot is not None
+                else {}
+            )
 
             all_doctor_ids = {int(a.doctor_id) for a in (payload.assignments or [])}
             doctors_by_id: dict[int, Doctor] = {}
@@ -197,21 +202,34 @@ class ExportService:
                     doctors_by_id[did] = doc
 
             # 3. Filter assignments
+            doctor_ids_set = set(doctor_ids) if doctor_ids else None
             team_assignments = []
             for a in payload.assignments or []:
                 did = int(a.doctor_id)
                 doc = doctors_by_id.get(did)
+                snap = snapshot_doctors.get(did)
 
                 # Apply filters
-                if doctor_id is not None and did != doctor_id:
+                if doctor_ids_set is not None and did not in doctor_ids_set:
                     continue
                 if shift_type is not None and a.shift_type.value != shift_type:
                     continue
-                if role is not None and doc is not None and doc.role.value != role:
-                    continue
+                if role is not None:
+                    doc_role = doc.role.value if doc else (snap.role.value if snap else None)
+                    if doc_role != role:
+                        continue
 
-                doctor_name = f"Dr. {doc.first_name} {doc.last_name}" if doc else f"Doctor #{did}"
-                doctor_last_name = doc.last_name if doc else f"#{did}"
+                # Resolve name: live DB first, then frozen snapshot, then fallback
+                if doc:
+                    doctor_name = f"Dr. {doc.first_name} {doc.last_name}"
+                    doctor_last_name = doc.last_name
+                elif snap:
+                    doctor_name = snap.display_name
+                    doctor_last_name = snap.display_name.split()[-1] if snap.display_name else f"#{did}"
+                else:
+                    doctor_name = f"Doctor #{did}"
+                    doctor_last_name = f"#{did}"
+
                 team_assignments.append({
                     "day": int(a.day),
                     "shift_type": str(a.shift_type.value),
@@ -351,6 +369,7 @@ class ExportService:
 
             # 3. Gather ALL assignments from published schedules
             all_doctor_ids: set[int] = set()
+            snapshot_doctors: dict[int, object] = {}  # merged from all payloads
             raw_assignments: list[tuple[int, int, int, str, int]] = []  # (y, m, day, shift, doc_id)
             for y, m in periods:
                 ptr = session.get(SchedulePointer, {"year": y, "month": m})
@@ -360,6 +379,9 @@ class ExportService:
                 if ver is None:
                     continue
                 payload = SchedulePayload.model_validate(ver.payload)
+                if payload.inputs_snapshot is not None:
+                    for did, snap in payload.inputs_snapshot.doctors.items():
+                        snapshot_doctors.setdefault(did, snap)
                 for a in payload.assignments or []:
                     did = int(a.doctor_id)
                     all_doctor_ids.add(did)
@@ -376,7 +398,13 @@ class ExportService:
             team_assignments: list[dict] = []
             for y, m, day, shift_type, did in raw_assignments:
                 doc = doctors_by_id.get(did)
-                doctor_name = f"Dr. {doc.first_name} {doc.last_name}" if doc else f"Doctor #{did}"
+                snap = snapshot_doctors.get(did)
+                if doc:
+                    doctor_name = f"Dr. {doc.first_name} {doc.last_name}"
+                elif snap:
+                    doctor_name = snap.display_name
+                else:
+                    doctor_name = f"Doctor #{did}"
                 team_assignments.append({
                     "year": y,
                     "month": m,

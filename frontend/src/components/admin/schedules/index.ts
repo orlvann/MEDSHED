@@ -4,3 +4,4 @@ export { DoctorSelectDropdown } from "./DoctorSelectDropdown";
 export { DayEditSheet } from "./DayEditSheet";
 export { DiagnosticsPanel } from "./DiagnosticsPanel";
 export { PublishModal } from "./PublishModal";
+export { AdminExportPanel } from "./AdminExportPanel";

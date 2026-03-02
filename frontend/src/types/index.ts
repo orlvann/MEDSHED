@@ -353,14 +353,20 @@ export interface DiagnosticsFindingRead {
   context: Record<string, any>;
 }
 
+export interface CategoryBaseRead {
+  applicable: boolean;
+  badness: number;
+  stars: number | null;
+}
+
 export interface DoctorCategoriesRead {
-  rest: Record<string, any>;
-  preferred_days: Record<string, any>;
-  fairness: Record<string, any>;
-  totals: Record<string, any>;
-  weekday_patterns: Record<string, any>;
-  friday_free_weekend: Record<string, any>;
-  preferred_partners: Record<string, any>;
+  rest: CategoryBaseRead;
+  preferred_days: CategoryBaseRead;
+  fairness: CategoryBaseRead;
+  totals: CategoryBaseRead;
+  weekday_patterns: CategoryBaseRead;
+  friday_free_weekend: CategoryBaseRead;
+  preferred_partners: CategoryBaseRead;
 }
 
 export interface SolverComponentsByDocRead {
@@ -417,6 +423,13 @@ export interface DiagnosticsRead {
   computed_at: string;
   summary: DiagnosticsSummaryRead;
   details: DiagnosticsDetailsRead | null;
+}
+
+// Doctor-facing diagnostics (privacy-safe, single doctor only)
+export interface MyDoctorDiagnosticsRead {
+  version_id: number;
+  computed_at: string;
+  doctor: DoctorDiagnosticsRead;
 }
 
 // Checkpoint/Revert/Publish

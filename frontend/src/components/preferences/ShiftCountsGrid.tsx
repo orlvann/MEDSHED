@@ -62,7 +62,7 @@ export const ShiftCountsGrid = ({
       <div className="grid grid-cols-[1fr_64px_64px] sm:grid-cols-3 gap-1.5 sm:gap-2 items-center">
         <div />
         <div className="text-center text-[11px] sm:text-sm font-medium text-gray-500">
-          Weekday
+          Total
         </div>
         <div className="text-center text-[11px] sm:text-sm font-medium text-gray-500">
           Weekend

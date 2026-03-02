@@ -1,5 +1,5 @@
 import { useState, useCallback, useMemo } from "react";
-import { Undo2, Redo2, ChevronLeft, ChevronRight, Save } from "lucide-react";
+import { Undo2, Redo2, ChevronLeft, ChevronRight, Save, X } from "lucide-react";
 import { Button } from "../ui/button";
 import { IntegratedCalendar } from "./IntegratedCalendar";
 import { StatusCountdown } from "./StatusCountdown";
@@ -68,6 +68,10 @@ export interface PreferencesEditorProps {
   // Validation
   validationErrors?: ValidationError[];
 
+  // Server error (displayed inline)
+  saveError?: string | null;
+  onClearSaveError?: () => void;
+
   // Loading states
   isSaving?: boolean;
   isLoading?: boolean;
@@ -121,6 +125,8 @@ export const PreferencesEditor = ({
   status,
   periodStatus,
   validationErrors = [],
+  saveError,
+  onClearSaveError,
   isSaving = false,
   isLoading = false,
 }: PreferencesEditorProps) => {
@@ -437,6 +443,21 @@ export const PreferencesEditor = ({
           Save
         </Button>
       </div>
+
+      {/* Server save error */}
+      {saveError && (
+        <div className="p-3 text-sm text-red-700 bg-red-50 border border-red-200 rounded-lg flex items-start justify-between gap-2">
+          <span>{saveError}</span>
+          {onClearSaveError && (
+            <button
+              onClick={onClearSaveError}
+              className="text-red-400 hover:text-red-600 shrink-0 mt-0.5"
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
+          )}
+        </div>
+      )}
 
       {/* Top section: Calendar + Status panel */}
       <div className="flex flex-col lg:flex-row gap-4 lg:gap-6">

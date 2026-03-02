@@ -123,6 +123,7 @@ export const PreferencesManagement = () => {
   const [preferenceData, setPreferenceData] = useState<PreferenceWorkingRead | null>(null);
   const [formLoading, setFormLoading] = useState(false);
   const [saveLoading, setSaveLoading] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
   const [validationErrors, setValidationErrors] = useState<ValidationError[]>([]);
 
   // Client-side undo/redo (resets when modal closes)
@@ -357,6 +358,7 @@ export const PreferencesManagement = () => {
     setSelectedDoctor(null);
     setPreferenceData(null);
     setValidationErrors([]);
+    setSaveError(null);
 
     // Reset undo/redo stack
     undoRedo.reset(getDefaultPreferences());
@@ -367,10 +369,11 @@ export const PreferencesManagement = () => {
 
   const handleSaveCheckpoint = async () => {
     if (!selectedDoctor) return;
+    setSaveError(null);
 
     // Block save if validation errors
     if (validationErrors.length > 0) {
-      alert("Please fix validation errors before saving");
+      setSaveError("Please fix validation errors before saving");
       return;
     }
 
@@ -400,7 +403,20 @@ export const PreferencesManagement = () => {
       // Refresh summary
       fetchData();
     } catch (err: any) {
-      alert(err.response?.data?.detail?.detail || "Failed to save");
+      const detail = err.response?.data?.detail;
+      let msg = "Failed to save";
+      if (Array.isArray(detail)) {
+        msg = detail[0]?.msg || msg;
+      } else if (detail?.code) {
+        msg = detail.detail || detail.code;
+        if (detail.context?.field) {
+          setValidationErrors((prev) => [
+            ...prev.filter((e) => e.field !== detail.context.field),
+            { field: detail.context.field, message: msg },
+          ]);
+        }
+      }
+      setSaveError(msg);
     } finally {
       setSaveLoading(false);
     }
@@ -729,8 +745,8 @@ export const PreferencesManagement = () => {
                         <span
                           className={`px-1.5 py-0.5 text-[11px] rounded ${
                             doctor.role === "specialist"
-                              ? "bg-blue-100 text-blue-700"
-                              : "bg-green-100 text-green-700"
+                              ? "bg-violet-100 text-violet-700"
+                              : "bg-emerald-100 text-emerald-700"
                           }`}
                         >
                           {doctor.role}
@@ -777,8 +793,8 @@ export const PreferencesManagement = () => {
                             <span
                               className={`px-2 py-1 text-xs rounded ${
                                 doctor.role === "specialist"
-                                  ? "bg-blue-100 text-blue-700"
-                                  : "bg-green-100 text-green-700"
+                                  ? "bg-violet-100 text-violet-700"
+                                  : "bg-emerald-100 text-emerald-700"
                               }`}
                             >
                               {doctor.role}
@@ -986,6 +1002,8 @@ export const PreferencesManagement = () => {
                     status={preferenceData?.status ?? "missing"}
                     periodStatus={preferenceData?.period_status}
                     validationErrors={validationErrors}
+                    saveError={saveError}
+                    onClearSaveError={() => setSaveError(null)}
                     isSaving={saveLoading}
                   />
                 )}

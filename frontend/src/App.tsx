@@ -16,6 +16,7 @@ import { Unauthorized } from "./pages/Unauthorized";
 import { DoctorHome } from "./pages/doctor/DoctorHome";
 import { DoctorPreferences } from "./pages/doctor/DoctorPreferences";
 import { DoctorSchedules } from "./pages/doctor/DoctorSchedules";
+import { DoctorDiagnostics } from "./pages/doctor/DoctorDiagnostics";
 
 function App() {
   return (
@@ -114,6 +115,14 @@ function App() {
             element={
               <ProtectedRoute requiredRole="doctor">
                 <DoctorSchedules />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/doctor/diagnostics"
+            element={
+              <ProtectedRoute requiredRole="doctor">
+                <DoctorDiagnostics />
               </ProtectedRoute>
             }
           />

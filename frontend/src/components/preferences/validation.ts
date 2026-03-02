@@ -85,33 +85,70 @@ export function validatePreferences(
     }
   }
 
+  // Rule: Weekend cannot exceed total (weekends are a subset of total)
+  const weekendTotalPairs = [
+    {
+      weekend: "max_onsite_weekends",
+      total: "max_onsite_total",
+      label: "on-site maximum",
+    },
+    {
+      weekend: "target_onsite_weekends",
+      total: "target_onsite_total",
+      label: "on-site optimum",
+    },
+    {
+      weekend: "max_oncall_weekends",
+      total: "max_oncall_total",
+      label: "on-call maximum",
+    },
+    {
+      weekend: "target_oncall_weekends",
+      total: "target_oncall_total",
+      label: "on-call optimum",
+    },
+  ] as const;
+
+  for (const { weekend, total, label } of weekendTotalPairs) {
+    const weekendValue = data[weekend] as number | null;
+    const totalValue = data[total] as number | null;
+    if (weekendValue !== null && totalValue !== null && weekendValue > totalValue) {
+      errors.push({
+        field: weekend,
+        message: `Weekend (${weekendValue}) cannot exceed total (${totalValue}) for ${label}`,
+      });
+    }
+  }
+
   // Rule: Values cannot exceed available days in month
   const monthCounts = getMonthDayCounts(year, month);
+
+  const totalDays = monthCounts.weekdays + monthCounts.weekends;
 
   const dayLimitFields = [
     {
       field: "max_onsite_total",
-      limit: monthCounts.weekdays,
-      label: "on-site weekdays",
-      type: "weekdays",
+      limit: totalDays,
+      label: "on-site total",
+      type: "days",
     },
     {
       field: "target_onsite_total",
-      limit: monthCounts.weekdays,
-      label: "on-site weekdays",
-      type: "weekdays",
+      limit: totalDays,
+      label: "on-site total",
+      type: "days",
     },
     {
       field: "max_oncall_total",
-      limit: monthCounts.weekdays,
-      label: "on-call weekdays",
-      type: "weekdays",
+      limit: totalDays,
+      label: "on-call total",
+      type: "days",
     },
     {
       field: "target_oncall_total",
-      limit: monthCounts.weekdays,
-      label: "on-call weekdays",
-      type: "weekdays",
+      limit: totalDays,
+      label: "on-call total",
+      type: "days",
     },
     {
       field: "max_onsite_weekends",

@@ -468,7 +468,7 @@ export const PendingDoctors = () => {
                     ({doctorToReject.email})?
                     <br />
                     <br />
-                    This action cannot be undone. No email will be sent.
+                    This action cannot be undone. A rejection notification email will be sent.
                   </>
                 )}
               </AlertDialogDescription>

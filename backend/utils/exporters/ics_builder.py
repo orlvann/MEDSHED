@@ -10,15 +10,15 @@ from icalendar import Calendar, Event
 from backend.utils.exporters import DoctorExportData, TeamExportData
 
 _SHIFT_LABELS = {
-    "onsite": "Dyzur stacjonarny",
-    "oncall": "Dyzur pod telefonem",
+    "onsite": "On-site shift",
+    "oncall": "On-call shift",
 }
 
 
 def build_ics(data: DoctorExportData) -> bytes:
     """Return raw bytes of an ICS calendar for one doctor."""
     cal = Calendar()
-    cal.add("prodid", "-//MEDSHED//Schedule Export//PL")
+    cal.add("prodid", "-//MEDSHED//Schedule Export//EN")
     cal.add("version", "2.0")
     cal.add("x-wr-calname", f"MEDSHED - Dr. {data.first_name} {data.last_name}")
     cal.add("x-wr-timezone", data.org_timezone)
@@ -49,7 +49,7 @@ def build_ics(data: DoctorExportData) -> bytes:
 def build_team_ics(data: TeamExportData) -> bytes:
     """Return raw bytes of an ICS calendar for the full team schedule."""
     cal = Calendar()
-    cal.add("prodid", "-//MEDSHED//Schedule Export//PL")
+    cal.add("prodid", "-//MEDSHED//Schedule Export//EN")
     cal.add("version", "2.0")
     cal.add("x-wr-calname", f"MEDSHED - Team Schedule")
     cal.add("x-wr-timezone", data.org_timezone)
@@ -91,7 +91,7 @@ def build_team_feed_ics(
     Adds REFRESH-INTERVAL / X-PUBLISHED-TTL so calendar apps re-poll every 4 hours.
     """
     cal = Calendar()
-    cal.add("prodid", "-//MEDSHED//Calendar Feed//PL")
+    cal.add("prodid", "-//MEDSHED//Calendar Feed//EN")
     cal.add("version", "2.0")
     cal.add("method", "PUBLISH")
     cal.add("x-wr-calname", "MEDSHED - Team Schedule")
@@ -140,7 +140,7 @@ def build_feed_ics(
     Adds REFRESH-INTERVAL / X-PUBLISHED-TTL so calendar apps re-poll every 4 hours.
     """
     cal = Calendar()
-    cal.add("prodid", "-//MEDSHED//Calendar Feed//PL")
+    cal.add("prodid", "-//MEDSHED//Calendar Feed//EN")
     cal.add("version", "2.0")
     cal.add("method", "PUBLISH")
     cal.add("x-wr-calname", f"MEDSHED - Dr. {first_name} {last_name}")

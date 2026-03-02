@@ -94,6 +94,9 @@ export const GenerateSchedule = () => {
   const [drilldownDay, setDrilldownDay] = useState<number | null>(null);
   const [showIgnoreModal, setShowIgnoreModal] = useState(false);
 
+  // Persist ignore slots across solver error panels to avoid infinite loops
+  const [lastIgnoreSlots, setLastIgnoreSlots] = useState<IgnoredSlot[]>([]);
+
   // Fetch active doctors
   const fetchActiveDoctors = useCallback(async () => {
     try {
@@ -117,6 +120,7 @@ export const GenerateSchedule = () => {
       setLoadingOverview(true);
       setError(null);
       setSolverError(null);
+      setLastIgnoreSlots([]);
       const [data, summary] = await Promise.all([
         availabilityApi.getOverview(year, month),
         preferencesApi.getSummary(year, month).catch(() => null),
@@ -244,6 +248,7 @@ export const GenerateSchedule = () => {
       setGenerating(true);
       setError(null);
       setSolverError(null);
+      setLastIgnoreSlots(ignoreSlots);
 
       const body: any = {
         year,
@@ -288,11 +293,13 @@ export const GenerateSchedule = () => {
   };
 
   // Handle retry from solver error panel: head resolution
+  // Uses lastIgnoreSlots so previously accepted gaps are preserved
   const handleRetryWithHeadResolution = (
     resolutions: HeadCommitmentResolution[],
     ignoreSlots: IgnoredSlot[],
   ) => {
-    handleGenerate(ignoreSlots, resolutions);
+    const slots = ignoreSlots.length > 0 ? ignoreSlots : lastIgnoreSlots;
+    handleGenerate(slots, resolutions);
   };
 
   const monthName = new Date(year, month - 1, 1).toLocaleString("en-US", {
@@ -392,39 +399,7 @@ export const GenerateSchedule = () => {
           </div>
         )}
 
-        {/* Warning Info Boxes */}
-        {!isLoading && hasAlertDays && !hasCriticalDays && (
-          <div className="mb-4 sm:mb-6 p-3 sm:p-4 bg-yellow-50 border border-yellow-200 rounded-lg flex items-start gap-2.5 sm:gap-3">
-            <Info className="h-4 w-4 sm:h-5 sm:w-5 text-yellow-600 mt-0.5 flex-shrink-0" />
-            <div>
-              <p className="text-xs sm:text-sm text-yellow-800">
-                <strong>Coverage looks risky for some days.</strong> Update the active doctor list or edit preferences.
-              </p>
-              <div className="mt-2 flex flex-wrap gap-2">
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => navigate("/admin/doctors")}
-                  className="h-7 text-xs sm:h-8 sm:text-sm"
-                >
-                  Edit Doctors
-                </Button>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() =>
-                    navigate(`/admin/preferences?year=${year}&month=${month}`)
-                  }
-                  className="h-7 text-xs sm:h-8 sm:text-sm"
-                >
-                  Edit Preferences
-                </Button>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {!isLoading && hasCriticalDays && (
+        {!isLoading && (hasCriticalDays || hasAlertDays) && (
           <div className="mb-4 sm:mb-6 p-3 sm:p-4 bg-red-50 border border-red-200 rounded-lg flex items-start gap-2.5 sm:gap-3">
             <AlertTriangle className="h-4 w-4 sm:h-5 sm:w-5 text-red-600 mt-0.5 flex-shrink-0" />
             <div>

@@ -12,6 +12,7 @@ import {
   ClipboardList,
   CloudSun,
   ChevronRight,
+  Activity,
 } from "lucide-react";
 import {
   preferencesApi,
@@ -487,6 +488,29 @@ export const DoctorHome = () => {
                   <ChevronRight className="h-5 w-5 text-white/50" />
                 </div>
               </div>
+
+              {/* My Diagnostics CTA */}
+              <div
+                className="rounded-xl bg-gradient-to-r from-indigo-500 to-blue-500 p-3.5 cursor-pointer hover:shadow-md active:scale-[0.98] transition-all"
+                onClick={() => navigate("/doctor/diagnostics")}
+              >
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2.5">
+                    <div className="h-8 w-8 rounded-lg bg-white/20 flex items-center justify-center">
+                      <Activity className="h-4 w-4 text-white" />
+                    </div>
+                    <div>
+                      <p className="text-sm font-semibold text-white">
+                        My Diagnostics
+                      </p>
+                      <p className="text-[11px] text-white/70">
+                        view your schedule stats
+                      </p>
+                    </div>
+                  </div>
+                  <ChevronRight className="h-5 w-5 text-white/50" />
+                </div>
+              </div>
             </div>
 
             {/* === DESKTOP CARDS (hidden below lg) === */}
@@ -630,6 +654,28 @@ export const DoctorHome = () => {
                       </h3>
                       <p className="text-sm text-white/70">
                         set your preferences
+                      </p>
+                    </div>
+                  </div>
+                  <ChevronRight className="h-5 w-5 text-white/50" />
+                </div>
+              </div>
+
+              <div
+                className="rounded-xl bg-gradient-to-r from-indigo-500 to-blue-500 p-4 min-h-[100px] cursor-pointer hover:shadow-md active:scale-[0.98] transition-all"
+                onClick={() => navigate("/doctor/diagnostics")}
+              >
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    <div className="h-9 w-9 rounded-lg bg-white/20 flex items-center justify-center">
+                      <Activity className="h-5 w-5 text-white" />
+                    </div>
+                    <div>
+                      <h3 className="text-lg font-semibold text-white">
+                        My Diagnostics
+                      </h3>
+                      <p className="text-sm text-white/70">
+                        view your schedule stats
                       </p>
                     </div>
                   </div>

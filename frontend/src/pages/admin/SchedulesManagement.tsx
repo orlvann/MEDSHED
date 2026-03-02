@@ -8,6 +8,7 @@ import {
   ScheduleCalendarView,
   DiagnosticsPanel,
   PublishModal,
+  AdminExportPanel,
 } from "../../components/admin/schedules";
 import { schedulesApi } from "../../services/api";
 import type {
@@ -29,6 +30,7 @@ import {
   List,
   CalendarDays,
   CheckCircle2,
+  Download,
 } from "lucide-react";
 
 /** Extract human-readable message from backend error response. */
@@ -73,6 +75,7 @@ export const SchedulesManagement = () => {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showPublishModal, setShowPublishModal] = useState(false);
+  const [showExportPanel, setShowExportPanel] = useState(false);
   const [publishing, setPublishing] = useState(false);
   const [isDirty, setIsDirty] = useState(false);
 
@@ -549,6 +552,18 @@ export const SchedulesManagement = () => {
                         <span className="hidden sm:inline text-xs">Publish</span>
                       </Button>
                     )}
+
+                    {/* Export */}
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setShowExportPanel(true)}
+                      title="Export"
+                      className="h-7 sm:h-8 px-1.5 sm:px-2"
+                    >
+                      <Download className="h-3.5 w-3.5 sm:h-4 sm:w-4 sm:mr-2" />
+                      <span className="hidden sm:inline text-xs">Export</span>
+                    </Button>
                   </div>
                 </div>
               </CardContent>
@@ -616,6 +631,16 @@ export const SchedulesManagement = () => {
         diagnostics={diagnostics}
         publishing={publishing}
       />
+
+      {/* Export Panel */}
+      {showExportPanel && (
+        <AdminExportPanel
+          year={year}
+          month={month}
+          doctors={currentSnapshot?.doctors ?? {}}
+          onClose={() => setShowExportPanel(false)}
+        />
+      )}
     </div>
   );
 };

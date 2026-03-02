@@ -55,7 +55,7 @@ export const VacationModal = ({
       if (i === excludeIndex) continue;
       const other = periods[i];
       if (!(end < other.startDay || start > other.endDay)) {
-        return `Overlaps with existing vacation (${other.startDay}-${other.endDay})`;
+        return `Overlaps with existing period (${other.startDay}-${other.endDay})`;
       }
     }
 
@@ -105,26 +105,26 @@ export const VacationModal = ({
     <div className="fixed inset-0 bg-black/50 flex items-end sm:items-center justify-center z-[60]">
       <Card className="w-full max-w-md mx-0 sm:mx-4 rounded-t-lg sm:rounded-lg max-h-[90vh] overflow-y-auto">
         <CardHeader className="flex flex-row items-center justify-between pb-2">
-          <CardTitle className="text-lg">Mark Vacation Periods</CardTitle>
+          <CardTitle className="text-lg">Bulk Unavailable Days</CardTitle>
           <Button variant="ghost" size="sm" onClick={onClose}>
             <X className="h-4 w-4" />
           </Button>
         </CardHeader>
         <CardContent className="space-y-4">
           <p className="text-sm text-muted-foreground">
-            Add vacation periods. Days in vacation will be marked as unavailable
+            Add date ranges to quickly mark multiple days as unavailable
             for both on-site and on-call duties.
           </p>
 
           {/* Existing periods */}
           {periods.length > 0 && (
             <div className="space-y-2">
-              <Label>Current vacation periods:</Label>
+              <Label>Current periods:</Label>
               <div className="space-y-1">
                 {periods.map((period, index) => (
                   <div
                     key={index}
-                    className="flex items-center justify-between bg-purple-50 text-purple-700 px-3 py-2 rounded-md"
+                    className="flex items-center justify-between bg-red-50 text-red-700 px-3 py-2 rounded-md"
                   >
                     <span>
                       Day {period.startDay} - {period.endDay}
@@ -133,7 +133,7 @@ export const VacationModal = ({
                       variant="ghost"
                       size="sm"
                       onClick={() => handleDeletePeriod(index)}
-                      className="h-6 w-6 p-0 hover:bg-purple-100"
+                      className="h-6 w-6 p-0 hover:bg-red-100"
                     >
                       <Trash2 className="h-4 w-4" />
                     </Button>

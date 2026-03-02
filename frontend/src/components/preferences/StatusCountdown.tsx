@@ -101,7 +101,7 @@ export const StatusCountdown = ({
           disabled={isDisabled}
         >
           <Palmtree className="h-4 w-4 mr-2" />
-          Mark vacation
+          Bulk unavailable
         </Button>
 
         <Button

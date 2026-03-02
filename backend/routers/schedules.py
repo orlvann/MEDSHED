@@ -2387,27 +2387,62 @@ def schedules_published_redo(
 @router.get(
     "/export",
     tags=["schedules:export"],
-    summary="Unified export for admins & doctors (xlsx/pdf/ics)",
+    summary="Admin export of published schedule as XLSX, PDF, or ICS",
     operation_id="schedules_export_get",
     responses={
-        501: {
-            "description": "Not implemented.",
-            "content": {"application/json": {"example": _err_example("not_implemented", context={})}},
+        200: {
+            "description": "Binary file download (xlsx, pdf, or ics).",
+            "content": {
+                "application/pdf": {},
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": {},
+                "text/calendar": {},
+            },
+        },
+        404: {
+            "description": "No published schedule for this period.",
+            "content": {
+                "application/json": {
+                    "example": _err_example(
+                        "not_found",
+                        detail="not_found",
+                        context={"where": "admin_export.no_published"},
+                    )
+                }
+            },
         },
     },
 )
 def schedules_export(
     year: int = Query(..., ge=1900, le=2100),
     month: int = Query(..., ge=1, le=12),
-    mode: Literal["draft", "published"] = Query(...),
-    format: Literal["xlsx", "pdf", "ics"] = Query(...),
-    doctor_id: Optional[int] = Query(None, ge=1),
+    format: LiteralType["xlsx", "pdf"] = Query(...),
+    doctor_ids: Optional[str] = Query(None, description="Comma-separated doctor IDs"),
     user: UserCtx = Depends(require_admin),
 ):
-    raise HTTPException(
-        status_code=status.HTTP_501_NOT_IMPLEMENTED,
-        detail=make_error("not_implemented", context={}),
-    )
+    parsed_ids: list[int] | None = None
+    if doctor_ids:
+        try:
+            parsed_ids = [int(x) for x in doctor_ids.split(",") if x.strip()]
+        except ValueError:
+            raise HTTPException(status_code=422, detail="doctor_ids must be comma-separated integers")
+
+    try:
+        result = export_svc.export_team_schedule(
+            year=year,
+            month=month,
+            fmt=format,
+            doctor_ids=parsed_ids,
+        )
+        return StreamingResponse(
+            BytesIO(result.content),
+            media_type=result.content_type,
+            headers={
+                "Content-Disposition": f'attachment; filename="{result.filename}"',
+            },
+        )
+    except ValueError as e:
+        _raise(e)
+        assert False
 
 
 # --------------------------- DOCTOR: read published ----------------------------

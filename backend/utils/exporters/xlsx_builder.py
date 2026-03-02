@@ -11,42 +11,42 @@ from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 
 from backend.utils.exporters import DoctorExportData, TeamExportData
 
-_MONTH_NAMES_PL = {
-    1: "STYCZE\u0143",
-    2: "LUTY",
-    3: "MARZEC",
-    4: "KWIECIE\u0143",
-    5: "MAJ",
-    6: "CZERWIEC",
-    7: "LIPIEC",
-    8: "SIERPIE\u0143",
-    9: "WRZESIE\u0143",
-    10: "PA\u0179DZIERNIK",
-    11: "LISTOPAD",
-    12: "GRUDZIE\u0143",
+_MONTH_NAMES = {
+    1: "JANUARY",
+    2: "FEBRUARY",
+    3: "MARCH",
+    4: "APRIL",
+    5: "MAY",
+    6: "JUNE",
+    7: "JULY",
+    8: "AUGUST",
+    9: "SEPTEMBER",
+    10: "OCTOBER",
+    11: "NOVEMBER",
+    12: "DECEMBER",
 }
 
-_DAY_NAMES_PL_FULL = {
-    0: "poniedzia\u0142ek",
-    1: "wtorek",
-    2: "\u015broda",
-    3: "czwartek",
-    4: "pi\u0105tek",
-    5: "sobota",
-    6: "niedziela",
+_DAY_NAMES_FULL = {
+    0: "Monday",
+    1: "Tuesday",
+    2: "Wednesday",
+    3: "Thursday",
+    4: "Friday",
+    5: "Saturday",
+    6: "Sunday",
 }
 
 _WEEKEND_DAYS = {5, 6}  # Saturday, Sunday
 
 
 def build_xlsx(data: DoctorExportData) -> bytes:
-    """Personal schedule: MONTH_YEAR, LastName, day+weekday + DYŻUR/PODDYŻUR."""
+    """Personal schedule: MONTH_YEAR, LastName, day+weekday + On-site/On-call."""
     wb = Workbook()
     ws = wb.active
     assert ws is not None
 
-    month_pl = _MONTH_NAMES_PL.get(data.month, str(data.month))
-    ws.title = f"{month_pl}_{data.year}"
+    month_en = _MONTH_NAMES.get(data.month, str(data.month))
+    ws.title = f"{month_en}_{data.year}"
 
     # ---- styles -----------------------------------------------------------
     title_font = Font(bold=True, size=14)
@@ -66,7 +66,7 @@ def build_xlsx(data: DoctorExportData) -> bytes:
     # ---- title row --------------------------------------------------------
     ws.merge_cells("A1:B1")
     cell = ws["A1"]
-    cell.value = f"{month_pl}_{data.year}"
+    cell.value = f"{month_en}_{data.year}"
     cell.font = title_font
     cell.alignment = left
     ws.row_dimensions[1].height = 28
@@ -81,7 +81,7 @@ def build_xlsx(data: DoctorExportData) -> bytes:
 
     # ---- column headers ---------------------------------------------------
     row = 4
-    headers = ["", "DY\u017bUR / PODDY\u017bUR"]
+    headers = ["", "ON-SITE / ON-CALL"]
     for col_idx, h in enumerate(headers, start=1):
         c = ws.cell(row=row, column=col_idx, value=h)
         c.font = header_font
@@ -101,13 +101,13 @@ def build_xlsx(data: DoctorExportData) -> bytes:
     for day in sorted(shift_by_day.keys()):
         d = date(data.year, data.month, day)
         weekday = d.weekday()
-        day_name = _DAY_NAMES_PL_FULL.get(weekday, "")
+        day_name = _DAY_NAMES_FULL.get(weekday, "")
         is_weekend = weekday in _WEEKEND_DAYS
 
         shifts = shift_by_day[day]
         labels = []
         for s in sorted(shifts):
-            labels.append("DY\u017bUR" if s == "onsite" else "PODDY\u017bUR")
+            labels.append("On-site" if s == "onsite" else "On-call")
         shift_label = ", ".join(labels)
 
         ws.cell(row=row, column=1, value=f"{day} {day_name}").alignment = left
@@ -133,7 +133,7 @@ def build_xlsx(data: DoctorExportData) -> bytes:
 
 
 def build_team_xlsx(data: TeamExportData) -> bytes:
-    """Team schedule: MONTH_YEAR title, columns: day+weekday, DYŻUR, PODDYŻUR.
+    """Team schedule: MONTH_YEAR title, columns: day+weekday, On-site, On-call.
 
     When shift_type_filter is set, only the matching column is included.
     """
@@ -141,7 +141,7 @@ def build_team_xlsx(data: TeamExportData) -> bytes:
     ws = wb.active
     assert ws is not None
 
-    month_pl = _MONTH_NAMES_PL.get(data.month, str(data.month))
+    month_en = _MONTH_NAMES.get(data.month, str(data.month))
     num_days = calendar.monthrange(data.year, data.month)[1]
 
     # ---- determine which columns to show ----------------------------------
@@ -165,20 +165,20 @@ def build_team_xlsx(data: TeamExportData) -> bytes:
     # ---- header columns ---------------------------------------------------
     headers: list[str] = [""]
     if show_onsite:
-        headers.append("DY\u017bUR")
+        headers.append("ON-SITE")
     if show_oncall:
-        headers.append("PODDY\u017bUR")
+        headers.append("ON-CALL")
     num_cols = len(headers)
 
     # ---- title row --------------------------------------------------------
     last_col_letter = chr(ord("A") + num_cols - 1)
     ws.merge_cells(f"A1:{last_col_letter}1")
     cell = ws["A1"]
-    cell.value = f"{month_pl}_{data.year}"
+    cell.value = f"{month_en}_{data.year}"
     cell.font = title_font
     cell.alignment = left
     ws.row_dimensions[1].height = 30
-    ws.title = f"{month_pl}_{data.year}"
+    ws.title = f"{month_en}_{data.year}"
 
     # ---- column headers ---------------------------------------------------
     row = 3
@@ -207,7 +207,7 @@ def build_team_xlsx(data: TeamExportData) -> bytes:
     for day_num in range(1, num_days + 1):
         d = date(data.year, data.month, day_num)
         weekday = d.weekday()
-        day_name = _DAY_NAMES_PL_FULL.get(weekday, "")
+        day_name = _DAY_NAMES_FULL.get(weekday, "")
         is_weekend = weekday in _WEEKEND_DAYS
 
         col = 1
