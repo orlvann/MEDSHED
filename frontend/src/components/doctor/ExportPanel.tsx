@@ -147,12 +147,12 @@ export const ExportPanel = ({
 
         if (isTeam) {
           const filters: {
-            doctor_id?: number;
+            doctor_ids?: string;
             shift_type?: "onsite" | "oncall";
             role?: "specialist" | "resident";
           } = {};
           if (highlightedDoctorId != null) {
-            filters.doctor_id = highlightedDoctorId;
+            filters.doctor_ids = String(highlightedDoctorId);
           }
           if (shiftFilter !== "all") {
             filters.shift_type = shiftFilter;

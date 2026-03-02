@@ -406,7 +406,7 @@ export const schedulesApi = {
     month: number,
     format: "xlsx" | "pdf" | "ics",
     filters?: {
-      doctor_id?: number;
+      doctor_ids?: string;
       shift_type?: "onsite" | "oncall";
       role?: "specialist" | "resident";
     },

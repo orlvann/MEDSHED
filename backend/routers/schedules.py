@@ -2755,17 +2755,22 @@ def schedules_team_export(
     year: int = Path(..., ge=1900, le=2100),
     month: int = Path(..., ge=1, le=12),
     format: LiteralType["xlsx", "pdf", "ics"] = Query(...),
-    doctor_id: Optional[int] = Query(default=None, description="Filter by doctor"),
+    doctor_ids: Optional[str] = Query(default=None, description="Comma-separated doctor IDs to filter by"),
     shift_type: Optional[LiteralType["onsite", "oncall"]] = Query(default=None, description="Filter by shift type"),
     role: Optional[LiteralType["specialist", "resident"]] = Query(default=None, description="Filter by role"),
     user: UserCtx = Depends(require_doctor),
 ):
     try:
+        parsed_ids = (
+            [int(x) for x in doctor_ids.split(",") if x.strip()]
+            if doctor_ids
+            else None
+        )
         result = export_svc.export_team_schedule(
             year=year,
             month=month,
             fmt=format,
-            doctor_id=doctor_id,
+            doctor_ids=parsed_ids,
             shift_type=shift_type,
             role=role,
         )
