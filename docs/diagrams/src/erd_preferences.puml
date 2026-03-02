@@ -1,0 +1,159 @@
+@startuml erd_preferences
+' run:
+' cd docs/diagrams/src
+' plantuml -tpng -Ddpi=300 -o ../export erd_preferences.puml
+
+' =========================================================
+' ERD — Preferences (working/versions/pointers/deadlines + reminders)
+' Source of truth: Alembic migrations (+ missing FK migration)
+' =========================================================
+
+hide circle
+skinparam shadowing false
+skinparam linetype ortho
+skinparam dpi 300
+skinparam monochrome true
+skinparam pageSize A4
+skinparam DefaultFontName Arial
+skinparam DefaultFontSize 12
+skinparam entityAttributeIconSize 0
+
+top to bottom direction
+skinparam nodesep 20
+skinparam ranksep 22
+
+title ERD — Preferences + Deadlines + Reminders
+
+' Anchor (full doctors table is in Identity diagram; here kept readable)
+entity "doctors" as doctors {
+  [#] id : INTEGER <<PK>> <<NOT NULL>>
+  --
+  email : VARCHAR(320) <<NULL>> <<UNIQUE uq_doctors_email>>
+}
+
+entity "preferences_versions" as pref_versions {
+  [#] id : INTEGER <<PK>> <<NOT NULL>>
+  --
+  doctor_id          : INTEGER <<NOT NULL>> <<FK doctors.id>>
+  year               : INTEGER <<NOT NULL>>
+  month              : INTEGER <<NOT NULL>>
+  kind               : VARCHAR(16) <<NOT NULL>> [DEFAULT checkpoint]
+  payload            : JSON <<NOT NULL>>
+  created_at         : DATETIME <<NOT NULL>>
+  created_by_user_id : INTEGER <<NOT NULL>>   ' no FK in migration
+  created_by_role    : VARCHAR(16) <<NOT NULL>>
+  note               : TEXT <<NULL>>
+  --
+  {check} ck_versions_month_range : month >= 1 AND month <= 12
+  {check} ck_versions_year_range  : year >= 1900 AND year <= 2100
+}
+
+entity "preferences_working" as pref_working {
+  [#] id : INTEGER <<PK>> <<NOT NULL>>
+  --
+  doctor_id : INTEGER <<NOT NULL>> <<FK doctors.id>>
+  year      : INTEGER <<NOT NULL>>
+  month     : INTEGER <<NOT NULL>>
+  lock_version : INTEGER <<NOT NULL>> [DEFAULT 1]
+  unavailable_onsite_days  : JSON <<NULL>>
+  unavailable_oncall_days  : JSON <<NULL>>
+  preferred_onsite_days    : JSON <<NULL>>
+  preferred_oncall_days    : JSON <<NULL>>
+  min_onsite_total    : INTEGER <<NULL>>
+  max_onsite_total    : INTEGER <<NULL>>
+  target_onsite_total : INTEGER <<NULL>>
+  min_oncall_total    : INTEGER <<NULL>>
+  max_oncall_total    : INTEGER <<NULL>>
+  target_oncall_total : INTEGER <<NULL>>
+  max_onsite_weekends    : INTEGER <<NULL>>
+  target_onsite_weekends : INTEGER <<NULL>>
+  max_oncall_weekends    : INTEGER <<NULL>>
+  target_oncall_weekends : INTEGER <<NULL>>
+  preferred_onsite_weekdays : JSON <<NULL>>
+  preferred_oncall_weekdays : JSON <<NULL>>
+  avoid_onsite_weekdays     : JSON <<NULL>>
+  avoid_oncall_weekdays     : JSON <<NULL>>
+  allow_weekend_consecutive_onsite_oncall : BOOLEAN <<NOT NULL>> [DEFAULT 0]
+  preferred_partners : JSON <<NULL>>
+  comments : TEXT <<NULL>>
+  last_saved_at         : DATETIME <<NULL>>
+  last_saved_by_user_id : INTEGER <<NULL>>   ' no FK in migration
+  last_saved_by_role    : VARCHAR(32) <<NULL>>
+  last_admin_note       : TEXT <<NULL>>
+  --
+  {unique} uq_working_doctor_period (doctor_id, year, month)
+  {check}  ck_working_month_range : month >= 1 AND month <= 12
+  {check}  ck_working_year_range  : year >= 1900 AND year <= 2100
+}
+
+entity "preferences_pointers" as pref_pointers {
+  [#] id : INTEGER <<PK>> <<NOT NULL>>
+  --
+  doctor_id : INTEGER <<NOT NULL>> <<FK doctors.id>>
+  year      : INTEGER <<NOT NULL>>
+  month     : INTEGER <<NOT NULL>>
+  current_version_id   : INTEGER <<NULL>> <<FK preferences_versions.id>>
+  submitted_at         : DATETIME <<NULL>>
+  submitted_by_user_id : INTEGER <<NULL>>   ' no FK in migration
+  submitted_by_role    : VARCHAR(16) <<NULL>>
+  --
+  {unique} uq_pointer_doctor_period (doctor_id, year, month)
+  {check}  ck_pointer_month_range : month >= 1 AND month <= 12
+  {check}  ck_pointer_year_range  : year >= 1900 AND year <= 2100
+}
+
+entity "preferences_deadlines" as deadlines {
+  [#] id : INTEGER <<PK>> <<NOT NULL>>
+  --
+  year         : INTEGER <<NOT NULL>>
+  month        : INTEGER <<NOT NULL>>
+  deadline_utc : DATETIME(TZ) <<NOT NULL>>
+  org_timezone : VARCHAR(64) <<NOT NULL>> [DEFAULT Europe/Warsaw]
+  --
+  {unique} uq_deadline_period (year, month)
+  {check}  ck_deadline_month_range : month >= 1 AND month <= 12
+  {check}  ck_deadline_year_range  : year >= 1900 AND year <= 2100
+}
+
+entity "deadline_reminders_sent" as reminders {
+  [#] id : INTEGER <<PK>> <<NOT NULL>>
+  --
+  deadline_id   : INTEGER <<NOT NULL>> <<FK preferences_deadlines.id>>
+  reminder_type : VARCHAR(10) <<NOT NULL>>
+  sent_at       : DATETIME(TZ) <<NOT NULL>> [DEFAULT CURRENT_TIMESTAMP]
+  --
+  {unique} uq_deadline_reminder (deadline_id, reminder_type)
+}
+
+' -----------------------
+' Layout control (portable)
+' Goal:
+' - main block stacked (doctors -> versions/working/pointers)
+' - deadlines+reminders below, side-by-side
+' -----------------------
+
+' Main vertical flow
+doctors -[hidden]-> pref_versions
+pref_versions -[hidden]-> pref_working
+pref_working -[hidden]-> pref_pointers
+
+' Push deadlines/reminders below the main block
+pref_pointers -[hidden]-> deadlines
+pref_pointers -[hidden]-> reminders
+
+' Make deadlines and reminders sit next to each other (horizontal pair)
+deadlines -[hidden]-> reminders
+
+' -----------------------
+' Relationships (real FKs)
+' -----------------------
+
+doctors ||--o{ pref_versions : "has"
+doctors ||--o{ pref_working  : "has"
+doctors ||--o{ pref_pointers : "has"
+
+pref_versions ||--o{ pref_pointers : "is selected\nas current by"
+
+deadlines ||--o{ reminders : "has"
+
+@enduml

@@ -35,23 +35,22 @@ package "ORM — Schedules (backend/models/orm/schedule.py)" {
   ' ---- Top row (side-by-side) ----
   together {
     class ScheduleWorking {
-      +year : int  ' PK
-      +month : int ' PK
+      +year : int  
+      +month : int 
       +payload : JSON
       +lock_version : int
-      +updated_by_user_id : int?
+      +updated_by_user_id : int
       +updated_at : datetime
     }
 
     class SchedulePointer {
-      +year : int  ' PK
-      +month : int ' PK
-      +current_draft_version_id : int?
-      +current_published_version_id : int?
+      +year : int  
+      +month : int 
+      +current_draft_version_id : int
+      +current_published_version_id : int
       +updated_at : datetime
-      --
-      +current_draft_version : ScheduleVersion?
-      +current_published_version : ScheduleVersion?
+      +current_draft_version : ScheduleVersion
+      +current_published_version : ScheduleVersion
     }
   }
 
@@ -59,10 +58,9 @@ package "ORM — Schedules (backend/models/orm/schedule.py)" {
   together {
     class ScheduleDiagnostics {
       +id : int
-      +version_id : int  ' UNIQUE
+      +version_id : int 
       +quality : JSON
       +computed_at : datetime
-      --
       +version : ScheduleVersion
     }
 
@@ -71,35 +69,41 @@ package "ORM — Schedules (backend/models/orm/schedule.py)" {
       +year : int
       +month : int
       +payload : JSON
-      +kind : str  ' "draft" | "published"
-      +created_by_user_id : int?
-      +created_by_role : str?
+      +kind : ScheduleStatus
+      +created_by_user_id : int
+      +created_by_role : str
       +created_at : datetime
     }
   }
 }
-
+enum ScheduleStatus <<enumeration>> {
+  draft
+  published
+}
 ' =========================
 ' External anchor (users) — ONE unified shape
 ' =========================
-rectangle "users" as UsersBox {
-  class "users.id" as UsersId {
-    +id : int
-  }
+' rectangle "users" as UsersBox {
+'   class "users.id" as UsersId {
+'     +id : int
+'   }
+' }
+class User {
+  +id : int
 }
 
 ' =========================
-' Relationships (FK / intent)
+' Associations (UML)
 ' =========================
 
 ' Keep labels SHORT so they do not "run away" across the page
-SchedulePointer "1" --> "0..1" ScheduleVersion : current_draft_version_id
-SchedulePointer "1" --> "0..1" ScheduleVersion : current_published_version_id
-ScheduleDiagnostics "1" --> "1" ScheduleVersion : version_id
+SchedulePointer "1" --> "0..1" ScheduleVersion : draft
+SchedulePointer "1" --> "0..1" ScheduleVersion : published
+ScheduleDiagnostics "1" --> "1" ScheduleVersion : version    
 
 ' External deps (users table) — unified, same UsersId box for both links
-ScheduleVersion -right..> UsersId : created_by_user_id
-ScheduleWorking -right..> UsersId : updated_by_user_id
+ScheduleVersion "0..*" -right-> "0..1" User
+ScheduleWorking "0..*" -right-> "0..1" User
 
 ' =========================
 ' Layout helpers (hidden links)
@@ -113,6 +117,6 @@ ScheduleWorking -[hidden]down-> ScheduleDiagnostics
 SchedulePointer -[hidden]down-> ScheduleVersion
 
 ' Put users anchor to the RIGHT of ScheduleWorking (stable A4 layout hint)
-ScheduleWorking -[hidden]right-> UsersId
+ScheduleWorking -[hidden]right-> User
 
 @enduml

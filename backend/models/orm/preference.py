@@ -31,7 +31,12 @@ class PreferenceWorking(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
 
-    doctor_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    doctor_id: Mapped[int] = mapped_column(
+        Integer,
+        ForeignKey("doctors.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
     year: Mapped[int] = mapped_column(Integer, nullable=False)
     month: Mapped[int] = mapped_column(Integer, nullable=False)
 
@@ -98,7 +103,12 @@ class PreferenceVersion(Base):
     # Integer PK (autoincrement), creation order == id order.
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
 
-    doctor_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    doctor_id: Mapped[int] = mapped_column(
+        Integer,
+        ForeignKey("doctors.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
     year: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
     month: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
 
@@ -129,7 +139,12 @@ class PreferencePointer(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
 
-    doctor_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    doctor_id: Mapped[int] = mapped_column(
+        Integer,
+        ForeignKey("doctors.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
     year: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
     month: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
 

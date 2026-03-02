@@ -38,7 +38,7 @@ package "DTO — Schedules (backend/models/schemas/schedule.py)" {
     +month: MonthInt
     +participant_doctor_ids: List[int]
     +ignore_slots: List[IgnoreSlot]
-    +justification: Optional[str]
+    +justification: str
     +head_commitment_resolutions: List[HeadCommitmentResolution]
   }
 
@@ -59,7 +59,7 @@ package "DTO — Schedules (backend/models/schemas/schedule.py)" {
   class SchedulePayload {
     +participant_doctor_ids: List[int]
     +assignments: List[Assignment]
-    +inputs_snapshot: Optional[InputsSnapshotRead]
+    +inputs_snapshot: InputsSnapshotRead
     +meta: dict[str, Any]
   }
 
@@ -71,7 +71,7 @@ package "DTO — Schedules (backend/models/schemas/schedule.py)" {
 
   class InputsSnapshotRead {
     +doctors: Dict[int, DoctorSnapshotRead]
-    +preference_version_id_by_doctor: Dict[int, Optional[int]]
+    +preference_version_id_by_doctor: Dict[int, int]
   }
 
   class DoctorSnapshotRead {
