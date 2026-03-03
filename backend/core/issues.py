@@ -206,7 +206,7 @@ def classify_availability_risk_with_reasons(
         oncall_required=oncall_required,
     )
 
-    critical_codes: Set[str] = {NO_SPECIALIST}
+    critical_codes: Set[str] = {NO_SPECIALIST, FORCED_DOUBLE_SHIFT_SAME_DAY}
     if onsite_required:
         critical_codes.add(NO_ONSITE_CANDIDATE)
     if oncall_required:

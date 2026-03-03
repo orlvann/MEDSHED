@@ -167,7 +167,26 @@ def _suggest_ignored_slots_and_reasons(
                 reasons.add(r)
             continue
 
-        # 2) Only NO_SPECIALIST -> apply new policy.
+        # 2) FORCED_DOUBLE_SHIFT_SAME_DAY -> same single doctor is the only
+        #    candidate for both shifts.  We must ignore one slot so the solver
+        #    can assign the doctor to the other.  Use the same preference-based
+        #    tiebreaker as NO_SPECIALIST below.
+        if FORCED_DOUBLE_SHIFT_SAME_DAY in code_set:
+            reasons.add(FORCED_DOUBLE_SHIFT_SAME_DAY)
+
+            onsite_pref = _count_preferred(int(day), ShiftType.onsite, onsite_ids)
+            oncall_pref = _count_preferred(int(day), ShiftType.oncall, oncall_ids)
+
+            if onsite_pref != oncall_pref:
+                ignore = ShiftType.oncall if onsite_pref > oncall_pref else ShiftType.onsite
+                suggested.append(AvailabilityIgnoreSlot(day=int(day), shift_type=ignore))
+                continue
+
+            # Tie: keep onsite (fixed fallback), ignore oncall.
+            suggested.append(AvailabilityIgnoreSlot(day=int(day), shift_type=ShiftType.oncall))
+            continue
+
+        # 3) Only NO_SPECIALIST -> apply new policy.
         if (NO_SPECIALIST in code_set) and (len(code_set) == 1):
             reasons.add(NO_SPECIALIST)
 
@@ -227,6 +246,10 @@ def _suggest_ignored_slots_for_day_risk(
     if NO_ONCALL_CANDIDATE in issue_set:
         suggested.append(AvailabilityIgnoreSlot(day=int(day), shift_type=ShiftType.oncall))
         reasons.append(NO_ONCALL_CANDIDATE)
+
+    if not suggested and (FORCED_DOUBLE_SHIFT_SAME_DAY in issue_set):
+        suggested.append(AvailabilityIgnoreSlot(day=int(day), shift_type=ShiftType.oncall))
+        reasons.append(FORCED_DOUBLE_SHIFT_SAME_DAY)
 
     if not suggested and (NO_SPECIALIST in issue_set):
         suggested.append(AvailabilityIgnoreSlot(day=int(day), shift_type=ShiftType.oncall))
