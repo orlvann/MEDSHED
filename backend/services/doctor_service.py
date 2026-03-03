@@ -142,11 +142,11 @@ def list_doctors(
         elif is_active == "false":
             query = query.filter(Doctor.is_active == False)
         
-        # Filter by is_head (handle both boolean and SQLite integer representation)
+        # Filter by is_head
         if is_head == "true":
-            query = query.filter((Doctor.is_head == True) | (Doctor.is_head == 1))
+            query = query.filter(Doctor.is_head == True)
         elif is_head == "false":
-            query = query.filter((Doctor.is_head == False) | (Doctor.is_head == 0))
+            query = query.filter(Doctor.is_head == False)
         
         # Filter by user_role (requires join with users table)
         if user_role and user_role != "all":
