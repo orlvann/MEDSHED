@@ -49,9 +49,10 @@ def upgrade() -> None:
             )
     else:
         # PostgreSQL: clean up orphaned rows before adding FK constraints.
+        # Order matters: pointers references versions, so clean child tables first.
         conn = op.get_bind()
         conn.execute(sa.text(
-            "DELETE FROM preferences_working "
+            "DELETE FROM preferences_pointers "
             "WHERE doctor_id NOT IN (SELECT id FROM doctors)"
         ))
         conn.execute(sa.text(
@@ -59,7 +60,7 @@ def upgrade() -> None:
             "WHERE doctor_id NOT IN (SELECT id FROM doctors)"
         ))
         conn.execute(sa.text(
-            "DELETE FROM preferences_pointers "
+            "DELETE FROM preferences_working "
             "WHERE doctor_id NOT IN (SELECT id FROM doctors)"
         ))
         conn.execute(sa.text(
